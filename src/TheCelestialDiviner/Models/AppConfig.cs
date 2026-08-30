@@ -193,4 +193,19 @@ public sealed class AppConfig
 
     /// <summary>全局开关键配置。</summary>
     public GlobalSwitchConfig GlobalSwitch { get; set; } = new();
+
+    /// <summary>
+    /// 扫描码兼容模式：键盘注入改用 KEYEVENTF_SCANCODE + 扫描码。
+    /// 部分游戏（DirectInput 读扫描码）忽略虚拟键码事件时开启。
+    /// </summary>
+    public bool UseScanCodes { get; set; }
+
+    /// <summary>创建当前实例的深拷贝。</summary>
+    public AppConfig Clone() => new()
+    {
+        Version = Version,
+        Schemes = Schemes.ToDictionary(p => p.Key, p => p.Value.Clone(), StringComparer.Ordinal),
+        GlobalSwitch = GlobalSwitch.Clone(),
+        UseScanCodes = UseScanCodes
+    };
 }

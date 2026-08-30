@@ -113,6 +113,10 @@
                            Foreground="{DynamicResource ThemeFg}" Opacity="0.6"
                            FontSize="11" VerticalAlignment="Center"/>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <CheckBox Content="扫描码模式" IsChecked="{Binding UseScanCodeMode}"
+                              VerticalAlignment="Center" Margin="0,0,10,0"
+                              Foreground="{DynamicResource ThemeFg}" FontSize="11"
+                              ToolTip="游戏（如剑网三）内键盘连发不生效时勾选：改用扫描码注入（DirectInput 兼容）"/>
                     <Button Content="导入配置" Style="{StaticResource IconButtonStyle}"
                             Padding="8,3" Margin="0,0,8,0" Command="{Binding ImportCommand}"/>
                     <Button Content="导出配置" Style="{StaticResource IconButtonStyle}"

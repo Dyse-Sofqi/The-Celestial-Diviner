@@ -114,6 +114,9 @@ public static class NativeMethods
     public const uint KEYEVENTF_KEYDOWN = 0x0000; // 无标志 = 按下
     public const uint KEYEVENTF_KEYUP = 0x0002;
     public const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
+    public const uint KEYEVENTF_SCANCODE = 0x0008; // 以扫描码而非虚拟键码注入（DirectInput 游戏兼容）
+
+    public const uint MAPVK_VK_TO_VSC = 0; // MapVirtualKey：虚拟键码 → 扫描码
 
     public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
     public const uint MOUSEEVENTF_LEFTUP = 0x0004;
@@ -133,6 +136,10 @@ public static class NativeMethods
     /// <summary>注入一组输入事件。返回实际成功注入的事件数（0 表示全部失败）。</summary>
     [DllImport("user32.dll", SetLastError = true)]
     public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    /// <summary>虚拟键码 → 扫描码转换（MAPVK_VK_TO_VSC）。</summary>
+    [DllImport("user32.dll")]
+    public static extern uint MapVirtualKey(uint uCode, uint uMapType);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct INPUT

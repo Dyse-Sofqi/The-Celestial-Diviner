@@ -12,6 +12,13 @@ namespace TheCelestialDiviner.Services;
 /// </summary>
 public static class InputSimulatorService
 {
+    /// <summary>
+    /// 扫描码兼容模式：true 时键盘事件以 KEYEVENTF_SCANCODE + 扫描码注入。
+    /// 部分游戏（DirectInput / RawInput 读扫描码）忽略虚拟键码事件，需开启此模式。
+    /// 由主界面开关控制，运行时热切换。
+    /// </summary>
+    public static bool UseScanCodes { get; set; }
+
     /// <summary>发送一次键盘按下事件。</summary>
     public static bool KeyDown(int vk, bool extended = false)
     {
@@ -22,14 +29,15 @@ public static class InputSimulatorService
             {
                 ki = new NativeMethods.KEYBDINPUT
                 {
-                    wVk = (ushort)vk,
-                    wScan = 0,
+                    wVk = UseScanCodes ? (ushort)0 : (ushort)vk,
+                    wScan = UseScanCodes ? MapVirtualKeyToScan(vk) : (ushort)0,
                     dwFlags = extended ? NativeMethods.KEYEVENTF_EXTENDEDKEY : NativeMethods.KEYEVENTF_KEYDOWN,
                     time = 0,
                     dwExtraInfo = InputHookService.InjectMagic
                 }
             }
         };
+        if (UseScanCodes) input.U.ki.dwFlags |= NativeMethods.KEYEVENTF_SCANCODE;
         return Send(ref input);
     }
 
@@ -43,8 +51,8 @@ public static class InputSimulatorService
             {
                 ki = new NativeMethods.KEYBDINPUT
                 {
-                    wVk = (ushort)vk,
-                    wScan = 0,
+                    wVk = UseScanCodes ? (ushort)0 : (ushort)vk,
+                    wScan = UseScanCodes ? MapVirtualKeyToScan(vk) : (ushort)0,
                     dwFlags = NativeMethods.KEYEVENTF_KEYUP |
                               (extended ? NativeMethods.KEYEVENTF_EXTENDEDKEY : 0),
                     time = 0,
@@ -52,7 +60,17 @@ public static class InputSimulatorService
                 }
             }
         };
+        if (UseScanCodes) input.U.ki.dwFlags |= NativeMethods.KEYEVENTF_SCANCODE;
         return Send(ref input);
+    }
+
+    /// <summary>虚拟键码 → 扫描码（扩展键先映射再加 0xE0 前缀语义由 EXTENDEDKEY 标志表达）。</summary>
+    private static ushort MapVirtualKeyToScan(int vk)
+    {
+        // MAPVK_VK_TO_VSC：返回不区分左右修饰键的基础扫描码；
+        // 扩展键（方向键 / 小键盘等）在 SendInput 侧由 EXTENDEDKEY 标志补足 0xE0 语义。
+        var scan = NativeMethods.MapVirtualKey((uint)vk, NativeMethods.MAPVK_VK_TO_VSC);
+        return (ushort)(scan & 0xFF);
     }
 
     /// <summary>发送一次鼠标按下事件（左 / 右 / 中 / 侧键）。</summary>

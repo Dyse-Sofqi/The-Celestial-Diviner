@@ -154,6 +154,8 @@ public sealed partial class MainViewModel
             MasterKeyText = imported.GlobalSwitch.HasKey
                 ? InputNameMapper.GetKeyName(imported.GlobalSwitch.VirtualKey)
                 : "未设置";
+            // 扫描码模式随配置同步（导入 / 导出）。
+            UseScanCodeMode = imported.UseScanCodes;
             OnPropertyChanged(nameof(GlobalSwitchSource));
             RefreshAllButtons();
             ApplyConfigToScheduler();

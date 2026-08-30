@@ -35,6 +35,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private string _masterStateText = "全局开关：已启用";
     private string _masterKeyText = "未设置";
     private string _hintText = "左键点击按键设置方案，右键更多操作";
+    private bool _useScanCodeMode;
 
     /// <summary>创建主视图模型：加载配置、构建输入源集合、应用调度器。</summary>
     public MainViewModel(ConfigService configService, InputHookService hookService,
@@ -86,6 +87,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         BuildSourceButtons();
         ApplyConfigToScheduler();
         RefreshAllButtons();
+
+        // 扫描码兼容模式：从配置恢复并同步到模拟器静态开关。
+        _useScanCodeMode = _config.UseScanCodes;
+        InputSimulatorService.UseScanCodes = _useScanCodeMode;
     }
 
     // ---------- 集合 ----------
@@ -338,6 +343,24 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
     /// <summary>保存配置到 %APPDATA%（任何变更触发）。</summary>
     public void SaveConfig() => _configService.Save(_config);
+
+    /// <summary>
+    /// 扫描码兼容模式开关：开启后键盘注入改用 KEYEVENTF_SCANCODE。
+    /// 部分游戏（DirectInput 读扫描码）忽略虚拟键码事件时开启，运行时热切换。
+    /// </summary>
+    public bool UseScanCodeMode
+    {
+        get => _useScanCodeMode;
+        set
+        {
+            if (!Set(ref _useScanCodeMode, value)) return;
+            // 同步到模拟器静态开关（连发线程每次注入时读取）。
+            InputSimulatorService.UseScanCodes = value;
+            _config.UseScanCodes = value;
+            SaveConfig();
+            AddLog(value ? "已启用扫描码兼容模式（键盘以扫描码注入）。" : "已关闭扫描码兼容模式。");
+        }
+    }
 
     /// <summary>把当前配置应用到连发调度器（方案变更后调用）。</summary>
     private void ApplyConfigToScheduler() => _scheduler.ApplyConfig(_config);
