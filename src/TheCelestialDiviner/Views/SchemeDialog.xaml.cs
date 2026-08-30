@@ -99,6 +99,10 @@ public partial class SchemeDialog : Window
             Mouse = _captured.Mouse,
             Mode = ModeCombo.SelectedIndex == 1 ? TriggerMode.Hold : TriggerMode.Toggle,
             IntervalMs = Math.Clamp(interval, Constants.MinIntervalMs, Constants.MaxIntervalMs),
+            // 实验功能：附带修饰键（Ctrl/Shift/Alt 勾选状态持久化到目标键配置）。
+            ModCtrl = ModCtrlBox.IsChecked == true,
+            ModShift = ModShiftBox.IsChecked == true,
+            ModAlt = ModAltBox.IsChecked == true,
             Enabled = true
         };
 

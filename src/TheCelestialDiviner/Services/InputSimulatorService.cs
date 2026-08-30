@@ -191,12 +191,48 @@ public static class InputSimulatorService
     {
         return target.Kind switch
         {
-            TargetKind.Keyboard => PressKey(target.VirtualKey, target.Extended),
-            TargetKind.Mouse => ClickButton(target.Mouse),
+            TargetKind.Keyboard => ClickKeyWithMods(target),
+            TargetKind.Mouse => ClickButtonWithMods(target),
             TargetKind.Wheel => MouseWheel(target.Wheel == MouseInput.WheelUp
                 ? NativeMethods.WHEEL_DELTA : -NativeMethods.WHEEL_DELTA),
             _ => false
         };
+    }
+
+    /// <summary>键盘目标点击：先按下勾选的修饰键 → 点击目标 → 按逆序抬起修饰键。</summary>
+    private static bool ClickKeyWithMods(TargetKeyConfig target)
+    {
+        var ok = PressModsDown(target);
+        ok &= PressKey(target.VirtualKey, target.Extended);
+        ReleaseModsUp(target);
+        return ok;
+    }
+
+    /// <summary>鼠标目标点击：先按下勾选的修饰键 → 鼠标点击 → 按逆序抬起修饰键。</summary>
+    private static bool ClickButtonWithMods(TargetKeyConfig target)
+    {
+        var ok = PressModsDown(target);
+        ok &= ClickButton(target.Mouse);
+        ReleaseModsUp(target);
+        return ok;
+    }
+
+    /// <summary>按下目标键配置勾选的修饰键（固定顺序 Ctrl → Shift → Alt）。</summary>
+    private static bool PressModsDown(TargetKeyConfig target)
+    {
+        var ok = true;
+        if (target.ModCtrl) ok &= KeyDown(0x11);
+        if (target.ModShift) ok &= KeyDown(0x10);
+        if (target.ModAlt) ok &= KeyDown(0x12);
+        return ok;
+    }
+
+    /// <summary>抬起修饰键（按按下顺序的逆序 Alt → Shift → Ctrl，保证配对正确）。</summary>
+    private static void ReleaseModsUp(TargetKeyConfig target)
+    {
+        if (target.ModAlt) KeyUp(0x12);
+        if (target.ModShift) KeyUp(0x10);
+        if (target.ModCtrl) KeyUp(0x11);
     }
 
     /// <summary>键盘键完整按下并抬起。</summary>

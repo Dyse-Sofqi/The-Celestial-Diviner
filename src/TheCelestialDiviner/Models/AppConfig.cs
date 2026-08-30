@@ -122,6 +122,15 @@ public sealed class TargetKeyConfig
     /// <summary>连发间隔（毫秒，1~100，默认 5）。</summary>
     public int IntervalMs { get; set; } = 5;
 
+    /// <summary>实验功能：连发时附带 Ctrl（注入修饰按下 → 目标 → 修饰抬起）。</summary>
+    public bool ModCtrl { get; set; }
+
+    /// <summary>实验功能：连发时附带 Shift。</summary>
+    public bool ModShift { get; set; }
+
+    /// <summary>实验功能：连发时附带 Alt。</summary>
+    public bool ModAlt { get; set; }
+
     /// <summary>该目标键是否启用（停用后不参与触发）。</summary>
     public bool Enabled { get; set; } = true;
 
@@ -136,6 +145,9 @@ public sealed class TargetKeyConfig
         Wheel = Wheel,
         Mode = Mode,
         IntervalMs = IntervalMs,
+        ModCtrl = ModCtrl,
+        ModShift = ModShift,
+        ModAlt = ModAlt,
         Enabled = Enabled
     };
 }

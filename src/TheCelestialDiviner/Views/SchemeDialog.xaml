@@ -71,6 +71,16 @@
                     <TextBlock Text="间隔(ms)：" VerticalAlignment="Center" Margin="14,0,6,0"
                                Foreground="{DynamicResource ThemeFg}"/>
                     <TextBox x:Name="IntervalBox" Width="60" Text="5" Padding="4,3"/>
+                    <!-- 实验功能：附带修饰键（Ctrl/Shift/Alt）。注入顺序：修饰按下 → 目标点击 → 修饰抬起。 -->
+                    <TextBlock Text="附带修饰键（实验）：" VerticalAlignment="Center" Margin="14,0,6,0"
+                               Foreground="{DynamicResource ThemeFg}"
+                               ToolTip="连发时自动附带修饰键（注入修饰按下→目标点击→修饰抬起）。注意：修饰键属键盘事件，在剑网三等过滤注入键盘的游戏中可能不生效，请实测。"/>
+                    <CheckBox x:Name="ModCtrlBox" Content="Ctrl" VerticalAlignment="Center" Margin="0,0,6,0"
+                              Foreground="{DynamicResource ThemeFg}"/>
+                    <CheckBox x:Name="ModShiftBox" Content="Shift" VerticalAlignment="Center" Margin="0,0,6,0"
+                              Foreground="{DynamicResource ThemeFg}"/>
+                    <CheckBox x:Name="ModAltBox" Content="Alt" VerticalAlignment="Center"
+                              Foreground="{DynamicResource ThemeFg}"/>
                 </StackPanel>
                 <Button Content="确认添加" Padding="10,3" HorizontalAlignment="Right"
                         Margin="0,8,0,0" Click="OnConfirmAddClick"/>
