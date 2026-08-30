@@ -22,6 +22,9 @@ public static class InputSimulatorService
     /// <summary>发送一次键盘按下事件。</summary>
     public static bool KeyDown(int vk, bool extended = false)
     {
+        // 兼容性策略：wVk 与 wScan 双字段同填。
+        // DirectInput / RawInput 游戏读扫描码字段，普通程序读虚拟键码——双填两端都兼容。
+        // 仅当开启扫描码模式时才置 KEYEVENTF_SCANCODE 标志（此时系统以 wScan 为准重建事件）。
         var input = new NativeMethods.INPUT
         {
             type = NativeMethods.INPUT_KEYBOARD,
@@ -29,8 +32,8 @@ public static class InputSimulatorService
             {
                 ki = new NativeMethods.KEYBDINPUT
                 {
-                    wVk = UseScanCodes ? (ushort)0 : (ushort)vk,
-                    wScan = UseScanCodes ? MapVirtualKeyToScan(vk) : (ushort)0,
+                    wVk = (ushort)vk,
+                    wScan = MapVirtualKeyToScan(vk),
                     dwFlags = extended ? NativeMethods.KEYEVENTF_EXTENDEDKEY : NativeMethods.KEYEVENTF_KEYDOWN,
                     time = 0,
                     dwExtraInfo = InputHookService.InjectMagic
@@ -44,6 +47,7 @@ public static class InputSimulatorService
     /// <summary>发送一次键盘抬起事件。</summary>
     public static bool KeyUp(int vk, bool extended = false)
     {
+        // 同 KeyDown：wVk + wScan 双字段同填，扫描码模式下加 KEYEVENTF_SCANCODE。
         var input = new NativeMethods.INPUT
         {
             type = NativeMethods.INPUT_KEYBOARD,
@@ -51,8 +55,8 @@ public static class InputSimulatorService
             {
                 ki = new NativeMethods.KEYBDINPUT
                 {
-                    wVk = UseScanCodes ? (ushort)0 : (ushort)vk,
-                    wScan = UseScanCodes ? MapVirtualKeyToScan(vk) : (ushort)0,
+                    wVk = (ushort)vk,
+                    wScan = MapVirtualKeyToScan(vk),
                     dwFlags = NativeMethods.KEYEVENTF_KEYUP |
                               (extended ? NativeMethods.KEYEVENTF_EXTENDEDKEY : 0),
                     time = 0,
