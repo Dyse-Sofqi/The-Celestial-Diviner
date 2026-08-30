@@ -33,14 +33,23 @@ public static class InputNameMapper
         _ => "未知"
     };
 
-    /// <summary>获取目标键的显示名称。</summary>
-    public static string GetTargetName(TargetKeyConfig t) => t.Kind switch
+    /// <summary>获取目标键的显示名称（含附带修饰键前缀，如 "Ctrl+鼠标中键"）。</summary>
+    public static string GetTargetName(TargetKeyConfig t)
     {
-        TargetKind.Keyboard => GetKeyName(t.VirtualKey),
-        TargetKind.Mouse => GetMouseName(t.Mouse),
-        TargetKind.Wheel => t.Wheel == MouseInput.WheelUp ? "滚轮上" : "滚轮下",
-        _ => "未知"
-    };
+        var baseName = t.Kind switch
+        {
+            TargetKind.Keyboard => GetKeyName(t.VirtualKey),
+            TargetKind.Mouse => GetMouseName(t.Mouse),
+            TargetKind.Wheel => t.Wheel == MouseInput.WheelUp ? "滚轮上" : "滚轮下",
+            _ => "未知"
+        };
+
+        // 实验功能：附带修饰键拼在前面（Ctrl → Shift → Alt，与注入顺序一致）。
+        if (t.ModCtrl) baseName = "Ctrl+" + baseName;
+        if (t.ModShift) baseName = "Shift+" + baseName;
+        if (t.ModAlt) baseName = "Alt+" + baseName;
+        return baseName;
+    }
 
     /// <summary>获取模式显示名。</summary>
     public static string GetModeName(TriggerMode mode) => mode switch
