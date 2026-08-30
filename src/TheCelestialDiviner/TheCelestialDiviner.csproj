@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <!-- 托盘图标 NotifyIcon 需要 WinForms / System.Drawing -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>TheCelestialDiviner</RootNamespace>
+    <AssemblyName>TheCelestialDiviner</AssemblyName>
+    <!-- 管理员权限 + PerMonitorV2 DPI 声明 -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Resources\app.ico</ApplicationIcon>
+    <Version>1.0.0</Version>
+    <FileVersion>1.0.0.0</FileVersion>
+    <AssemblyTitle>衍天高手</AssemblyTitle>
+    <Product>衍天高手 (The Celestial Diviner)</Product>
+    <Description>键盘 / 鼠标连发工具（全局钩子 + SendInput）</Description>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Resources\app.ico" />
+  </ItemGroup>
+
+  <!-- UseWindowsForms 会注入 System.Drawing / System.Windows.Forms 全局 using，
+       与 WPF 的 Brush / Application 等类型名冲突：显式移除，需要处用别名引用。 -->
+  <ItemGroup>
+    <Using Remove="System.Drawing" />
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
+
+</Project>

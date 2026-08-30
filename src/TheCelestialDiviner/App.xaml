@@ -1,0 +1,22 @@
+<Application x:Class="TheCelestialDiviner.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             DispatcherUnhandledException="OnDispatcherUnhandledException">
+    <Application.Resources>
+        <!-- 基础样式：按钮 / 文本（颜色资源由代码按系统深浅主题注入） -->
+        <Style x:Key="IconButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="{DynamicResource ThemeButtonBg}"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeFg}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+        <Style x:Key="StatusTextStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource ThemeFg}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="8,0"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+    </Application.Resources>
+</Application>
