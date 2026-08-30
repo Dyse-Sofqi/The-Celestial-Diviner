@@ -32,6 +32,13 @@ public partial class MainWindow : Window
     {
         _app.SetupTray(this);
 
+        // 键盘注入模式下拉框：加载时回填，切换时双向同步到 VM（热切换 + 自动保存）。
+        KeyboardModeBox.SelectedIndex = _vm.KeyboardMode;
+        KeyboardModeBox.SelectionChanged += (_, _) =>
+            _vm.KeyboardMode = KeyboardModeBox.SelectedIndex;
+        // VM 侧导入配置后同步回 UI。
+        _vm.KeyboardModeChanged += mode => KeyboardModeBox.SelectedIndex = mode;
+
         // 钩子事件 → UI 封送（调度器本身线程安全，但日志与 UI 属性需封送）。
         _app.Hooks.SourceDown += src =>
             Dispatcher.BeginInvoke(() => _vm.HandleHookDown(src));

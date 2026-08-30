@@ -13,15 +13,26 @@ namespace TheCelestialDiviner.Services;
 public static class InputSimulatorService
 {
     /// <summary>
-    /// 扫描码兼容模式：true 时键盘事件以 KEYEVENTF_SCANCODE + 扫描码注入。
-    /// 部分游戏（DirectInput / RawInput 读扫描码）忽略虚拟键码事件，需开启此模式。
-    /// 由主界面开关控制，运行时热切换。
+    /// 键盘注入模式：0 = SendInput（虚拟键码 + 扫描码，普通程序），
+    /// 1 = SendInput + KEYEVENTF_SCANCODE（DirectInput / RawInput 游戏），
+    /// 2 = PostMessage 窗口消息（直投目标窗口 WM_KEYDOWN/WM_KEYUP，
+    /// 不进入系统输入流、无 LLKHF_INJECTED 标记，可绕过基于注入标记的过滤；
+    /// 仅对读取窗口消息的游戏有效）。运行时热切换。
     /// </summary>
-    public static bool UseScanCodes { get; set; }
+    public static int KeyboardMode { get; set; }
+
+    /// <summary>兼容旧配置字段：true 等价于 KeyboardMode = 1。</summary>
+    public static bool UseScanCodes
+    {
+        get => KeyboardMode == 1;
+        set => KeyboardMode = value ? 1 : 0;
+    }
 
     /// <summary>发送一次键盘按下事件。</summary>
     public static bool KeyDown(int vk, bool extended = false)
     {
+        if (KeyboardMode == 2) return PostKey(vk, up: false, extended);
+
         // 兼容性策略：wVk 与 wScan 双字段同填。
         // DirectInput / RawInput 游戏读扫描码字段，普通程序读虚拟键码——双填两端都兼容。
         // 仅当开启扫描码模式时才置 KEYEVENTF_SCANCODE 标志（此时系统以 wScan 为准重建事件）。
@@ -40,13 +51,15 @@ public static class InputSimulatorService
                 }
             }
         };
-        if (UseScanCodes) input.U.ki.dwFlags |= NativeMethods.KEYEVENTF_SCANCODE;
+        if (KeyboardMode == 1) input.U.ki.dwFlags |= NativeMethods.KEYEVENTF_SCANCODE;
         return Send(ref input);
     }
 
     /// <summary>发送一次键盘抬起事件。</summary>
     public static bool KeyUp(int vk, bool extended = false)
     {
+        if (KeyboardMode == 2) return PostKey(vk, up: true, extended);
+
         // 同 KeyDown：wVk + wScan 双字段同填，扫描码模式下加 KEYEVENTF_SCANCODE。
         var input = new NativeMethods.INPUT
         {
@@ -64,8 +77,35 @@ public static class InputSimulatorService
                 }
             }
         };
-        if (UseScanCodes) input.U.ki.dwFlags |= NativeMethods.KEYEVENTF_SCANCODE;
+        if (KeyboardMode == 1) input.U.ki.dwFlags |= NativeMethods.KEYEVENTF_SCANCODE;
         return Send(ref input);
+    }
+
+    /// <summary>
+    /// 消息模式：向当前前台窗口 PostMessage 键盘消息。
+    /// 注意：连发线程调用时游戏应处于前台；游戏切后台后消息会投到别的窗口，
+    /// 因此本模式仅建议“游戏前台 + 连发目标键”场景使用。
+    /// </summary>
+    private static bool PostKey(int vk, bool up, bool extended)
+    {
+        var hwnd = NativeMethods.GetForegroundWindow();
+        if (hwnd == IntPtr.Zero) return false;
+
+        var scan = MapVirtualKeyToScan(vk);
+        // lParam 布局（Win32）：0-15 扫描码 | 24 扩展键 | 30 前次状态（按下时置 1 表示重复）
+        // | 31 过渡状态（抬起时置 1）。重复计数 0-15 位不使用，保持 1 即可。
+        var lParam = scan & 0xFF;
+        if (extended) lParam |= 0x1000000;               // bit 24：扩展键标志
+        if (up) lParam |= unchecked((int)0xC0000000);    // bit 30+31：释放事件
+        else lParam |= 0x0;                              // 按下：首次按下，前次状态 0
+
+        var msg = up ? NativeMethods.WM_KEYUP : NativeMethods.WM_KEYDOWN;
+        // wParam = 虚拟键码；dwExtraInfo 魔数无法随窗口消息传递，
+        // 本程序低级钩子对“无 InjectMagic 的键盘事件”会误判为物理输入，
+        // 但消息模式的事件不进入系统输入流，低级钩子本就看不到，故无反馈循环风险。
+        var ok = NativeMethods.PostMessage(hwnd, msg, (IntPtr)vk, (IntPtr)lParam);
+        if (!ok) Logger.Error($"PostMessage 投递失败（vk=0x{vk:X2}，last error = {Marshal.GetLastWin32Error()}）。");
+        return ok;
     }
 
     /// <summary>虚拟键码 → 扫描码（扩展键先映射再加 0xE0 前缀语义由 EXTENDEDKEY 标志表达）。</summary>

@@ -141,6 +141,19 @@ public static class NativeMethods
     [DllImport("user32.dll")]
     public static extern uint MapVirtualKey(uint uCode, uint uMapType);
 
+    /// <summary>向指定窗口的消息队列投递消息（不等待处理完成）。</summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool PostMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
+
+    /// <summary>获取当前前台窗口句柄。</summary>
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
+    /// <summary>获取窗口所在进程 ID。</summary>
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
     [StructLayout(LayoutKind.Sequential)]
     public struct INPUT
     {

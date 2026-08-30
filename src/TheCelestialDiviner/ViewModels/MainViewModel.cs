@@ -35,7 +35,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private string _masterStateText = "全局开关：已启用";
     private string _masterKeyText = "未设置";
     private string _hintText = "左键点击按键设置方案，右键更多操作";
-    private bool _useScanCodeMode;
+    private int _keyboardMode; // 键盘注入模式：0 普通 / 1 扫描码 / 2 消息
+
+    /// <summary>键盘注入模式变更通知（导入配置后由 VM 触发，UI 回填下拉框）。</summary>
+    public event Action<int>? KeyboardModeChanged;
 
     /// <summary>创建主视图模型：加载配置、构建输入源集合、应用调度器。</summary>
     public MainViewModel(ConfigService configService, InputHookService hookService,
@@ -88,9 +91,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         ApplyConfigToScheduler();
         RefreshAllButtons();
 
-        // 扫描码兼容模式：从配置恢复并同步到模拟器静态开关。
-        _useScanCodeMode = _config.UseScanCodes;
-        InputSimulatorService.UseScanCodes = _useScanCodeMode;
+        // 键盘注入模式：从配置恢复（兼容旧 UseScanCodes 字段）并同步到模拟器。
+        _keyboardMode = _config.UseScanCodes ? 1 : 0;
+        InputSimulatorService.KeyboardMode = _keyboardMode;
     }
 
     // ---------- 集合 ----------
@@ -345,20 +348,26 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     public void SaveConfig() => _configService.Save(_config);
 
     /// <summary>
-    /// 扫描码兼容模式开关：开启后键盘注入改用 KEYEVENTF_SCANCODE。
-    /// 部分游戏（DirectInput 读扫描码）忽略虚拟键码事件时开启，运行时热切换。
+    /// 键盘注入模式：0 普通 SendInput / 1 扫描码 / 2 PostMessage 消息模式。
+    /// 界面下拉框热切换，自动保存。消息模式仅目标窗口在前台时有效。
     /// </summary>
-    public bool UseScanCodeMode
+    public int KeyboardMode
     {
-        get => _useScanCodeMode;
+        get => _keyboardMode;
         set
         {
-            if (!Set(ref _useScanCodeMode, value)) return;
-            // 同步到模拟器静态开关（连发线程每次注入时读取）。
-            InputSimulatorService.UseScanCodes = value;
-            _config.UseScanCodes = value;
+            if (value is < 0 or > 2) value = 0;
+            if (!Set(ref _keyboardMode, value)) return;
+            // 同步到模拟器（连发线程每次注入时读取）。
+            InputSimulatorService.KeyboardMode = value;
+            _config.UseScanCodes = value == 1; // 旧字段语义保留（持久化兼容）
             SaveConfig();
-            AddLog(value ? "已启用扫描码兼容模式（键盘以扫描码注入）。" : "已关闭扫描码兼容模式。");
+            AddLog(value switch
+            {
+                1 => "键盘注入已切换：扫描码模式（DirectInput 兼容）。",
+                2 => "键盘注入已切换：消息模式（仅游戏前台时有效）。",
+                _ => "键盘注入已切换：普通模式（SendInput）。"
+            });
         }
     }
 
