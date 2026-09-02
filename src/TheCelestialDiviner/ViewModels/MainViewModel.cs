@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Input;
@@ -91,8 +92,15 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         ApplyConfigToScheduler();
         RefreshAllButtons();
 
-        // 键盘注入模式：从配置恢复（兼容旧 UseScanCodes 字段）并同步到模拟器。
-        _keyboardMode = _config.UseScanCodes ? 1 : 0;
+        // 键盘注入模式：从配置恢复（优先新字段 KeyboardMode，兼容旧 UseScanCodes）并同步到模拟器。
+        _keyboardMode = _config.KeyboardMode is >= 0 and <= 3
+            ? _config.KeyboardMode
+            : _config.UseScanCodes ? 1 : 0;
+        // DD 模式冷启动：驱动未就绪时静默回退普通模式（初始化阶段 UI 日志面板未展示，避免误导）。
+        if (_keyboardMode == 3 && !DdDriverService.EnsureReady())
+        {
+            _keyboardMode = 0;
+        }
         InputSimulatorService.KeyboardMode = _keyboardMode;
     }
 
@@ -348,24 +356,35 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     public void SaveConfig() => _configService.Save(_config);
 
     /// <summary>
-    /// 键盘注入模式：0 普通 SendInput / 1 扫描码 / 2 PostMessage 消息模式。
-    /// 界面下拉框热切换，自动保存。消息模式仅目标窗口在前台时有效。
+    /// 键盘注入模式：0 普通 SendInput / 1 扫描码 / 2 PostMessage 消息模式 / 3 DD 虚拟驱动。
+    /// 界面下拉框热切换，自动保存。消息模式仅目标窗口在前台时有效；
+    /// DD 模式需 dd63330.dll 与管理员权限，键盘注入无 LLKHF_INJECTED 标记。
     /// </summary>
     public int KeyboardMode
     {
         get => _keyboardMode;
         set
         {
-            if (value is < 0 or > 2) value = 0;
+            if (value is < 0 or > 3) value = 0;
             if (!Set(ref _keyboardMode, value)) return;
+            // DD 模式：先确保虚拟驱动就绪（失败则回退普通模式并提示）。
+            if (value == 3 && !DdDriverService.EnsureReady())
+            {
+                AddLog($"DD 驱动模式不可用：{DdDriverService.LastError}。已回退普通模式。");
+                value = 0;
+                Set(ref _keyboardMode, 0);
+            }
+
             // 同步到模拟器（连发线程每次注入时读取）。
             InputSimulatorService.KeyboardMode = value;
+            _config.KeyboardMode = value;
             _config.UseScanCodes = value == 1; // 旧字段语义保留（持久化兼容）
             SaveConfig();
             AddLog(value switch
             {
                 1 => "键盘注入已切换：扫描码模式（DirectInput 兼容）。",
                 2 => "键盘注入已切换：消息模式（仅游戏前台时有效）。",
+                3 => $"键盘注入已切换：DD 驱动模式（{Path.GetFileName(DdDriverService.LoadedPath)}）。",
                 _ => "键盘注入已切换：普通模式（SendInput）。"
             });
         }

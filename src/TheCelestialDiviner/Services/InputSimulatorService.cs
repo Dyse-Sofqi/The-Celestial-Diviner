@@ -17,7 +17,9 @@ public static class InputSimulatorService
     /// 1 = SendInput + KEYEVENTF_SCANCODE（DirectInput / RawInput 游戏），
     /// 2 = PostMessage 窗口消息（直投目标窗口 WM_KEYDOWN/WM_KEYUP，
     /// 不进入系统输入流、无 LLKHF_INJECTED 标记，可绕过基于注入标记的过滤；
-    /// 仅对读取窗口消息的游戏有效）。运行时热切换。
+    /// 仅对读取窗口消息的游戏有效），
+    /// 3 = DD 虚拟驱动（经 ddxoft DD 虚拟设备注入，无 LLKHF_INJECTED 标记，
+    /// 对游戏表现为物理键盘；需 dd63330.dll + 管理员权限）。运行时热切换。
     /// </summary>
     public static int KeyboardMode { get; set; }
 
@@ -32,6 +34,7 @@ public static class InputSimulatorService
     public static bool KeyDown(int vk, bool extended = false)
     {
         if (KeyboardMode == 2) return PostKey(vk, up: false, extended);
+        if (KeyboardMode == 3) return DdDriverService.SendKey(vk, down: true);
 
         // 兼容性策略：wVk 与 wScan 双字段同填。
         // DirectInput / RawInput 游戏读扫描码字段，普通程序读虚拟键码——双填两端都兼容。
@@ -59,6 +62,7 @@ public static class InputSimulatorService
     public static bool KeyUp(int vk, bool extended = false)
     {
         if (KeyboardMode == 2) return PostKey(vk, up: true, extended);
+        if (KeyboardMode == 3) return DdDriverService.SendKey(vk, down: false);
 
         // 同 KeyDown：wVk + wScan 双字段同填，扫描码模式下加 KEYEVENTF_SCANCODE。
         var input = new NativeMethods.INPUT

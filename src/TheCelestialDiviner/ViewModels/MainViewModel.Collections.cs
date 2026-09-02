@@ -154,8 +154,10 @@ public sealed partial class MainViewModel
             MasterKeyText = imported.GlobalSwitch.HasKey
                 ? InputNameMapper.GetKeyName(imported.GlobalSwitch.VirtualKey)
                 : "未设置";
-            // 扫描码模式随配置同步（导入 / 导出）。
-            var mode = imported.UseScanCodes ? 1 : 0;
+            // 键盘注入模式随配置同步（导入 / 导出；旧配置回退 UseScanCodes 语义）。
+            var mode = imported.KeyboardMode is >= 0 and <= 3
+                ? imported.KeyboardMode
+                : imported.UseScanCodes ? 1 : 0;
             if (KeyboardMode != mode)
             {
                 KeyboardMode = mode;

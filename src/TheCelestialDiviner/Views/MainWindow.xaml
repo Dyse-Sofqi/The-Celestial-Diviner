@@ -115,12 +115,13 @@
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="键盘注入：" VerticalAlignment="Center"
                                Foreground="{DynamicResource ThemeFg}" FontSize="11"/>
-                    <ComboBox x:Name="KeyboardModeBox" Width="120" Margin="0,0,10,0"
+                    <ComboBox x:Name="KeyboardModeBox" Width="130" Margin="0,0,10,0"
                               FontSize="11"
-                              ToolTip="游戏内键盘连发不生效时逐个尝试：扫描码模式 → 消息模式。消息模式仅游戏在前台时有效">
+                              ToolTip="游戏内键盘连发不生效时逐个尝试：扫描码模式 → 消息模式 → DD 驱动模式。消息模式仅游戏在前台时有效；DD 驱动模式为物理级注入（需 dd63330.dll + 管理员权限）">
                         <ComboBoxItem Content="普通（SendInput）"/>
                         <ComboBoxItem Content="扫描码（DirectInput）"/>
                         <ComboBoxItem Content="消息（PostMessage）"/>
+                        <ComboBoxItem Content="DD 驱动（物理级）"/>
                     </ComboBox>
                     <Button Content="导入配置" Style="{StaticResource IconButtonStyle}"
                             Padding="8,3" Margin="0,0,8,0" Command="{Binding ImportCommand}"/>

@@ -26,6 +26,16 @@
     <Resource Include="Resources\app.ico" />
   </ItemGroup>
 
+  <!-- DD 驱动模式依赖：官方 DD 虚拟驱动 x64 DLL（原生库，无法内嵌单文件，随目录分发）。
+       文件缺失时 DD 模式不可用（界面自动回退普通模式并提示）。 -->
+  <ItemGroup>
+    <None Include="..\..\drivers\dd63330.dll" Condition="Exists('..\..\drivers\dd63330.dll')">
+      <Link>dd63330.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Visible>false</Visible>
+    </None>
+  </ItemGroup>
+
   <!-- UseWindowsForms 会注入 System.Drawing / System.Windows.Forms 全局 using，
        与 WPF 的 Brush / Application 等类型名冲突：显式移除，需要处用别名引用。 -->
   <ItemGroup>

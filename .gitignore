@@ -4,3 +4,6 @@ obj/
 *.user
 *.suo
 publish/
+
+.fetch/
+scratch_*/

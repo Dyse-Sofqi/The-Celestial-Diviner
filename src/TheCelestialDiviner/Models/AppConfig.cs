@@ -212,12 +212,19 @@ public sealed class AppConfig
     /// </summary>
     public bool UseScanCodes { get; set; }
 
+    /// <summary>
+    /// 键盘注入模式：0 普通 SendInput / 1 扫描码 / 2 消息 / 3 DD 虚拟驱动。
+    /// 旧配置无此字段时回退 <see cref="UseScanCodes"/> 语义（true→1，false→0）。
+    /// </summary>
+    public int KeyboardMode { get; set; }
+
     /// <summary>创建当前实例的深拷贝。</summary>
     public AppConfig Clone() => new()
     {
         Version = Version,
         Schemes = Schemes.ToDictionary(p => p.Key, p => p.Value.Clone(), StringComparer.Ordinal),
         GlobalSwitch = GlobalSwitch.Clone(),
-        UseScanCodes = UseScanCodes
+        UseScanCodes = UseScanCodes,
+        KeyboardMode = KeyboardMode
     };
 }
