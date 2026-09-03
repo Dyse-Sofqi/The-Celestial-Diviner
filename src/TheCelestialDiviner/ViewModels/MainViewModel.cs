@@ -104,6 +104,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         BuildSourceButtons();
         ApplyConfigToScheduler();
         RefreshAllButtons();
+        // 按钮创建晚于配置加载：构造阶段补一次暗淡状态传播（开启时暗淡）。
+        ApplyDimState();
 
         // 键盘注入模式：默认 DD 驱动（物理级）；配置优先，越界回退默认。
         // DD 需 dd63330.dll + 管理员权限，冷启动就绪检查失败时回退普通模式。
@@ -178,15 +180,24 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             if (!Set(ref _globallyEnabled, value)) return;
             MasterStateText = value ? "全局开关：已开启" : "全局开关：已关闭";
             OnPropertyChanged(nameof(ShowDisabledBanner));
-            foreach (var b in MouseButtons) b.GloballyDisabled = !value;
-            foreach (var row in KeyboardRows)
-                foreach (var b in row)
-                    if (!b.IsSpacer) b.GloballyDisabled = !value;
+            ApplyDimState();
         }
     }
 
     /// <summary>是否显示"全局已停用"横幅。</summary>
     public bool ShowDisabledBanner => !_globallyEnabled;
+
+    /// <summary>
+    /// 把暗淡状态传播到全部输入源按钮（开启时暗淡、关闭时清晰）。
+    /// GloballyEnabled setter 与构造阶段（按钮晚于配置加载创建）共用。
+    /// </summary>
+    private void ApplyDimState()
+    {
+        foreach (var b in MouseButtons) b.GloballyDimmed = _globallyEnabled;
+        foreach (var row in KeyboardRows)
+            foreach (var b in row)
+                if (!b.IsSpacer) b.GloballyDimmed = _globallyEnabled;
+    }
 
     /// <summary>日志面板是否展开。</summary>
     public bool LogsExpanded

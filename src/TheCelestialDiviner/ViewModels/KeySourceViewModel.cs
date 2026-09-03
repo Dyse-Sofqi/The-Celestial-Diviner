@@ -28,7 +28,7 @@ public sealed class KeySourceViewModel : INotifyPropertyChanged
     private string _name;
     private string _targetsSummary = "";
     private SourceRegistration _registration = SourceRegistration.Empty;
-    private bool _globallyDisabled;
+    private bool _globallyDimmed;
     private Brush _background = s_emptyBrush;
     private Brush _foreground = s_emptyForeground;
 
@@ -60,17 +60,22 @@ public sealed class KeySourceViewModel : INotifyPropertyChanged
         Foreground = Registration == SourceRegistration.Empty ? s_emptyForeground : s_registeredForeground;
     }
 
-    /// <summary>创建输入源控件视图模型（isSpacer = true 时为布局占位空白）。?。</summary>
-    public KeySourceViewModel(InputSource source, string name, string icon = "", bool isSpacer = false)
+    /// <summary>创建输入源控件视图模型（isSpacer = true 时为布局占位空白；units 为真实键宽单位）。</summary>
+    public KeySourceViewModel(InputSource source, string name, string icon = "",
+        bool isSpacer = false, double units = 4)
     {
         _source = source;
         _name = name;
         Icon = icon;
         IsSpacer = isSpacer;
+        WidthUnits = units;
     }
 
     /// <summary>是否为布局占位空白（非真实输入源，不参与交互与配置）。?。</summary>
     public bool IsSpacer { get; }
+
+    /// <summary>真实键盘宽度单位（普通键 = 4；供 KeyboardRowPanel 按比例排列）。</summary>
+    public double WidthUnits { get; }
 
     /// <summary>输入源标识（钩子分发与配置键共用）。?。</summary>
     public InputSource Source => _source;
@@ -106,11 +111,11 @@ public sealed class KeySourceViewModel : INotifyPropertyChanged
         }
     }
 
-    /// <summary>全局停用时控件半透明。?。</summary>
-    public bool GloballyDisabled
+    /// <summary>总开关开启时控件暗淡（提示面板非设置时机；关闭时清晰便于编辑方案）。</summary>
+    public bool GloballyDimmed
     {
-        get => _globallyDisabled;
-        set => Set(ref _globallyDisabled, value);
+        get => _globallyDimmed;
+        set => Set(ref _globallyDimmed, value);
     }
 
     /// <summary>控件背景（跟随注册状态与主题）。?。</summary>
