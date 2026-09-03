@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using TheCelestialDiviner.Helpers;
@@ -44,7 +44,7 @@ public sealed class ConfigService
                 var json = File.ReadAllText(ConfigPath);
                 var config = JsonSerializer.Deserialize<AppConfig>(json, JsonOptions) ?? new AppConfig();
                 MigrateIfNeeded(config);
-                config.SoundVolume = Math.Clamp(config.SoundVolume, 0, 100);
+                config.SoundVolume = Compat.Clamp(config.SoundVolume, 0, 100);
                 return config;
             }
             catch (Exception ex)
@@ -90,7 +90,8 @@ public sealed class ConfigService
                 var json = JsonSerializer.Serialize(config, JsonOptions);
                 var tmpPath = ConfigPath + ".tmp";
                 File.WriteAllText(tmpPath, json);
-                File.Move(tmpPath, ConfigPath, overwrite: true);
+                File.Copy(tmpPath, ConfigPath, true);
+                File.Delete(tmpPath);
             }
             catch (Exception ex)
             {

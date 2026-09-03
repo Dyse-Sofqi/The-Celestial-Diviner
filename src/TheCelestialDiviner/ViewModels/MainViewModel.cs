@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -59,7 +59,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _masterKeyText = _config.GlobalSwitch.HasKey
             ? InputNameMapper.GetKeyName(_config.GlobalSwitch.VirtualKey)
             : "未设置";
-        _soundVolume = Math.Clamp(_config.SoundVolume, 0, 100);
+        _soundVolume = Compat.Clamp(_config.SoundVolume, 0, 100);
         _soundCue.Volume = _soundVolume / 100.0;
 
         // 调度器日志 → UI 日志面板（钩子线程触发，封送到 UI 线程）。
@@ -366,7 +366,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         get => _soundVolume;
         set
         {
-            value = Math.Clamp(value, 0, 100);
+            value = Compat.Clamp(value, 0, 100);
             if (!Set(ref _soundVolume, value)) return;
             _soundCue.Volume = value / 100.0;
             _volumeSaveTimer.Stop();

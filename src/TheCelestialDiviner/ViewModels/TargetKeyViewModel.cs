@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using TheCelestialDiviner.Helpers;
 using TheCelestialDiviner.Models;
@@ -124,7 +124,7 @@ public sealed class TargetKeyViewModel : INotifyPropertyChanged
         get => _intervalMs;
         set
         {
-            var clamped = Math.Clamp(value, Constants.MinIntervalMs, Constants.MaxIntervalMs);
+            var clamped = Compat.Clamp(value, Constants.MinIntervalMs, Constants.MaxIntervalMs);
             if (_intervalMs == clamped) return;
             _intervalMs = clamped;
             _config.IntervalMs = clamped;

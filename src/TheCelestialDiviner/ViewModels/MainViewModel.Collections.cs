@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using TheCelestialDiviner.Helpers;
 using TheCelestialDiviner.Models;
 using TheCelestialDiviner.Services;
@@ -156,7 +156,7 @@ public sealed partial class MainViewModel
             MasterKeyText = imported.GlobalSwitch.HasKey
                 ? InputNameMapper.GetKeyName(imported.GlobalSwitch.VirtualKey)
                 : "未设置";
-            SoundVolume = Math.Clamp(imported.SoundVolume, 0, 100);
+            SoundVolume = Compat.Clamp(imported.SoundVolume, 0, 100);
             // 键盘注入模式随配置同步（导入 / 导出；旧配置回退 UseScanCodes 语义）。
             var mode = imported.KeyboardMode is >= 0 and <= 3
                 ? imported.KeyboardMode

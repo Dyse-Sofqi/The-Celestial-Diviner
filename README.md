@@ -1,7 +1,7 @@
 # 衍天高手 The Celestial Diviner v1.1
 
 键盘 / 鼠标连发（自动点击）工具。全局钩子监听物理输入，`SendInput` 模拟连发，
-.NET 8 + WPF 单文件 exe，需管理员权限运行。
+.NET Framework 4.8 + WPF（Win10 1903+ / Win11 系统内置运行时，零安装，全包 < 6MB），需管理员权限运行。
 
 ## 功能
 
@@ -33,7 +33,7 @@
 ## 运行环境
 
 - Windows 10 (1903+) / Windows 11，x64
-- 无需安装 .NET（自包含单文件发布）；开发构建需 .NET 8 SDK
+- 无需安装任何运行时（.NET Framework 4.8 已内置，若系统关闭了该功能可在“启用或关闭 Windows 功能”中开启 .NET Framework 4.8 高级服务）
 - **必须以管理员身份运行**（全局钩子 + 向高权限窗口发送输入）
 
 ## 使用说明
@@ -97,14 +97,14 @@
 ## 开发 / 构建
 
 ```powershell
-# 安装 .NET 8 SDK 后：
-dotnet build src\TheCelestialDiviner\TheCelestialDiviner.csproj -c Release
+# 开发构建（需 .NET Framework 4.8 开发者包 / targeting pack，VS2022 默认含）
+dotnet build TheCelestialDiviner.sln -c Release
 
-# 发布单文件 exe（自包含，154MB；框架依赖发布可换 --self-contained false，约 1MB）
-dotnet publish src\TheCelestialDiviner\TheCelestialDiviner.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
+# 发布（net48 无需 -r / --self-contained；产物约 1.5MB + dd 驱动 3.7MB）
+dotnet publish src\TheCelestialDiviner\TheCelestialDiviner.csproj -c Release -o dist
 ```
 
-产物：`src\TheCelestialDiviner\bin\Release\net8.0-windows\win-x64\publish\TheCelestialDiviner.exe`
+产物：exe + System.Text.Json 等小依赖 DLL + dd63330.dll，合计约 5.1MB（主 exe 0.4MB）。
 
 ### 项目结构
 
@@ -117,6 +117,7 @@ src/TheCelestialDiviner/
 │                     ConfigService / TimerResolutionService / KeyRecorder / InputNameMapper
 │                     SoundCueService（总开关提示语音）
 ├── Helpers/          NativeMethods / Constants / Logger / ThemeHelper / Converters
+│                     Compatibility（net48 垫片：Clamp/哈希/集合扩展） / CompilerShims（init/required）
 ├── Resources/        app.ico（16~256 多尺寸）+ Sounds/（总开关提示语音 WAV）
 ├── app.manifest      requireAdministrator + PerMonitorV2 DPI
 └── App.xaml(.cs)     服务组装 / 主题注入 / 托盘 / 退出时序

@@ -1,4 +1,4 @@
-using System.Windows.Media;
+﻿using System.Windows.Media;
 using TheCelestialDiviner.Helpers;
 
 namespace TheCelestialDiviner.Services;
@@ -37,7 +37,7 @@ public sealed class SoundCueService
     public double Volume
     {
         get => _volume;
-        set => _volume = Math.Clamp(value, 0.0, 1.0);
+        set => _volume = Compat.Clamp(value, 0.0, 1.0);
     }
 
     /// <summary>播放“启动”提示音（总开关开启时）。</summary>

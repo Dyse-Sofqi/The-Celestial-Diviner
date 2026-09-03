@@ -1,63 +1,52 @@
 # 衍天高手（The Celestial Diviner）开发进度交接
 
-更新：2026-09-03 21:40 (Asia/Shanghai) — **取消全部停止；全局开关升级为按键总开关**
+更新：2026-09-03 22:15 (Asia/Shanghai) — **迁移到 .NET Framework 4.8（net48）**
 
-## 本次变更（总开关 + 提示语音 + 音量）
-- ✅ **取消「全部停止」功能**（与全局开关用途重叠）：删除状态栏按钮（含 Ctrl+点击防误触）、
-  VM StopAllCommand、托盘菜单项；停止能力统一由总开关承担
-  （TaskSchedulerService.StopAll 保留，仅退出时序内部调用）
-- ✅ **总开关 = 按键总开关**：默认关闭；默认键 F9（0x78），可自定义
-  （底部「设置全局开关」对话框录制 / 清除，冲突校验不变）
-- ✅ 开启播「启动」、关闭播「关闭」语音：新增 Services/SoundCueService.cs（MediaPlayer，
-  内嵌 WAV；Resources/Sounds/StartVoice.wav、StopVoice.wav，Windows SAPI 中文语音
-  Huihui 生成，44.1kHz 16bit mono）
-- ✅ **音量调节滑块**：顶部状态栏右侧（原全部停止按钮位置），0~100%，默认 70%；
-  VM SoundVolume 属性 + 500ms 防抖落盘；拖动即时生效（含拖动中切换的语音）
-- ✅ AppConfig 升 v2：GlobalSwitch 默认 HasKey=true/VK=F9/Enabled=false；新增 SoundVolume；
-  ConfigService.MigrateIfNeeded 做 v1→v2 迁移（仅当 F9 未被存量方案占用时设默认键；
-  已自定义热键的保留用户键；导入配置走同一迁移）
-- ✅ 编辑总开关键时旧键方案自动迁移到新键（RelocateSchemeFromMasterKey，避免键位重叠吞键）
-- ✅ 热键录制期间总开关键不触发切换（KeyRecorder.IsAnyRecording 静态标记，防录方案时误切）
-- ✅ 状态栏新增「总开关键：F9」显示；横幅文案改为「总开关已关闭」；托盘菜单文案「总开关 开启/关闭」
-- ✅ 实测（本机 Win11 x64 管理员）：Debug 构建运行，日志确认「配置 v1 已迁移到 v2
-  （总开关默认关闭、默认键 F9）」，钩子安装成功、5 个连发任务正常应用
-- ✅ dotnet build Debug / Release：0 error（仅原有 WFAC010 警告）
+## 本次变更（net48 迁移，v1.2.0）
 
-## 上次变更（DD 驱动模式）
-- ✅ Services/DdDriverService.cs：加载 ddxoft DD 虚拟驱动 x64 DLL（dd63330.dll），
-  DD_btn(0) 初始化、DD_todc VK→DD 码映射（缓存）、DD_key 按下/抬起注入
-- ✅ InputSimulatorService.KeyboardMode=3：键盘走 DD，鼠标/滚轮仍走 SendInput
-- ✅ UI 下拉框第 4 项「DD 驱动（物理级）」，切换失败自动回退普通模式
-- ⚠️ DD 键码表覆盖 100 个 VK；F13+ 不支持；DD 鼠标注入未做端到端确认
+### 背景与决策
+- 用户不可接受 .NET 8 自包含单文件的 147MB 体积（内嵌压缩后仍 65MB，WPF 运行时下限压不进 50MB）
+- 选型对比后确定迁移 .NET Framework 4.8：Win10 1903+ / Win11 系统内置运行时，
+  **零安装 + 全包 5.1MB（主 exe 0.4MB）**，且保留全部 WPF XAML 与业务代码
+- 高分屏适配不受影响：WPF PerMonitorV2 由 app.manifest 声明，Framework 4.6.2+ 完整支持（原 net8 的 WFAC010 警告消失）
+
+### 技术要点
+- csproj：TargetFramework net48；System.Text.Json 改 NuGet 包 8.0.5；
+  AutoGenerateBindingRedirects（生成 .exe.config 重定向 Unsafe 版本）
+- 新增 Helpers/CompilerShims.cs：net48 缺失的 IsExternalInit / RequiredMemberAttribute /
+  CompilerFeatureRequiredAttribute（支撑现有 C# 9 init / C# 11 required 语法）
+- 新增 Helpers/Compatibility.cs：Compat.Clamp（Math.Clamp 等价）、
+  Compat.CombineHashCodes（HashCode.Combine 等价，FNV-1a）、
+  Dictionary.GetValueOrDefault 与 KeyValuePair.Deconstruct 扩展
+- 调用点改造：Math.Clamp → Compat.Clamp（7 个文件）；HashCode.Combine → Compat.CombineHashCodes；
+  File.Move(overwrite:) → File.Copy + Delete（net48 无三参 Move）
+- 代码语法零降级：记录类 init/required、模式匹配、switch 表达式全部保留
+
+### 验证
+- ✅ Debug/Release 构建：0 错误 0 警告
+- ✅ 实机运行（net48-publish）：配置加载正常、钩子安装成功、5 个连发任务运行、定时器 1ms 生效
+- ✅ 体积：主 exe 0.4MB + 依赖 DLL 约 1MB + dd63330.dll 3.68MB ≈ 5.1MB
+- ⚠️ 分发注意：需整个发布目录（exe + .exe.config + System.*.dll + dd63330.dll），不能只拷 exe
+- 已清理 net8.0-windows 旧产物目录（用户如果还需要 .NET 8 版可从 git 历史找 v1.1.0）
+
+## 上次变更（2026-09-03 21:40 前后，v1.1.0，总开关改造）
+- 取消「全部停止」（状态栏按钮 / Ctrl+点击 / 托盘项），停止能力由总开关承担
+- 总开关：默认关闭、默认键 F9 可自定义（配置 v1→v2 迁移）、方案注册源双向冲突校验、
+  换键时方案自动迁移、录制期间暂停热键响应
+- 开关切换播报「启动」/「关闭」语音（SAPI Huihui 离线合成 WAV，内嵌资源，SoundCueService 播放）
+- 音量滑块（顶部状态栏右侧 0~100% 默认 70%，防抖 500ms 落盘）
 
 ## 全部文件清单
 - 根：TheCelestialDiviner.sln / .gitignore / README.md / PROGRESS.md / tools/make_icon.py
 - src/TheCelestialDiviner/：csproj / app.manifest / App.xaml(.cs)
-- Helpers：Constants（含 DefaultMasterKeyVk=F9、DefaultSoundVolume=70）/ Logger /
-  NativeMethods / ThemeHelper / Converters
-- Models：AppConfig.cs（InputSource/TargetKeyConfig/KeyScheme/GlobalSwitchConfig(v2 默认值)/
-  AppConfig(Version=2+SoundVolume)）
-- Services：InputNameMapper / ConfigService（+MigrateIfNeeded）/ TimerResolutionService /
-  InputSimulatorService / InputHookService / TaskSchedulerService / KeyRecorder（+IsAnyRecording）/
-  **SoundCueService（新）**
-- ViewModels：RelayCommand / TargetKeyViewModel / KeySourceViewModel / MainViewModel.cs(partial：
-  +SoundVolume+SoundCueMuteForExit，-StopAllCommand) / MainViewModel.Collections.cs
-  （+RelocateSchemeFromMasterKey）
-- Views：MainWindow.xaml(.cs)（-全部停止按钮 +音量滑块 +总开关键状态）/ SchemeDialog.xaml(.cs) /
-  GlobalSwitchDialog.xaml(.cs)
-- Resources：app.ico + **Sounds/StartVoice.wav、StopVoice.wav（新）**
-- drivers/dd63330.dll（DD 模式依赖）
-
-## 已知妥协（如需打磨）
-- KeySourceViewModel 部分注释被乱码修复脚本替换成'。'（纯注释，无功能影响）
-- 提示语音为 SAPI 合成音（Huihui），音质一般；如需更好音质可换真人录音替换 WAV 文件
-- 托盘图标用单 32x32 加载；WFAC010 警告保留（manifest DPI 声明为需求要求）
-
-## 关键设计约定
-- 注入事件 dwExtraInfo=InputHookService.InjectMagic；钩子回调里 magic 命中直接放行
-- 源键 K:VK:EXT / M:MouseInput；滚轮源=脉冲
-- 总开关：scheduler.SetMasterEnabled(false) 即停所有连发；恢复开启不自动重启
-- 总开关键与方案注册源互斥（双向冲突校验）；编辑总开关键自动迁移旧键方案
-- 配置 Version 字段启用：Load 与 ImportFromJson 都走 MigrateIfNeeded
-- 关窗→托盘（App.IsExiting 区分）；托盘退出走 ExitApp 时序：
-  静音语音→StopAll→Dispose hook→Dispose timer→SaveConfig
+- Helpers：Constants / Logger / NativeMethods（SendInput 返回 uint 已修正）/ ThemeHelper /
+  Converters（4 个转换器）/ Compatibility（net48 垫片）/ CompilerShims（init/required 垫片）
+- Models：AppConfig.cs（InputKind/MouseInput/TargetKind/TriggerMode/InputSource/TargetKeyConfig/
+  KeyScheme/GlobalSwitchConfig+Clone/AppConfig v2 含 Version/SoundVolume）
+- Services：InputHookService / InputSimulatorService / TaskSchedulerService / ConfigService
+  （v1→v2 迁移）/ TimerResolutionService / KeyRecorder / InputNameMapper / DdDriverService /
+  SoundCueService（总开关提示语音）
+- ViewModels：MainViewModel（核心状态/命令/钩子接入/总开关切换）+ MainViewModel.Collections
+  （集合/方案/导入导出/迁移）/ KeySourceViewModel / TargetKeyViewModel / RelayCommand
+- Views：MainWindow / SchemeDialog / GlobalSwitchDialog（XAML + cs）
+- Resources：app.ico（16~256 多尺寸）/ Sounds/（StartVoice.wav + StopVoice.wav，SAPI 合成）

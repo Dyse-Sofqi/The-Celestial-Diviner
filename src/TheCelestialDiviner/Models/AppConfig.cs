@@ -90,7 +90,7 @@ public sealed class InputSource : IEquatable<InputSource>
     public override bool Equals(object? obj) => Equals(obj as InputSource);
 
     public override int GetHashCode()
-        => HashCode.Combine((int)Kind, VirtualKey, (int)Mouse, Extended);
+        => Compat.CombineHashCodes((int)Kind, VirtualKey, (int)Mouse, Extended ? 1 : 0);
 
     /// <summary>创建当前实例的副本。</summary>
     public InputSource Clone() => new() { Kind = Kind, VirtualKey = VirtualKey, Mouse = Mouse, Extended = Extended };

@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using TheCelestialDiviner.Helpers;
 using TheCelestialDiviner.Models;
 
@@ -225,7 +225,7 @@ public sealed class TaskSchedulerService
     private void TaskLoop(RunningTask task)
     {
         var sw = new Stopwatch();
-        var interval = Math.Clamp(task.Config.IntervalMs, Constants.MinIntervalMs, Constants.MaxIntervalMs);
+        var interval = Compat.Clamp(task.Config.IntervalMs, Constants.MinIntervalMs, Constants.MaxIntervalMs);
 
         while (!task.StopRequested)
         {

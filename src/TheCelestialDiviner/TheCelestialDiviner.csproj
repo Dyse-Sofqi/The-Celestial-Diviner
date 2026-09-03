@@ -2,7 +2,10 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <!-- 迁移到 .NET Framework 4.8：Win10 1903+ / Win11 系统内置，零安装部署，
+         发布体积从自包含 147MB 降至约 2MB。WPF/WinForms 的 PerMonitorV2
+         高分屏适配由 app.manifest 声明，行为不变。 -->
+    <TargetFramework>net48</TargetFramework>
     <UseWPF>true</UseWPF>
     <!-- 托盘图标 NotifyIcon 需要 WinForms / System.Drawing -->
     <UseWindowsForms>true</UseWindowsForms>
@@ -14,13 +17,19 @@
     <!-- 管理员权限 + PerMonitorV2 DPI 声明 -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Resources\app.ico</ApplicationIcon>
-    <Version>1.1.0</Version>
-    <FileVersion>1.1.0.0</FileVersion>
+    <Version>1.2.0</Version>
+    <FileVersion>1.2.0.0</FileVersion>
     <AssemblyTitle>衍天高手</AssemblyTitle>
     <Product>衍天高手 (The Celestial Diviner)</Product>
-    <Description>键盘 / 鼠标连发工具（全局钩子 + SendInput）</Description>
+    <Description>键盘 / 鼠标连发工具（全局钩子 + SendInput，.NET Framework 4.8）</Description>
     <DebugType>embedded</DebugType>
+    <!-- System.Text.Json 依赖链在 net48 需要绑定重定向 -->
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
 
   <ItemGroup>
     <Resource Include="Resources\app.ico" />
