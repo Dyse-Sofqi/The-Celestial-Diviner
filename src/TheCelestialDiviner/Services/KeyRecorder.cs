@@ -10,6 +10,9 @@ namespace TheCelestialDiviner.Services;
 /// </summary>
 public sealed class KeyRecorder
 {
+    /// <summary>是否有录制器正在捕获（volatile 供钩子线程读取；录制期间总开关暂停响应）。</summary>
+    public static volatile bool IsAnyRecording;
+
     private readonly InputHookService _hooks;
     private DispatcherTimer? _timer;
     private Action<InputSource>? _onCaptured;
@@ -30,6 +33,7 @@ public sealed class KeyRecorder
         _onTimeout = onTimeout;
         _dispatcher = Dispatcher.CurrentDispatcher; // 回调封送目标（UI 线程）
         IsRecording = true;
+        IsAnyRecording = true;
         _hooks.SourceDown += OnSourceDown;
 
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(Constants.RecordTimeoutMs) };
@@ -53,6 +57,7 @@ public sealed class KeyRecorder
     {
         if (!IsRecording) return;
         IsRecording = false;
+        IsAnyRecording = false;
         _hooks.SourceDown -= OnSourceDown;
         _timer?.Stop();
         _timer = null;

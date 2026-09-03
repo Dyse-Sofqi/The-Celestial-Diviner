@@ -25,7 +25,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
     // ---------- 状态字段 ----------
     private AppConfig _config = new();
-    private bool _globallyEnabled = true;
+    private bool _globallyEnabled; // 总开关默认关闭（v2 语义，加载后随配置覆盖）
     private bool _logsExpanded;
     private bool _hookInstalled;
     private bool _isAdmin = true;
@@ -33,10 +33,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private string _hookStatusText = "钩子：未安装";
     private string _permissionText = "权限：检测中";
     private string _timerStatusText = "定时器：默认分辨率";
-    private string _masterStateText = "全局开关：已启用";
-    private string _masterKeyText = "未设置";
+    private string _masterStateText = "全局开关：已关闭";
+    private string _masterKeyText = "F9";
     private string _hintText = "左键点击按键设置方案，右键更多操作";
+    private double _soundVolume = Constants.DefaultSoundVolume;
     private int _keyboardMode; // 键盘注入模式：0 普通 / 1 扫描码 / 2 消息
+
+    /// <summary>全局总开关提示语音服务（开启 = “启动”，关闭 = “关闭”）。</summary>
+    private readonly SoundCueService _soundCue = new();
 
     /// <summary>键盘注入模式变更通知（导入配置后由 VM 触发，UI 回填下拉框）。</summary>
     public event Action<int>? KeyboardModeChanged;
@@ -55,13 +59,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _masterKeyText = _config.GlobalSwitch.HasKey
             ? InputNameMapper.GetKeyName(_config.GlobalSwitch.VirtualKey)
             : "未设置";
+        _soundVolume = Math.Clamp(_config.SoundVolume, 0, 100);
+        _soundCue.Volume = _soundVolume / 100.0;
 
         // 调度器日志 → UI 日志面板（钩子线程触发，封送到 UI 线程）。
         _scheduler.Log += msg =>
             Application.Current?.Dispatcher.BeginInvoke(() => AddLog(msg));
 
         // 命令。
-        StopAllCommand = RelayCommand.Create(() => _scheduler.StopAll());
         SetGlobalSwitchCommand = RelayCommand.Create(
             () => GlobalSwitchSetupRequested?.Invoke());
         ImportCommand = RelayCommand.Create(() => ImportRequested?.Invoke());
@@ -86,6 +91,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             if (p is KeySourceViewModel svm) ClearScheme(svm);
         });
         ToggleGlobalCommand = RelayCommand.Create(ToggleGlobalEnabled);
+
+        // 音量滑块防抖：拖动停止 500ms 后落盘（避免拖动过程高频写配置文件）。
+        _volumeSaveTimer.Tick += (_, _) =>
+        {
+            _volumeSaveTimer.Stop();
+            _config.SoundVolume = _soundVolume;
+            SaveConfig();
+        };
 
         // 构建输入源按钮集合并从配置恢复注册状态。
         BuildSourceButtons();
@@ -115,9 +128,6 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<string> Logs { get; } = new();
 
     // ---------- 命令 ----------
-    /// <summary>全部停止（Ctrl+点击防误触由 View 判定）。</summary>
-    public ICommand StopAllCommand { get; }
-
     /// <summary>打开全局开关键设置对话框。</summary>
     public ICommand SetGlobalSwitchCommand { get; }
 
@@ -166,7 +176,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         private set
         {
             if (!Set(ref _globallyEnabled, value)) return;
-            MasterStateText = value ? "全局开关：已启用" : "全局开关：已停用";
+            MasterStateText = value ? "全局开关：已开启" : "全局开关：已关闭";
             OnPropertyChanged(nameof(ShowDisabledBanner));
             foreach (var b in MouseButtons) b.GloballyDisabled = !value;
             foreach (var row in KeyboardRows)
@@ -279,18 +289,19 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         if (!HookInstalled)
             AddLog("低级钩子安装失败，请右键以管理员身份运行本程序。");
 
-        AddLog($"初始化完成：全局开关{(_globallyEnabled ? "已启用" : "已停用")}，"
+        AddLog($"初始化完成：总开关{(_globallyEnabled ? "已开启" : "已关闭（按 [" + _masterKeyText + "] 开启）")}，"
                + $"方案 {_config.Schemes.Count} 个。");
     }
 
     // ---------- 钩子事件接入（由 View 在安装成功后绑定） ----------
-    /// <summary>输入源按下（钩子线程调用）：优先处理全局开关键，其余交调度器。</summary>
+    /// <summary>输入源按下（钩子线程调用）：优先处理总开关键，其余交调度器。</summary>
     public void HandleHookDown(InputSource source)
     {
         if (GlobalSwitchSource is { } gk && gk.Equals(source))
         {
-            // 全局开关键：切回 UI 线程执行（涉及属性通知与配置保存）。
-            Application.Current?.Dispatcher.BeginInvoke(ToggleGlobalEnabled);
+            // 热键录制期间不响应（避免把总开关键录为方案源时误切总开关）。
+            if (!KeyRecorder.IsAnyRecording)
+                Application.Current?.Dispatcher.BeginInvoke(ToggleGlobalEnabled);
             return;
         }
         _scheduler.HandleSourceDown(source);
@@ -299,15 +310,19 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// <summary>输入源释放（钩子线程调用）。</summary>
     public void HandleHookUp(InputSource source) => _scheduler.HandleSourceUp(source);
 
-    // ---------- 全局开关 ----------
-    /// <summary>切换全局启用 / 停用（横幅、控件透明度、调度器、配置持久化）。</summary>
+    // ---------- 全局总开关 ----------
+    /// <summary>
+    /// 切换总开关（横幅、控件透明度、调度器、提示语音、配置持久化）。
+    /// 开启播“启动”、关闭播“关闭”；关闭时调度器立即停止所有连发任务。
+    /// </summary>
     public void ToggleGlobalEnabled()
     {
         GloballyEnabled = !GloballyEnabled;
         _config.GlobalSwitch.Enabled = GloballyEnabled;
         _scheduler.SetMasterEnabled(GloballyEnabled);
+        if (GloballyEnabled) _soundCue.PlayStart(); else _soundCue.PlayStop();
         SaveConfig();
-        AddLog(GloballyEnabled ? "全局功能已启用。" : "全局功能已停用，所有连发已停止。");
+        AddLog(GloballyEnabled ? "总开关已开启（启动）。" : "总开关已关闭，所有连发已停止。");
     }
 
     /// <summary>设置全局开关键（null 表示清除）。冲突时返回 false 且不修改。</summary>
@@ -319,7 +334,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             MasterKeyText = "未设置";
             OnPropertyChanged(nameof(GlobalSwitchSource));
             SaveConfig();
-            AddLog("全局开关键已清除。");
+            AddLog("全局开关键已清除（总开关只能通过界面托盘菜单切换）。");
             return true;
         }
 
@@ -331,19 +346,46 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             return false;
         }
 
+        // 换键时：旧总开关键若有方案则迁移到新键（保持方案不丢失，且避免键位重叠）。
+        if (GlobalSwitchSource is { } oldKey && !oldKey.Equals(key))
+            RelocateSchemeFromMasterKey(oldKey, key);
+
         _config.GlobalSwitch.HasKey = true;
         _config.GlobalSwitch.VirtualKey = key.VirtualKey;
         _config.GlobalSwitch.Extended = key.Extended;
         MasterKeyText = InputNameMapper.GetSourceName(key);
         OnPropertyChanged(nameof(GlobalSwitchSource));
         SaveConfig();
-        AddLog($"全局开关键已设置为 [{InputNameMapper.GetSourceName(key)}]。");
+        AddLog($"总开关键已设置为 [{InputNameMapper.GetSourceName(key)}]。");
         return true;
     }
+
+    /// <summary>提示语音音量（0~100；同步语音服务并防抖持久化）。</summary>
+    public double SoundVolume
+    {
+        get => _soundVolume;
+        set
+        {
+            value = Math.Clamp(value, 0, 100);
+            if (!Set(ref _soundVolume, value)) return;
+            _soundCue.Volume = value / 100.0;
+            _volumeSaveTimer.Stop();
+            _volumeSaveTimer.Start();
+        }
+    }
+
+    /// <summary>退出前静音提示语音（避免退出时序还播报语音）。</summary>
+    public void SoundCueMuteForExit() => _soundCue.Volume = 0;
 
     // ---------- 日志 / 保存 ----------
     /// <summary>把当前配置对象交给外部保存（退出时序用）。</summary>
     public AppConfig CurrentConfig => _config;
+
+    /// <summary>音量滑块防抖保存定时器（拖动结束后 500ms 落盘）。</summary>
+    private readonly System.Windows.Threading.DispatcherTimer _volumeSaveTimer = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(500)
+    };
 
     /// <summary>追加一条 UI 日志（最新在最上，最多保留 200 条）。</summary>
     public void AddLog(string message)

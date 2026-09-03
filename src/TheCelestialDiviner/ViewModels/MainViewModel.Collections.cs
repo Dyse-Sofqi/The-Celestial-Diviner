@@ -149,11 +149,14 @@ public sealed partial class MainViewModel
             if (imported is null) throw new InvalidOperationException("内容为空");
 
             _config = imported;
+            // 旧版本配置先迁移到 v2 语义（总开关默认关闭、默认键 F9）。
+            ConfigService.MigrateIfNeeded(imported);
             // 用属性统一驱动：状态文本、横幅、按钮透明度同步刷新。
             GloballyEnabled = imported.GlobalSwitch.Enabled;
             MasterKeyText = imported.GlobalSwitch.HasKey
                 ? InputNameMapper.GetKeyName(imported.GlobalSwitch.VirtualKey)
                 : "未设置";
+            SoundVolume = Math.Clamp(imported.SoundVolume, 0, 100);
             // 键盘注入模式随配置同步（导入 / 导出；旧配置回退 UseScanCodes 语义）。
             var mode = imported.KeyboardMode is >= 0 and <= 3
                 ? imported.KeyboardMode
@@ -185,6 +188,30 @@ public sealed partial class MainViewModel
         {
             WriteIndented = true
         });
+
+    /// <summary>
+    /// 编辑总开关键时的方案迁移：若旧总开关键注册过方案，则把该方案转移到新总开关键，
+    /// 避免“总开关键与方案源相同”导致按键被吞。新键已有方案时丢弃旧方案并提示。
+    /// </summary>
+    public void RelocateSchemeFromMasterKey(InputSource oldKey, InputSource newKey)
+    {
+        var oldKeyStr = TaskSchedulerService.BuildSourceKey(oldKey);
+        if (!_config.Schemes.TryGetValue(oldKeyStr, out var scheme)) return;
+
+        _config.Schemes.Remove(oldKeyStr);
+        var newKeyStr = TaskSchedulerService.BuildSourceKey(newKey);
+        if (_config.Schemes.ContainsKey(newKeyStr))
+        {
+            AddLog($"原总开关键 [{InputNameMapper.GetSourceName(oldKey)}] 的方案已丢弃（新键已有方案）。");
+        }
+        else
+        {
+            _config.Schemes[newKeyStr] = scheme;
+            AddLog($"原总开关键 [{InputNameMapper.GetSourceName(oldKey)}] 的方案已转移到 [{InputNameMapper.GetSourceName(newKey)}]。");
+        }
+        RefreshAllButtons();
+        ApplyConfigToScheduler();
+    }
 
     /// <summary>检查候选全局开关键是否与已注册方案冲突（设置对话框实时校验）。</summary>
     public bool IsGlobalKeyConflicting(InputSource key) =>

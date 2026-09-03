@@ -20,7 +20,7 @@
                     Margin="8,0,0,0" Click="OnRecordClick"/>
             <Button Grid.Column="2" Content="清除" Padding="10,3" Margin="8,0,0,0" Click="OnClearClick"/>
         </Grid>
-        <TextBlock x:Name="HintText" Text="录制后按下的键盘按键将成为全局开关键（不能与已注册方案的输入源相同）。"
+        <TextBlock x:Name="HintText" Text="录制后按下的键盘按键将成为总开关键（不能与已注册方案的输入源相同）。"
                    FontSize="11" TextWrapping="Wrap" Opacity="0.7"
                    Foreground="{DynamicResource ThemeFg}" Margin="0,10,0,0"/>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">

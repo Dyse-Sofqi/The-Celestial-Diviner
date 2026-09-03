@@ -24,6 +24,12 @@ public static class Constants
     /// <summary>录制目标键的超时（毫秒）。</summary>
     public const int RecordTimeoutMs = 5000;
 
+    /// <summary>全局开关键默认虚拟键码（F9 = 0x78）。</summary>
+    public const int DefaultMasterKeyVk = 0x78;
+
+    /// <summary>全局开关提示语音默认音量（0~100）。</summary>
+    public const double DefaultSoundVolume = 70;
+
     /// <summary>主窗口设计尺寸（逻辑像素）。</summary>
     public const double MainWindowWidth = 1000;
 

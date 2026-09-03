@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using TheCelestialDiviner.Helpers;
 
 namespace TheCelestialDiviner.Models;
 
@@ -172,17 +173,17 @@ public sealed class KeyScheme
 /// <summary>全局开关键配置。</summary>
 public sealed class GlobalSwitchConfig
 {
-    /// <summary>是否已设置全局开关键（默认无值，需用户设置）。</summary>
-    public bool HasKey { get; set; }
+    /// <summary>是否已设置全局开关键（默认 F9，可在“设置全局开关”中自定义 / 清除）。</summary>
+    public bool HasKey { get; set; } = true;
 
-    /// <summary>全局开关键虚拟键码（HasKey = true 时有效）。</summary>
-    public int VirtualKey { get; set; }
+    /// <summary>全局开关键虚拟键码（HasKey = true 时有效，默认 F9 = 0x78）。</summary>
+    public int VirtualKey { get; set; } = Constants.DefaultMasterKeyVk;
 
     /// <summary>全局开关键扩展键标志。</summary>
     public bool Extended { get; set; }
 
-    /// <summary>全局功能当前是否启用（停用时立即停止所有连发任务）。</summary>
-    public bool Enabled { get; set; } = true;
+    /// <summary>总开关当前是否启用（默认关闭；开启后方案才响应输入，停用即停所有连发）。</summary>
+    public bool Enabled { get; set; }
 
     /// <summary>创建当前实例的副本。</summary>
     public GlobalSwitchConfig Clone() => new()
@@ -197,14 +198,20 @@ public sealed class GlobalSwitchConfig
 /// <summary>应用配置根对象（持久化到 %APPDATA%\TheCelestialDiviner\config.json）。</summary>
 public sealed class AppConfig
 {
+    /// <summary>配置文件当前版本（v2：总开关默认关闭 + 默认键 F9 + 提示语音音量）。</summary>
+    public const int CurrentVersion = 2;
+
     /// <summary>配置文件版本号（预留迁移能力）。</summary>
-    public int Version { get; set; } = 1;
+    public int Version { get; set; } = CurrentVersion;
 
     /// <summary>所有输入源方案（键为输入源标识字符串）。</summary>
     public Dictionary<string, KeyScheme> Schemes { get; set; } = new();
 
     /// <summary>全局开关键配置。</summary>
     public GlobalSwitchConfig GlobalSwitch { get; set; } = new();
+
+    /// <summary>全局开关提示语音音量（0~100，默认 70）。</summary>
+    public double SoundVolume { get; set; } = Constants.DefaultSoundVolume;
 
     /// <summary>
     /// 扫描码兼容模式：键盘注入改用 KEYEVENTF_SCANCODE + 扫描码。
@@ -224,6 +231,7 @@ public sealed class AppConfig
         Version = Version,
         Schemes = Schemes.ToDictionary(p => p.Key, p => p.Value.Clone(), StringComparer.Ordinal),
         GlobalSwitch = GlobalSwitch.Clone(),
+        SoundVolume = SoundVolume,
         UseScanCodes = UseScanCodes,
         KeyboardMode = KeyboardMode
     };

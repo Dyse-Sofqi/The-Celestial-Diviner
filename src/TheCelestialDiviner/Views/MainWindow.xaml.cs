@@ -10,7 +10,7 @@ namespace TheCelestialDiviner.Views;
 
 /// <summary>
 /// 主窗口：状态栏/横幅/鼠标区/键盘区/底部栏/日志面板；
-/// 钩子事件 Dispatcher 封送、Ctrl+点击全部停止、关闭到托盘、方案与全局开关对话框。
+/// 钩子事件 Dispatcher 封送、音量滑块、关闭到托盘、方案与全局开关对话框。
 /// </summary>
 public partial class MainWindow : Window
 {
@@ -38,6 +38,9 @@ public partial class MainWindow : Window
             _vm.KeyboardMode = KeyboardModeBox.SelectedIndex;
         // VM 侧导入配置后同步回 UI。
         _vm.KeyboardModeChanged += mode => KeyboardModeBox.SelectedIndex = mode;
+
+        // 音量滑块初值回填（绑定双向，拖动后写 VM 并防抖落盘）。
+        SoundVolumeSlider.Value = _vm.SoundVolume;
 
         // 钩子事件 → UI 封送（调度器本身线程安全，但日志与 UI 属性需封送）。
         _app.Hooks.SourceDown += src =>
@@ -139,19 +142,7 @@ public partial class MainWindow : Window
     }
 
     // ---------- 交互 ----------
-    /// <summary>“全部停止”按钮 Ctrl+点击防误触。</summary>
-    private void OnStopAllButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
-        {
-            _vm.StopAllCommand.Execute(null);
-        }
-        else
-        {
-            _vm.AddLog("请按住 Ctrl 再点击“全部停止”（防误触）。");
-        }
-        e.Handled = true;
-    }
+    // “全部停止”按钮已取消：其职责与全局总开关重叠，停止能力由总开关承担。
 
     // ---------- 托盘 ----------
     /// <summary>隐藏到托盘。</summary>

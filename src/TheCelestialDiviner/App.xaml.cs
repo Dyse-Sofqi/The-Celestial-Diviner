@@ -96,7 +96,7 @@ public partial class App : Application
 
         _trayIcon = new Forms.NotifyIcon
         {
-            Text = "衍天高手 v1.0",
+            Text = "衍天高手 v1.1",
             Visible = true
         };
         try
@@ -113,8 +113,7 @@ public partial class App : Application
 
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add("显示主界面", null, (_, _) => window.ShowFromTray());
-        menu.Items.Add("全局启用/停用", null, (_, _) => _vm.ToggleGlobalEnabled());
-        menu.Items.Add("全部停止", null, (_, _) => _scheduler.StopAll());
+        menu.Items.Add("总开关 开启/关闭", null, (_, _) => _vm.ToggleGlobalEnabled());
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("退出", null, (_, _) => ExitFromTray());
 
@@ -142,6 +141,8 @@ public partial class App : Application
     /// </summary>
     public void ExitApp()
     {
+        // 退出时静音提示语音，避免结束时还播报。
+        _vm.SoundCueMuteForExit();
         try { _scheduler.StopAll(); } catch (Exception ex) { Logger.Error("停止任务失败。", ex); }
         try { _hookService.Dispose(); } catch (Exception ex) { Logger.Error("卸载钩子失败。", ex); }
         try { _timerResolution.Dispose(); } catch (Exception ex) { Logger.Error("恢复定时器失败。", ex); }

@@ -14,8 +14,8 @@
     <!-- 管理员权限 + PerMonitorV2 DPI 声明 -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Resources\app.ico</ApplicationIcon>
-    <Version>1.0.0</Version>
-    <FileVersion>1.0.0.0</FileVersion>
+    <Version>1.1.0</Version>
+    <FileVersion>1.1.0.0</FileVersion>
     <AssemblyTitle>衍天高手</AssemblyTitle>
     <Product>衍天高手 (The Celestial Diviner)</Product>
     <Description>键盘 / 鼠标连发工具（全局钩子 + SendInput）</Description>
@@ -24,6 +24,11 @@
 
   <ItemGroup>
     <Resource Include="Resources\app.ico" />
+  </ItemGroup>
+
+  <!-- 全局开关提示语音（内嵌资源，SoundCueService 播放） -->
+  <ItemGroup>
+    <Resource Include="Resources\Sounds\*.wav" />
   </ItemGroup>
 
   <!-- DD 驱动模式依赖：官方 DD 虚拟驱动 x64 DLL（原生库，无法内嵌单文件，随目录分发）。

@@ -42,8 +42,10 @@ public sealed class ConfigService
                 }
 
                 var json = File.ReadAllText(ConfigPath);
-                var config = JsonSerializer.Deserialize<AppConfig>(json, JsonOptions);
-                return config ?? new AppConfig();
+                var config = JsonSerializer.Deserialize<AppConfig>(json, JsonOptions) ?? new AppConfig();
+                MigrateIfNeeded(config);
+                config.SoundVolume = Math.Clamp(config.SoundVolume, 0, 100);
+                return config;
             }
             catch (Exception ex)
             {
@@ -53,6 +55,28 @@ public sealed class ConfigService
                 return new AppConfig();
             }
         }
+    }
+
+    /// <summary>
+    /// 配置版本迁移（加载与导入共用）。
+    /// v1 → v2：取消“全部停止”，全局开关升级为按键总开关：默认关闭、
+    /// 默认键 F9（仅当未被存量方案占用时）、热键可自定义。
+    /// </summary>
+    public static void MigrateIfNeeded(AppConfig config)
+    {
+        if (config.Version >= AppConfig.CurrentVersion) return;
+        var fromVersion = config.Version;
+
+        if (!config.GlobalSwitch.HasKey &&
+            !config.Schemes.ContainsKey($"K:{Constants.DefaultMasterKeyVk}:0"))
+        {
+            // 默认键 F9：未被存量方案占用时启用，避免与注册源冲突。
+            config.GlobalSwitch.HasKey = true;
+            config.GlobalSwitch.VirtualKey = Constants.DefaultMasterKeyVk;
+        }
+        config.GlobalSwitch.Enabled = false; // 总开关默认关闭（v2 语义）
+        config.Version = AppConfig.CurrentVersion;
+        Logger.Info($"配置 v{fromVersion} 已迁移到 v{AppConfig.CurrentVersion}（总开关默认关闭、默认键 F9）。");
     }
 
     /// <summary>保存配置（原子写入：先写临时文件再替换）。</summary>

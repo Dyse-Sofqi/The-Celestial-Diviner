@@ -173,13 +173,14 @@ public sealed class TaskSchedulerService
         }
     }
 
-    /// <summary>全部停止：清零所有触发信号（Hold 释放、Toggle 关闭）。方案保持待触发状态。</summary>
+    /// <summary>停止全部任务（退出时序用；用户入口已由全局总开关取代）：
+    /// 清零所有触发信号（Hold 释放、Toggle 关闭）。方案保持待触发状态。</summary>
     public void StopAll()
     {
         lock (_gate)
         {
             StopAllCore();
-            OnLog("已执行“全部停止”。");
+            OnLog("已停止所有连发任务（退出）。");
         }
     }
 

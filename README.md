@@ -1,4 +1,4 @@
-# 衍天高手 The Celestial Diviner v1.0
+# 衍天高手 The Celestial Diviner v1.1
 
 键盘 / 鼠标连发（自动点击）工具。全局钩子监听物理输入，`SendInput` 模拟连发，
 .NET 8 + WPF 单文件 exe，需管理员权限运行。
@@ -18,11 +18,15 @@
   - 模式：**开关 Toggle**（按一次启动 / 再按停止）或 **按压 Hold**（按住连发，松开即停）
   - 间隔：1 ~ 100ms，默认 **5ms**（`timeBeginPeriod(1)` 保证定时精度）
 - **暂停规则**：任一 Hold 目标键激活时，暂停所有 Toggle；Hold 全部释放后恢复（以目标键为单位）
-- **全局开关键**：自定义键盘热键一键启用/停用全部方案；停用即停所有连发；恢复不自动重启
-- **全部停止**：状态栏按钮 **Ctrl+点击**（防误触）
-- **配置持久化**：`%APPDATA%\TheCelestialDiviner\config.json`，变更自动保存，损坏自动备份重建
-- **导入 / 导出**：底部按钮导出 / 导入 JSON 配置
-- **托盘**：关闭窗口 → 最小化到托盘；托盘右键：显示主界面 / 全局启用停用 / 全部停止 / 退出；双击显示/隐藏
+- **总开关（全局开关键）**：默认键 **F9**（可自定义），作为所有方案的按键总开关：
+  - **默认关闭**：启动后按总开关键开启/关闭；开启时语音提示“启动”，关闭时提示“关闭”
+  - 关闭状态下所有方案不响应输入，正在连发的任务立即停止；恢复开启不自动重启（方案保持待触发）
+  - 开关键不能与已注册方案的输入源相同；编辑总开关键时原键上的方案自动迁移到新键
+  - 顶部状态栏显示当前总开关状态与键位；底部“设置全局开关”按钮录制/清除自定义键位
+- **提示语音音量**：顶部状态栏右侧滑块（0 ~ 100%，默认 70%），拖动自动保存；0 为静音
+- **配置持久化**：`%APPDATA%\TheCelestialDiviner\config.json`，变更自动保存，损坏自动备份重建（v1 旧配置自动迁移：总开关默认关闭、默认键 F9）
+- **导入 / 导出**：底部按钮导出 / 导入 JSON 配置（旧版本导出文件导入时自动迁移）
+- **托盘**：关闭窗口 → 最小化到托盘；托盘右键：显示主界面 / 总开关 开启关闭 / 退出；双击显示/隐藏
 - **界面**：简体中文；深浅主题跟随系统；Per-Monitor V2 DPI 感知
 - 状态颜色：未注册浅灰 / Toggle 蓝 / Hold 橙；全局停用时全部控件半透明 + 黄色横幅
 
@@ -38,8 +42,8 @@
 2. 左键点击任意按键（键盘区或鼠标区）→ 弹出"设置方案"对话框
 3. 对话框内"+ 添加" → "录制"（5 秒内按下目标键）→ 选模式与间隔 → "确认添加" → "确认"
 4. 右键按键可：编辑方案 / 启用停用方案 / 清空方案
-5. "设置全局开关" → "录制"按下一个键盘键作为总开关热键
-6. 触发：按下注册的输入源 → 绑定的目标键按配置模式连发
+5. "设置全局开关" → "录制"按下一个键盘键作为总开关键（默认 F9，无需设置即可用）
+6. **按 F9（总开关键）开启总开关**（听到“启动”语音）→ 按下注册的输入源 → 绑定的目标键按配置模式连发；再按 F9 关闭（“关闭”语音）
 7. 关闭窗口不会退出，程序驻留托盘；托盘右键 → 退出
 
 ### 模式说明
@@ -111,8 +115,9 @@ src/TheCelestialDiviner/
 ├── Models/           InputSource / TargetKeyConfig / KeyScheme / GlobalSwitchConfig / AppConfig
 ├── Services/         InputHookService / InputSimulatorService / TaskSchedulerService
 │                     ConfigService / TimerResolutionService / KeyRecorder / InputNameMapper
+│                     SoundCueService（总开关提示语音）
 ├── Helpers/          NativeMethods / Constants / Logger / ThemeHelper / Converters
-├── Resources/        app.ico（16~256 多尺寸）
+├── Resources/        app.ico（16~256 多尺寸）+ Sounds/（总开关提示语音 WAV）
 ├── app.manifest      requireAdministrator + PerMonitorV2 DPI
 └── App.xaml(.cs)     服务组装 / 主题注入 / 托盘 / 退出时序
 ```
