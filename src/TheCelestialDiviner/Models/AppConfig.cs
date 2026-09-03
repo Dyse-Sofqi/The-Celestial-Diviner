@@ -198,6 +198,9 @@ public sealed class GlobalSwitchConfig
 /// <summary>应用配置根对象（持久化到 %APPDATA%\TheCelestialDiviner\config.json）。</summary>
 public sealed class AppConfig
 {
+    /// <summary>键盘注入模式默认值：DD 驱动（物理级，无 LLKHF_INJECTED 标记）。</summary>
+    public const int DefaultKeyboardMode = 3;
+
     /// <summary>配置文件当前版本（v2：总开关默认关闭 + 默认键 F9 + 提示语音音量）。</summary>
     public const int CurrentVersion = 2;
 
@@ -220,10 +223,10 @@ public sealed class AppConfig
     public bool UseScanCodes { get; set; }
 
     /// <summary>
-    /// 键盘注入模式：0 普通 SendInput / 1 扫描码 / 2 消息 / 3 DD 虚拟驱动。
-    /// 旧配置无此字段时回退 <see cref="UseScanCodes"/> 语义（true→1，false→0）。
+    /// 键盘注入模式：0 普通 SendInput / 1 扫描码 / 2 消息 / 3 DD 虚拟驱动（默认）。
+    /// 旧配置无此字段时回退 <see cref="DefaultKeyboardMode"/>（默认 DD 驱动）。
     /// </summary>
-    public int KeyboardMode { get; set; }
+    public int KeyboardMode { get; set; } = DefaultKeyboardMode;
 
     /// <summary>创建当前实例的深拷贝。</summary>
     public AppConfig Clone() => new()

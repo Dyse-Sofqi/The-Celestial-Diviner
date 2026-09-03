@@ -1,52 +1,56 @@
 # 衍天高手（The Celestial Diviner）开发进度交接
 
-更新：2026-09-03 22:15 (Asia/Shanghai) — **迁移到 .NET Framework 4.8（net48）**
+更新：2026-09-03 23:30 (Asia/Shanghai) — **语音无声修复 + 默认模式改 DD（v1.2.1）**
 
-## 本次变更（net48 迁移，v1.2.0）
+## 本次变更
+- 🐛 **修复总开关切换无声**（用户实测反馈）：
+  - 根因：WPF `MediaPlayer` 的媒体管线（Media Foundation）**不解析 pack://application 资源 URI**，
+    `Open` 静默失败（HasAudio=false、无异常、Play 无声）——pack URI 只对
+    `Application.GetResourceStream` 等资源解析器有效，MF 解不开
+  - 取证：反射确认 WAV 已内嵌（g.resources 含 startvoice/stopvoice）；STA 脚本验证
+    本机 MF 播本地文件正常 → 问题锁定在 pack URI 解析；pack Open 后 Duration=Automatic/HasAudio=False 复现
+  - 修复：`SoundCueService` 启动时把两个 WAV 解包到 `%TEMP%\TheCelestialDiviner\`，
+    改用**文件 URI** 播放（音量滑块照常）；挂 `MediaFailed` 日志钩子，失败不再静默
+  - 端到端：net48 发布版实机 keybd_event 注入 F9 两次，日志出现启用/停用，无 MediaFailed
+- ⚙️ **键盘注入默认模式改为 DD 驱动**（用户要求，物理级注入）：
+  - `AppConfig.DefaultKeyboardMode = 3`；旧配置无 KeyboardMode 字段时按 DD 处理
+  - 冷启动驱动未就绪（缺 dll / 非管理员 / 授权失败）仍静默回退普通模式
+  - 注意：用户现存配置已是 KeyboardMode=3，此变更只影响无配置/新机器
+- 版本号 1.2.1
 
-### 背景与决策
-- 用户不可接受 .NET 8 自包含单文件的 147MB 体积（内嵌压缩后仍 65MB，WPF 运行时下限压不进 50MB）
-- 选型对比后确定迁移 .NET Framework 4.8：Win10 1903+ / Win11 系统内置运行时，
-  **零安装 + 全包 5.1MB（主 exe 0.4MB）**，且保留全部 WPF XAML 与业务代码
-- 高分屏适配不受影响：WPF PerMonitorV2 由 app.manifest 声明，Framework 4.6.2+ 完整支持（原 net8 的 WFAC010 警告消失）
+## 验证记录
+- dotnet build Debug：0 error 0 warning（net48）
+- dotnet publish Release → bin\Release\net48-publish\（约 5.1MB，主 exe 0.4MB）
+- 实机：启动解包 WAV 到 %TEMP%、钩子/定时器正常、F9 切换日志正常、无播放报错
 
-### 技术要点
-- csproj：TargetFramework net48；System.Text.Json 改 NuGet 包 8.0.5；
-  AutoGenerateBindingRedirects（生成 .exe.config 重定向 Unsafe 版本）
-- 新增 Helpers/CompilerShims.cs：net48 缺失的 IsExternalInit / RequiredMemberAttribute /
-  CompilerFeatureRequiredAttribute（支撑现有 C# 9 init / C# 11 required 语法）
-- 新增 Helpers/Compatibility.cs：Compat.Clamp（Math.Clamp 等价）、
-  Compat.CombineHashCodes（HashCode.Combine 等价，FNV-1a）、
-  Dictionary.GetValueOrDefault 与 KeyValuePair.Deconstruct 扩展
-- 调用点改造：Math.Clamp → Compat.Clamp（7 个文件）；HashCode.Combine → Compat.CombineHashCodes；
-  File.Move(overwrite:) → File.Copy + Delete（net48 无三参 Move）
-- 代码语法零降级：记录类 init/required、模式匹配、switch 表达式全部保留
-
-### 验证
-- ✅ Debug/Release 构建：0 错误 0 警告
-- ✅ 实机运行（net48-publish）：配置加载正常、钩子安装成功、5 个连发任务运行、定时器 1ms 生效
-- ✅ 体积：主 exe 0.4MB + 依赖 DLL 约 1MB + dd63330.dll 3.68MB ≈ 5.1MB
-- ⚠️ 分发注意：需整个发布目录（exe + .exe.config + System.*.dll + dd63330.dll），不能只拷 exe
-- 已清理 net8.0-windows 旧产物目录（用户如果还需要 .NET 8 版可从 git 历史找 v1.1.0）
-
-## 上次变更（2026-09-03 21:40 前后，v1.1.0，总开关改造）
-- 取消「全部停止」（状态栏按钮 / Ctrl+点击 / 托盘项），停止能力由总开关承担
-- 总开关：默认关闭、默认键 F9 可自定义（配置 v1→v2 迁移）、方案注册源双向冲突校验、
-  换键时方案自动迁移、录制期间暂停热键响应
-- 开关切换播报「启动」/「关闭」语音（SAPI Huihui 离线合成 WAV，内嵌资源，SoundCueService 播放）
-- 音量滑块（顶部状态栏右侧 0~100% 默认 70%，防抖 500ms 落盘）
+## 上次状态（v1.2.0，commit 57a47b8）
+- ✅ 迁移到 .NET Framework 4.8：零安装（Win10 1903+/Win11 内置），发布体积 147MB→5.1MB
+- ✅ PerMonitorV2 高分屏适配不变（manifest 声明，net48 正统做法，WFAC010 警告消失）
+- ✅ net48 兼容垫片：CompilerShims.cs（init/required）、Compatibility.cs（Clamp/哈希/集合扩展）
+- ✅ System.Text.Json 改 NuGet 包 + AutoGenerateBindingRedirects
+- ✅ 总开关改造（v1.1.0，commit 6dc5ed1）：取消"全部停止"、默认关闭、默认键 F9 可自定义、
+  开关语音（启动/关闭）、音量滑块、配置 v1→v2 迁移、换键方案自动迁移、录制期防误触
 
 ## 全部文件清单
-- 根：TheCelestialDiviner.sln / .gitignore / README.md / PROGRESS.md / tools/make_icon.py
-- src/TheCelestialDiviner/：csproj / app.manifest / App.xaml(.cs)
-- Helpers：Constants / Logger / NativeMethods（SendInput 返回 uint 已修正）/ ThemeHelper /
-  Converters（4 个转换器）/ Compatibility（net48 垫片）/ CompilerShims（init/required 垫片）
+- 根：TheCelestialDiviner.sln / .gitignore / README.md / PROGRESS.md / drivers/dd63330.dll
+- src/TheCelestialDiviner/：csproj（net48 + System.Text.Json 包）/ app.manifest / App.xaml(.cs)
+- Helpers：Constants / Logger / NativeMethods / ThemeHelper / Converters /
+  Compatibility（net48 垫片）/ CompilerShims（init/required 垫片）
 - Models：AppConfig.cs（InputKind/MouseInput/TargetKind/TriggerMode/InputSource/TargetKeyConfig/
-  KeyScheme/GlobalSwitchConfig+Clone/AppConfig v2 含 Version/SoundVolume）
-- Services：InputHookService / InputSimulatorService / TaskSchedulerService / ConfigService
-  （v1→v2 迁移）/ TimerResolutionService / KeyRecorder / InputNameMapper / DdDriverService /
-  SoundCueService（总开关提示语音）
-- ViewModels：MainViewModel（核心状态/命令/钩子接入/总开关切换）+ MainViewModel.Collections
-  （集合/方案/导入导出/迁移）/ KeySourceViewModel / TargetKeyViewModel / RelayCommand
+  KeyScheme/GlobalSwitchConfig+Clone/AppConfig+迁移；DefaultKeyboardMode=3）
+- Services：InputHookService / InputSimulatorService（4 模式）/ TaskSchedulerService /
+  ConfigService（v2 迁移）/ TimerResolutionService / KeyRecorder（IsAnyRecording）/
+  InputNameMapper / DdDriverService / SoundCueService（临时文件解包播放）
+- ViewModels：MainViewModel(.cs/.Collections.cs) / KeySourceViewModel / TargetKeyViewModel / RelayCommand
 - Views：MainWindow / SchemeDialog / GlobalSwitchDialog（XAML + cs）
-- Resources：app.ico（16~256 多尺寸）/ Sounds/（StartVoice.wav + StopVoice.wav，SAPI 合成）
+- Resources：app.ico / Sounds/StartVoice.wav + StopVoice.wav（SAPI Huihui 44.1k 16bit 单声道）
+
+## 已知限制 / 注意事项
+- Framework 版不再是单文件：分发需整个目录（exe + .exe.config + System.*.dll + dd63330.dll）
+- WPF 媒体管线不认 pack://application URI（本次无声根因）；如需纯资源播放可改
+  `SoundCueService` 用 `MediaPlayer.Open(文件URI)` 之外的方案（如 NAudio），当前解包方案够用
+- DD 模式冷启动静默回退普通模式是刻意设计（初始化期日志面板未显示，避免误导）；
+  热切换失败才有日志提示
+- 暂不支持 F13+ 键的 DD 注入（DD_todc 返回 -1）
+- DD 鼠标注入未做端到端确认，鼠标连发仍走 SendInput
+- net8.0-windows 目标已移除；如需找回见 git 历史 v1.1.0（6dc5ed1）

@@ -105,11 +105,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         ApplyConfigToScheduler();
         RefreshAllButtons();
 
-        // 键盘注入模式：从配置恢复（优先新字段 KeyboardMode，兼容旧 UseScanCodes）并同步到模拟器。
+        // 键盘注入模式：默认 DD 驱动（物理级）；配置优先，越界回退默认。
+        // DD 需 dd63330.dll + 管理员权限，冷启动就绪检查失败时回退普通模式。
         _keyboardMode = _config.KeyboardMode is >= 0 and <= 3
             ? _config.KeyboardMode
-            : _config.UseScanCodes ? 1 : 0;
-        // DD 模式冷启动：驱动未就绪时静默回退普通模式（初始化阶段 UI 日志面板未展示，避免误导）。
+            : 3;
         if (_keyboardMode == 3 && !DdDriverService.EnsureReady())
         {
             _keyboardMode = 0;
