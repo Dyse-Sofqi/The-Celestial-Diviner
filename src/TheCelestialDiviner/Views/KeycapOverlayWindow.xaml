@@ -1,0 +1,14 @@
+<Window x:Class="TheCelestialDiviner.Views.KeycapOverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="KeycapOverlay" ShowInTaskbar="False" ShowActivated="False"
+        WindowStyle="None" ResizeMode="NoResize" AllowsTransparency="True"
+        Background="Transparent" Width="940" Height="180" Topmost="True"
+        Focusable="False" IsHitTestVisible="False" UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Ideal">
+    <!--
+        键帽可视化悬浮层（右下角）：点击穿透 + 置顶 + 不抢焦点。
+        键帽视觉树由 code-behind 构建以精确复刻 keyviz PBT 键帽双层结构。
+    -->
+    <Grid x:Name="Root" VerticalAlignment="Bottom" HorizontalAlignment="Right"/>
+</Window>

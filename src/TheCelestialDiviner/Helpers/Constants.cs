@@ -13,10 +13,10 @@ public static class Constants
     public const string ConfigBackupFileName = "config.json.bak";
 
     /// <summary>默认连发间隔（毫秒）。</summary>
-    public const int DefaultIntervalMs = 5;
+    public const int DefaultIntervalMs = 10;
 
     /// <summary>连发间隔下限（毫秒）。</summary>
-    public const int MinIntervalMs = 1;
+    public const int MinIntervalMs = 10;
 
     /// <summary>连发间隔上限（毫秒）。</summary>
     public const int MaxIntervalMs = 100;

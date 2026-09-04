@@ -22,10 +22,17 @@ public class KeyboardRowPanel : Panel
 
     protected override Size MeasureOverride(Size availableSize)
     {
+        // 先按总单位数算出单位宽，再以每个子项的实际比例宽度测量。
+        // 若用整行宽度测量，图块内的 ViewBox 会把内容放大到整行宽（键名超大且被裁切）。
+        double totalUnits = 0;
+        foreach (UIElement child in InternalChildren)
+            totalUnits += GetUnits(child);
+        double unitWidth = totalUnits > 0 ? availableSize.Width / totalUnits : 0;
+
         double maxChildHeight = 0;
         foreach (UIElement child in InternalChildren)
         {
-            child.Measure(availableSize);
+            child.Measure(new Size(GetUnits(child) * unitWidth, availableSize.Height));
             maxChildHeight = Math.Max(maxChildHeight, child.DesiredSize.Height);
         }
         // 行宽吃满可用宽度（单位宽 = 可用宽 / 总单位数，在 Arrange 中计算）。

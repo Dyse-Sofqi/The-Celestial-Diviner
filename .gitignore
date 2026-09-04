@@ -7,3 +7,6 @@ publish/
 
 .fetch/
 scratch_*/
+
+crashdumps/
+dist/

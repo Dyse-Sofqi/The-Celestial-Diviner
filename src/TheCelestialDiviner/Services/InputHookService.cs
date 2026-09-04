@@ -8,7 +8,9 @@ namespace TheCelestialDiviner.Services;
 /// 全局输入监听服务：WH_KEYBOARD_LL + WH_MOUSE_LL 低级钩子。
 /// 钩子安装在专用线程上并通过消息泵驱动；回调中仅做轻量解析与事件分发，
 /// 禁止任何耗时操作。委托引用由本类长期持有，防止被 GC 回收导致崩溃。
-/// 通过 dwExtraInfo 魔数过滤自身 SendInput 注入的事件，避免自触发反馈循环。
+/// 通过 dwExtraInfo 魔数过滤自身 SendInput 注入的事件，避免自触发反馈循环；
+/// DD 驱动注入的事件无标记且设备归因与物理键盘相同，改由
+/// <see cref="EchoGuard"/> 按注入时间线在钩子回调中消除（仅 DD 键盘模式）。
 /// </summary>
 public sealed class InputHookService : IDisposable
 {
@@ -118,6 +120,15 @@ public sealed class InputHookService : IDisposable
 
                     if (isDown || isUp)
                     {
+                        // DD 键盘模式：注入回环与物理输入在系统层不可区分
+                        // （无 INJECTED 标记、设备归因相同），按注入时间线消除回环，
+                        // 防止任务目标键再触发注册源造成 Toggle 被回环关断 / Hold 被回环打断。
+                        if (InputSimulatorService.KeyboardMode == 3 &&
+                            EchoGuard.TryConsume((int)info.vkCode, isDown, unchecked((int)info.time)))
+                        {
+                            return NativeMethods.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
+                        }
+
                         var source = new InputSource
                         {
                             Kind = InputKind.Keyboard,

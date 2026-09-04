@@ -74,6 +74,14 @@ public partial class App : Application
         dict["ThemeBorder"] = ToBrush(border);
         dict["ThemeButtonBg"] = ToBrush(buttonBg);
 
+        // 强调色（全局统一：紫 = 主题主色，金 = 警示色，浅/深主题同值）。
+        dict["AccentPrimary"] = ToBrush("#8A5CF5");
+        dict["AccentGold"] = ToBrush("#D6A01D");
+        // 热键按钮 / 总开关键图块底色（用户指定纯黑，两主题同值）。
+        dict["HotkeyBg"] = ToBrush("#000000");
+        // 未选中模式标签底色（比面板深一点点的灰，暗示可点击；比按钮底色稍浅区分层级）。
+        dict["TabIdleBg"] = ToBrush(isDark ? "#3A3A3A" : "#DFDFDF");
+
         // 键源控件主题（静态刷子 + 实例刷新）。
         KeySourceViewModel.UpdateTheme(isDark);
 
@@ -96,7 +104,7 @@ public partial class App : Application
 
         _trayIcon = new Forms.NotifyIcon
         {
-            Text = "衍天高手 v1.1",
+            Text = "衍天高手 v1.5",
             Visible = true
         };
         try
@@ -158,11 +166,34 @@ public partial class App : Application
     }
 
     /// <summary>UI 线程异常兜底：记录日志并阻止崩溃（可继续运行）。</summary>
+    private bool _handlingDispatcherException;
+
     private void OnDispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
     {
-        Logger.Error("UI 线程未处理异常。", e.Exception);
-        MessageBox.Show($"发生内部错误：{e.Exception.Message}", "衍天高手",
-            MessageBoxButton.OK, MessageBoxImage.Warning);
+        // 渲染/布局管线内的异常若弹模态框会重入渲染循环，反复排版直到栈溢出
+        // （dwrite.dll / TextShaping.dll 0xC00000FD 闪退）。首次异常弹窗提示，
+        // 若异常源于布局/渲染阶段则仅记录日志并标记已处理，避免重入。
+        if (_handlingDispatcherException ||
+            e.Exception.StackTrace?.Contains("MeasureOverride") == true ||
+            e.Exception.StackTrace?.Contains("UpdateLayout") == true ||
+            e.Exception.StackTrace?.Contains("RenderMessageHandler") == true)
+        {
+            Logger.Error("布局/渲染管线异常（防重入，不弹窗）。", e.Exception);
+            e.Handled = true;
+            return;
+        }
+        _handlingDispatcherException = true;
+        try
+        {
+            Logger.Error("UI 线程未处理异常。", e.Exception);
+            Logger.Error("异常堆栈：" + (e.Exception.StackTrace ?? "(无堆栈)"));
+            MessageBox.Show($"发生内部错误：{e.Exception.Message}", "衍天高手",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            _handlingDispatcherException = false;
+        }
         e.Handled = true;
     }
 

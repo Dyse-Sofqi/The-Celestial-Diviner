@@ -6,10 +6,16 @@ namespace TheCelestialDiviner.Services;
 public static class InputNameMapper
 {
     /// <summary>将键盘虚拟键码映射为中文名称（如 0x41 → "A"，0x70 → "F1"）。</summary>
-    public static string GetKeyName(int vk)
+    public static string GetKeyName(int vk) => GetKeyName(vk, extended: false);
+
+    /// <summary>将键盘虚拟键码映射为中文名称（扩展键区分小键盘回车：0x0D+扩展 = "小键盘 Enter"）。</summary>
+    public static string GetKeyName(int vk, bool extended)
     {
         // 0x00-0xFF 范围内使用预置表；范围外显示十六进制码。
-        return vk is >= 0 and <= 0xFF ? KeyNames[vk] : $"VK 0x{vk:X2}";
+        if (vk is < 0 or > 0xFF) return $"VK 0x{vk:X2}";
+        // 小键盘回车与主键区回车共用 0x0D（物理键不同，靠扩展键标志区分；tile 显示 "ENT"）。
+        if (vk == 0x0D && extended) return "小键盘 Enter";
+        return KeyNames[vk];
     }
 
     /// <summary>将鼠标输入映射为中文名称。</summary>
@@ -28,7 +34,7 @@ public static class InputNameMapper
     /// <summary>获取输入源的显示名称。</summary>
     public static string GetSourceName(InputSource s) => s.Kind switch
     {
-        InputKind.Keyboard => GetKeyName(s.VirtualKey),
+        InputKind.Keyboard => GetKeyName(s.VirtualKey, s.Extended),
         InputKind.Mouse => GetMouseName(s.Mouse),
         _ => "未知"
     };
@@ -38,7 +44,7 @@ public static class InputNameMapper
     {
         var baseName = t.Kind switch
         {
-            TargetKind.Keyboard => GetKeyName(t.VirtualKey),
+            TargetKind.Keyboard => GetKeyName(t.VirtualKey, t.Extended),
             TargetKind.Mouse => GetMouseName(t.Mouse),
             TargetKind.Wheel => t.Wheel == MouseInput.WheelUp ? "滚轮上" : "滚轮下",
             _ => "未知"
@@ -108,6 +114,7 @@ public static class InputNameMapper
         names[0x69] = "小键盘 9";
         names[0x6A] = "小键盘 *"; names[0x6B] = "小键盘 +";
         names[0x6D] = "小键盘 -"; names[0x6E] = "小键盘 ."; names[0x6F] = "小键盘 /";
+        names[0x90] = "NumLock"; names[0x91] = "Scroll Lock";
 
         // 修饰键（左右区分）
         names[0xA0] = "左 Shift"; names[0xA1] = "右 Shift";

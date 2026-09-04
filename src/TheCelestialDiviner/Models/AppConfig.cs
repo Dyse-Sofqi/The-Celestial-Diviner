@@ -65,6 +65,20 @@ public enum TriggerMode
     Hold
 }
 
+/// <summary>开关模式分区：决定开关方案的连发行为（仅 Mode = Toggle 的方案有效）。</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum ToggleSection
+{
+    /// <summary>常规开关：正常的开关模式，单独启停互不影响。</summary>
+    Normal,
+
+    /// <summary>轮转开关：同分区互斥——开启其他轮转键时自动停止正在运行的轮转键。</summary>
+    Rotate,
+
+    /// <summary>双宏开关：一个开关键位控制两个键轮流触发（1-2-1-2…），再按一次一起停止。</summary>
+    Dual
+}
+
 /// <summary>
 /// 输入源标识：键盘虚拟键码或鼠标输入类型。
 /// 作为字典键 / 比较依据时使用 <see cref="Equals(object)"/> 的值语义。
@@ -120,8 +134,8 @@ public sealed class TargetKeyConfig
     /// <summary>触发模式（Toggle 开关 / Hold 按压）。</summary>
     public TriggerMode Mode { get; set; } = TriggerMode.Toggle;
 
-    /// <summary>连发间隔（毫秒，1~100，默认 5）。</summary>
-    public int IntervalMs { get; set; } = 5;
+    /// <summary>连发间隔（毫秒，10~100，默认 10）。</summary>
+    public int IntervalMs { get; set; } = 10;
 
     /// <summary>实验功能：连发时附带 Ctrl（注入修饰按下 → 目标 → 修饰抬起）。</summary>
     public bool ModCtrl { get; set; }
@@ -159,6 +173,9 @@ public sealed class KeyScheme
     /// <summary>绑定的目标键列表（按添加顺序；首个目标键的模式决定该源的显示模式）。</summary>
     public List<TargetKeyConfig> Targets { get; set; } = new();
 
+    /// <summary>开关模式分区（常规 / 轮转 / 双宏；仅 Mode = Toggle 的方案有意义，默认常规）。</summary>
+    public ToggleSection Section { get; set; } = ToggleSection.Normal;
+
     /// <summary>方案是否启用（停用后该源不响应）。</summary>
     public bool Enabled { get; set; } = true;
 
@@ -166,6 +183,7 @@ public sealed class KeyScheme
     public KeyScheme Clone() => new()
     {
         Enabled = Enabled,
+        Section = Section,
         Targets = Targets.Select(t => t.Clone()).ToList()
     };
 }
@@ -201,14 +219,37 @@ public sealed class AppConfig
     /// <summary>键盘注入模式默认值：DD 驱动（物理级，无 LLKHF_INJECTED 标记）。</summary>
     public const int DefaultKeyboardMode = 3;
 
-    /// <summary>配置文件当前版本（v2：总开关默认关闭 + 默认键 F9 + 提示语音音量）。</summary>
-    public const int CurrentVersion = 2;
+    /// <summary>配置文件当前版本（v2：总开关默认关闭 + 默认键 F9 + 提示语音音量；v3：开关模式分区；
+    /// v4：方案三档位 ①②③ + 当前档位；v5：键位可视化开关表）。</summary>
+    public const int CurrentVersion = 5;
 
     /// <summary>配置文件版本号（预留迁移能力）。</summary>
     public int Version { get; set; } = CurrentVersion;
 
-    /// <summary>所有输入源方案（键为输入源标识字符串）。</summary>
-    public Dictionary<string, KeyScheme> Schemes { get; set; } = new();
+    /// <summary>
+    /// 方案档位列表（固定 3 套：①②③，各存一套按键方案；默认选中①）。
+    /// 运行期约定：<see cref="Schemes"/> 与 <see cref="Profiles"/>[ActiveProfile] 是同一字典实例
+    /// （加载 / 导入 / 切换档位时对齐），所有方案编辑经 Schemes 直接落在活动档位。
+    /// 序列化时 Schemes 为兼容镜像（旧版程序导入可读）。
+    /// </summary>
+    public List<Dictionary<string, KeyScheme>> Profiles { get; set; } = new()
+    {
+        new(StringComparer.Ordinal),
+        new(StringComparer.Ordinal),
+        new(StringComparer.Ordinal)
+    };
+
+    /// <summary>当前选中的方案档位（0/1/2 ↔ ①②③，默认①；切换时实时落盘）。</summary>
+    public int ActiveProfile { get; set; }
+
+    /// <summary>键位可视化显示开关（键为输入源标识字符串；缺省视为开启可视化）。</summary>
+    public Dictionary<string, bool> VisualKeys { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>键位可视化总开关（关闭时全部键位暂停显示；缺省 true）。</summary>
+    public bool GlobalVisualEnabled { get; set; } = true;
+
+    /// <summary>所有输入源方案（键为输入源标识字符串；镜像当前档位 Profiles[ActiveProfile]）。</summary>
+    public Dictionary<string, KeyScheme> Schemes { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>全局开关键配置。</summary>
     public GlobalSwitchConfig GlobalSwitch { get; set; } = new();
@@ -228,14 +269,22 @@ public sealed class AppConfig
     /// </summary>
     public int KeyboardMode { get; set; } = DefaultKeyboardMode;
 
+    /// <summary>方案面板默认连发间隔（毫秒，添加连发键时录入该值），10~100。</summary>
+    public int DefaultIntervalMs { get; set; } = 10;
+
     /// <summary>创建当前实例的深拷贝。</summary>
     public AppConfig Clone() => new()
     {
         Version = Version,
+        Profiles = Profiles.Select(p => p.ToDictionary(kv => kv.Key, kv => kv.Value.Clone(), StringComparer.Ordinal)).ToList(),
+        ActiveProfile = ActiveProfile,
+        GlobalVisualEnabled = GlobalVisualEnabled,
+        VisualKeys = new Dictionary<string, bool>(VisualKeys, StringComparer.Ordinal),
         Schemes = Schemes.ToDictionary(p => p.Key, p => p.Value.Clone(), StringComparer.Ordinal),
         GlobalSwitch = GlobalSwitch.Clone(),
         SoundVolume = SoundVolume,
         UseScanCodes = UseScanCodes,
-        KeyboardMode = KeyboardMode
+        KeyboardMode = KeyboardMode,
+        DefaultIntervalMs = DefaultIntervalMs
     };
 }

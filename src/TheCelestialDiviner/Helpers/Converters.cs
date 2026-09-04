@@ -24,16 +24,6 @@ public sealed class BoolToVisibilityConverter : IValueConverter
         => throw new NotSupportedException();
 }
 
-/// <summary>bool → 日志面板高度：true → 120，false → 26（折叠保留一行）。</summary>
-public sealed class BoolToLogHeightConverter : IValueConverter
-{
-    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
-        => value is true ? 120.0 : 26.0;
-
-    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
-        => throw new NotSupportedException();
-}
-
 /// <summary>string → Visibility：空/空字符串 → Collapsed。</summary>
 public sealed class EmptyToCollapsedConverter : IValueConverter
 {

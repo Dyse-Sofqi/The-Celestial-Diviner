@@ -1,17 +1,21 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using TheCelestialDiviner.Helpers;
 using TheCelestialDiviner.Models;
 
 namespace TheCelestialDiviner.Services;
 
-/// <summary>单个运行中的连发任务（一个目标键对应一个实例 + 一条线程）。</summary>
+/// <summary>单个运行中的连发任务（一个任务对应一个逻辑触发单元 + 一条线程；
+/// 双宏开关的两个目标键共用一个任务，线程内轮流触发）。</summary>
 public sealed class RunningTask
 {
-    /// <summary>目标键配置快照（方案编辑时整体重建）。</summary>
-    public required TargetKeyConfig Config { get; init; }
+    /// <summary>目标键配置快照（方案编辑时整体重建；按索引轮流触发）。</summary>
+    public required List<TargetKeyConfig> Configs { get; init; }
 
     /// <summary>所属输入源（用于日志显示）。</summary>
     public required InputSource Source { get; init; }
+
+    /// <summary>开关模式分区（轮转分区内互斥：开启新键自动停止旧键）。</summary>
+    public ToggleSection Section { get; init; } = ToggleSection.Normal;
 
     /// <summary>触发信号是否有效：Toggle=已开启 / Hold=源按住中。volatile 保证跨线程可见。</summary>
     public volatile bool Active;
@@ -24,11 +28,13 @@ public sealed class RunningTask
 }
 
 /// <summary>
-/// 连发任务调度器：每个启用的目标键一条独立后台线程，Stopwatch 控制间隔。
+/// 连发任务调度器：每个启用的目标键一条独立后台线程（双宏开关的两个键共一条），
+/// Stopwatch 控制间隔。
 /// 模式逻辑：
 /// - Toggle：注册源按一次启动连发，再按一次停止；
 /// - Hold：注册源按住期间连发，松开即停；
 /// - 全局暂停规则：任一 Hold 任务激活（正在连发）时，暂停所有 Toggle 任务，Hold 全部释放后恢复。
+/// - 轮转互斥（ToggleSection.Rotate）：Rotate 分区某键启动时，自动停止该分区其他运行中的任务。
 /// 键盘自动重复产生的连续 WM_KEYDOWN 只视为一次按下（防误切换）。
 /// 滚轮输入源视为“即按即松”的脉冲（每次滚动 = 一次按下+释放）。
 /// </summary>
@@ -62,30 +68,50 @@ public sealed class TaskSchedulerService
                 var source = ParseSourceKey(sourceKey);
                 if (source is null) continue;
 
-                foreach (var target in scheme.Targets)
-                {
-                    if (!target.Enabled) continue;
+                var enabledTargets = scheme.Targets.Where(t => t.Enabled).ToList();
+                if (enabledTargets.Count == 0) continue;
 
-                    var task = new RunningTask
+                if (scheme.Section == ToggleSection.Dual)
+                {
+                    // 双宏开关：两个目标键共用一个任务，由 TaskLoop 按索引轮流触发（1-2-1-2…）。
+                    AddTask(new RunningTask
                     {
-                        Config = target.Clone(),
-                        Source = source.Clone()
-                    };
-                    task.Thread = new Thread(() => TaskLoop(task))
+                        Configs = enabledTargets.Select(t => t.Clone()).ToList(),
+                        Source = source.Clone(),
+                        Section = scheme.Section
+                    });
+                }
+                else
+                {
+                    foreach (var target in enabledTargets)
                     {
-                        Name = $"AutoFire-{InputNameMapper.GetTargetName(target)}",
-                        IsBackground = true
-                    };
-                    _tasks.Add(task);
-                    if (!_sourceMap.TryGetValue(task.Source, out var list))
-                        _sourceMap[task.Source] = list = new List<RunningTask>();
-                    list.Add(task);
-                    task.Thread.Start();
+                        AddTask(new RunningTask
+                        {
+                            Configs = new List<TargetKeyConfig> { target.Clone() },
+                            Source = source.Clone(),
+                            Section = scheme.Section
+                        });
+                    }
                 }
             }
 
             OnLog($"任务调度器已应用配置：{_tasks.Count} 个连发任务运行中。");
         }
+    }
+
+    /// <summary>创建并启动一个连发任务（须在锁内调用）。</summary>
+    private void AddTask(RunningTask task)
+    {
+        task.Thread = new Thread(() => TaskLoop(task))
+        {
+            Name = $"AutoFire-{InputNameMapper.GetTargetName(task.Configs[0])}",
+            IsBackground = true
+        };
+        _tasks.Add(task);
+        if (!_sourceMap.TryGetValue(task.Source, out var list))
+            _sourceMap[task.Source] = list = new List<RunningTask>();
+        list.Add(task);
+        task.Thread.Start();
     }
 
     /// <summary>全局启用 / 停用。停用时立即停止所有连发（触发信号清零）。</summary>
@@ -136,11 +162,11 @@ public sealed class TaskSchedulerService
 
             foreach (var task in tasks)
             {
-                if (isWheel && task.Config.Mode == TriggerMode.Hold)
+                if (isWheel && task.Configs[0].Mode == TriggerMode.Hold)
                 {
                     // 滚轮为脉冲输入（无“按住”状态）：Hold 目标键直接发送一次完整点击。
                     // SendInput 为轻量系统调用，在钩子线程执行不会造成阻塞。
-                    InputSimulatorService.Click(task.Config);
+                    InputSimulatorService.Click(task.Configs[0]);
                 }
                 else
                 {
@@ -166,7 +192,7 @@ public sealed class TaskSchedulerService
             foreach (var task in tasks)
             {
                 // 仅 Hold 任务依赖释放事件；Toggle 的 Active 不受 up 影响。
-                if (task.Config.Mode == TriggerMode.Hold) Deactivate(task);
+                if (task.Configs[0].Mode == TriggerMode.Hold) Deactivate(task);
             }
 
             OnLog($"输入源 [{InputNameMapper.GetSourceName(source)}] 释放。");
@@ -194,15 +220,25 @@ public sealed class TaskSchedulerService
     /// <summary>
     /// 输入源按下时激活任务。
     /// Toggle：翻转开关状态（启动 → 再按停止）；Hold：置位并递增全局 Hold 计数。
+    /// 轮转互斥：Rotate 分区的 Toggle 被启动时，自动停止该分区内正在运行的其他任务。
     /// </summary>
     private void Activate(RunningTask task)
     {
-        var name = InputNameMapper.GetTargetName(task.Config);
-        if (task.Config.Mode == TriggerMode.Toggle)
+        var name = InputNameMapper.GetTargetName(task.Configs[0]);
+        if (task.Configs[0].Mode == TriggerMode.Toggle)
         {
             // 开关模式：按一次启动 / 再按一次停止。
             task.Active = !task.Active;
-            OnLog(task.Active ? $"连发 [{name}] 已启动（Toggle）。" : $"连发 [{name}] 已停止（Toggle）。");
+            if (task.Active)
+            {
+                OnLog($"连发 [{name}] 已启动（Toggle）。");
+                if (task.Section == ToggleSection.Rotate)
+                    StopOtherRotateTasks(task);
+            }
+            else
+            {
+                OnLog($"连发 [{name}] 已停止（Toggle）。");
+            }
         }
         else if (!task.Active)
         {
@@ -212,26 +248,40 @@ public sealed class TaskSchedulerService
         }
     }
 
+    /// <summary>轮转互斥（须在锁内调用）：停止 Rotate 分区内其他正在运行的任务。</summary>
+    private void StopOtherRotateTasks(RunningTask keepTask)
+    {
+        foreach (var other in _tasks)
+        {
+            if (ReferenceEquals(other, keepTask)) continue;
+            if (other.Section != ToggleSection.Rotate || !other.Active) continue;
+            Deactivate(other);
+            OnLog($"连发 [{InputNameMapper.GetTargetName(other.Configs[0])}] 已自动停止（轮转互斥）。");
+        }
+    }
+
     /// <summary>解除激活。Hold 解除会使全局 Hold 计数 -1，从而恢复被暂停的 Toggle。</summary>
     private void Deactivate(RunningTask task)
     {
         if (!task.Active) return;
         task.Active = false;
-        if (task.Config.Mode == TriggerMode.Hold)
+        if (task.Configs[0].Mode == TriggerMode.Hold)
             Interlocked.Decrement(ref _activeHoldCount);
     }
 
-    /// <summary>任务主循环：Stopwatch + Sleep(1)（配合 timeBeginPeriod(1)）控制间隔；异常自动恢复。</summary>
+    /// <summary>任务主循环：Stopwatch + Sleep(1)（配合 timeBeginPeriod(1)）控制间隔；异常自动恢复。
+    /// 多目标任务（双宏开关）按索引轮流触发，未触发时相位归零（重新激活从第 1 键开始）。</summary>
     private void TaskLoop(RunningTask task)
     {
         var sw = new Stopwatch();
-        var interval = Compat.Clamp(task.Config.IntervalMs, Constants.MinIntervalMs, Constants.MaxIntervalMs);
+        var interval = Compat.Clamp(task.Configs[0].IntervalMs, Constants.MinIntervalMs, Constants.MaxIntervalMs);
+        var phase = 0;
 
         while (!task.StopRequested)
         {
             try
             {
-                var isToggle = task.Config.Mode == TriggerMode.Toggle;
+                var isToggle = task.Configs[0].Mode == TriggerMode.Toggle;
 
                 // 触发条件：信号有效，且 Toggle 类任务未被任何 Hold 暂停。
                 var firing = task.Active &&
@@ -239,13 +289,15 @@ public sealed class TaskSchedulerService
 
                 if (!firing)
                 {
+                    phase = 0; // 停止期间相位归零：重新激活时从第 1 个目标键开始。
                     Thread.Sleep(2);
                     sw.Reset();
                     continue;
                 }
 
-                // 发射一次完整输入（按下+抬起 / 滚动一格）。
-                InputSimulatorService.Click(task.Config);
+                // 发射一次完整输入（按下+抬起 / 滚动一格）；多目标依次轮换。
+                InputSimulatorService.Click(task.Configs[phase]);
+                phase = (phase + 1) % task.Configs.Count;
                 sw.Restart();
 
                 // 间隔等待：保持响应停止信号，每毫秒轮询一次。
@@ -259,15 +311,15 @@ public sealed class TaskSchedulerService
             catch (Exception ex)
             {
                 // 任务异常：记录日志后短暂休眠继续循环（自动恢复，不中断服务）。
-                Logger.Error($"连发任务 [{InputNameMapper.GetTargetName(task.Config)}] 异常。", ex);
-                OnLog($"连发任务 [{InputNameMapper.GetTargetName(task.Config)}] 异常已自动恢复。");
+                Logger.Error($"连发任务 [{InputNameMapper.GetTargetName(task.Configs[0])}] 异常。", ex);
+                OnLog($"连发任务 [{InputNameMapper.GetTargetName(task.Configs[0])}] 异常已自动恢复。");
                 Thread.Sleep(100);
             }
         }
     }
 
     /// <summary>解析配置字典键为输入源（格式：K:VK:EXT 或 M:MouseInput）。</summary>
-    private static InputSource? ParseSourceKey(string key)
+    public static InputSource? ParseSourceKey(string key)
     {
         try
         {

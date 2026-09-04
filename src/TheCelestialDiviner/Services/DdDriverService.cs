@@ -1,5 +1,7 @@
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
+using TheCelestialDiviner.Helpers;
 
 namespace TheCelestialDiviner.Services;
 
@@ -7,6 +9,8 @@ namespace TheCelestialDiviner.Services;
 /// DD 虚拟驱动（ddxoft DD 虚拟鼠标键盘驱动）键盘注入服务。
 /// 通过 DD_key 注入的事件不携带 LLKHF_INJECTED 标记，对游戏表现为"物理键盘"，
 /// 可绕过基于注入标记的输入过滤（SendInput / PostMessage 模式失效时的备选）。
+/// 同理本程序的低级钩子也无法凭事件本身区分回环与物理输入，
+/// 由 <see cref="EchoGuard"/> 按注入时间线消除（SendInput 模式用 dwExtraInfo 魔数）。
 ///
 /// 加载策略：优先 <c>dd63330.dll</c>（官方 2026 x64 用户态版），其次兼容万象等第三方
 /// 部署的 <c>DD64.dll</c>（32 位时间锁版，x64 进程无法加载，仅探测并给出提示）。
@@ -37,6 +41,58 @@ public static class DdDriverService
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern bool SetDllDirectoryW(string lpPathName);
+
+    // 内核服务预置（绕开 DD 自身间歇性安装失败，见 EnsureKernelService）。
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr OpenSCManagerW(string? lpMachineName, string? lpDatabaseName, uint dwDesiredAccess);
+
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr OpenServiceW(IntPtr hSCManager, string lpServiceName, uint dwDesiredAccess);
+
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateServiceW(IntPtr hSCManager, string lpServiceName, string lpDisplayName,
+        uint dwDesiredAccess, uint dwServiceType, uint dwStartType, uint dwErrorControl, string lpBinaryPathName,
+        string? lpLoadOrderGroup, IntPtr lpTagId, string? lpDependencies, string? lpServiceStartName, string? lpPassword);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool StartServiceW(IntPtr hService, int dwNumServiceArgs, IntPtr lpServiceArgVectors);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool QueryServiceStatus(IntPtr hService, out SERVICE_STATUS lpServiceStatus);
+
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool ChangeServiceConfigW(IntPtr hService, uint dwServiceType, uint dwStartType,
+        uint dwErrorControl, string? lpBinaryPathName, string? lpLoadOrderGroup, IntPtr lpTagId,
+        string? lpDependencies, string? lpServiceStartName, string? lpPassword, string? lpDisplayName);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool DeleteService(IntPtr hService);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool CloseServiceHandle(IntPtr hSCObject);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SERVICE_STATUS
+    {
+        public int dwServiceType;
+        public int dwCurrentState;
+        public int dwControlsAccepted;
+        public int dwWin32ExitCode;
+        public int dwServiceSpecificExitCode;
+        public int dwCheckPoint;
+        public int dwWaitHint;
+    }
+
+    private const uint SC_MANAGER_ALL_ACCESS = 0xF003F;
+    private const uint SERVICE_ALL_ACCESS = 0xF01FF;
+    private const uint SERVICE_KERNEL_DRIVER = 1;
+    private const uint SERVICE_DEMAND_START = 3;
+    private const uint SERVICE_ERROR_NORMAL = 1;
+    private const int SERVICE_RUNNING = 0x4;
+    private const int ERROR_SERVICE_ALREADY_RUNNING = 1056;
+    private const int ERROR_SERVICE_DISABLED = 1058;
+    private const int ERROR_SERVICE_MARKED_FOR_DELETE = 1072;
+    private const uint SERVICE_NO_CHANGE = 0xFFFFFFFF;
 
     // ---------- 状态 ----------
 
@@ -92,6 +148,7 @@ public static class DdDriverService
                     return false;
                 }
                 _loadedPath = path;
+                Logger.Info($"已加载 DD 驱动库：{path}");
             }
 
             _ddBtn = GetProc<DdBtnFunc>("DD_btn");
@@ -104,11 +161,30 @@ public static class DdDriverService
                 return false;
             }
 
-            // DD_btn(0)：初始化虚拟设备。返回 1 = 成功；0/-1 = 失败（权限不足或驱动异常）。
-            var ret = SafeCall(_ddBtn, 0, out var seh);
+            // DD_btn(0)：初始化虚拟设备。返回 1 = 成功；0/-1 = 失败。
+            // 实测存在瞬时失败：免费版加载时需在线认证（网络抖动），且前一个
+            // 会话被强制结束后虚拟设备 PnP 重建期间（数秒）调用会返回 -1。
+            // 因此带退避重试数次，仍失败才判定不可用。
+            const int maxAttempts = 5;
+            var ret = 0;
+            var seh = false;
+            EnsureKernelService();
+            Logger.Info("正在初始化 DD 虚拟设备（DD_btn(0)）...");
+            for (var attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                ret = SafeCall(_ddBtn, 0, out seh);
+                if (!seh && ret == 1) break;
+                if (attempt < maxAttempts)
+                {
+                    Logger.Warn($"DD 虚拟设备初始化第 {attempt}/{maxAttempts} 次失败（ret={ret}），{400 * attempt}ms 后重试。");
+                    Thread.Sleep(400 * attempt);
+                }
+            }
             if (seh || ret != 1)
             {
-                LastError = $"DD 虚拟驱动初始化失败（ret={ret}）。请确认以管理员身份运行。";
+                LastError = $"DD 虚拟驱动初始化失败（ret={ret}）。" +
+                            "常见原因：DD 免费版在线认证未通过（需联网）、虚拟设备正被其他进程使用或重建中；请稍后重试。";
+                Logger.Error(LastError);
                 _ddTodc = null;
                 _ddKey = null;
                 _ddBtn = null;
@@ -118,8 +194,134 @@ public static class DdDriverService
 
             _initialized = true;
             VkCodeCache.Clear();
+            EchoGuard.Reset();
+            Logger.Info($"DD 虚拟驱动初始化成功（{Path.GetFileName(_loadedPath)}）。");
             return true;
         }
+    }
+
+    /// <summary>
+    /// 预置 dd63330 内核驱动服务（DD_btn 之前调用）。
+    /// DD 的安装例程是"释放 sys 到 %TEMP% → CreateServiceW → StartService"，
+    /// 受安全软件拦截（释放文件被查杀）或旧服务"标记删除"未完成时
+    /// 会间歇性失败，并弹出"驱动安装错误"模态框阻塞调用线程。
+    /// 本方法在 DD_btn 之前确保服务就绪：服务缺失时用随包分发的
+    /// dd63330.sys（与 DD 释放的文件字节一致，微软 WHQL 签名）自行创建并启动，
+    /// 使 DD_btn 走"服务已存在"的快速路径，不再触发其安装例程。
+    /// </summary>
+    private static void EnsureKernelService()
+    {
+        try
+        {
+            var sysPath = ResolveDriverSysPath();
+            var scm = OpenSCManagerW(null, null, SC_MANAGER_ALL_ACCESS);
+            if (scm == IntPtr.Zero)
+            {
+                Logger.Warn($"预置 DD 内核服务：打开 SCM 失败（err={Marshal.GetLastWin32Error()}），交由 DD 自行安装。");
+                return;
+            }
+            try
+            {
+                var service = OpenServiceW(scm, "dd63330", SERVICE_ALL_ACCESS);
+                if (service == IntPtr.Zero)
+                {
+                    var err = Marshal.GetLastWin32Error();
+                    if (sysPath is null)
+                    {
+                        Logger.Info("预置 DD 内核服务：服务不存在且无 dd63330.sys，交由 DD 自行安装。");
+                        return;
+                    }
+                    // 旧服务可能处于"标记删除"未完成状态（1072），稍等重试。
+                    for (var attempt = 1; ; attempt++)
+                    {
+                        service = CreateServiceW(scm, "dd63330", "dd63330", SERVICE_ALL_ACCESS,
+                            SERVICE_KERNEL_DRIVER, SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
+                            sysPath, null, IntPtr.Zero, null, null, null);
+                        if (service != IntPtr.Zero) break;
+                        err = Marshal.GetLastWin32Error();
+                        if (err != ERROR_SERVICE_MARKED_FOR_DELETE || attempt >= 5)
+                        {
+                            Logger.Warn($"预置 DD 内核服务：CreateService 失败（err={err}），交由 DD 自行安装。");
+                            return;
+                        }
+                        Thread.Sleep(600);
+                    }
+                    Logger.Info("预置 DD 内核服务：已创建 dd63330 服务。");
+                }
+
+                if (QueryServiceStatus(service, out var status) && status.dwCurrentState == SERVICE_RUNNING)
+                {
+                    Logger.Info("预置 DD 内核服务：dd63330 驱动已在运行。");
+                    return;
+                }
+                if (!StartServiceW(service, 0, IntPtr.Zero))
+                {
+                    var err = Marshal.GetLastWin32Error();
+                    if (err == ERROR_SERVICE_ALREADY_RUNNING) return;
+
+                    // 服务被安全软件禁用（1058）：改回按需启动后重试；仍失败则删除重建。
+                    if (err == ERROR_SERVICE_DISABLED && sysPath is not null)
+                    {
+                        Logger.Warn("预置 DD 内核服务：服务被禁用（err=1058），尝试恢复启动类型...");
+                        if (ChangeServiceConfigW(service, SERVICE_NO_CHANGE, SERVICE_DEMAND_START,
+                                SERVICE_NO_CHANGE, null, null, IntPtr.Zero, null, null, null, null))
+                        {
+                            if (StartServiceW(service, 0, IntPtr.Zero))
+                            {
+                                Logger.Info("预置 DD 内核服务：已恢复被禁用的服务并启动。");
+                                return;
+                            }
+                            err = Marshal.GetLastWin32Error();
+                        }
+                        else
+                        {
+                            err = Marshal.GetLastWin32Error();
+                        }
+
+                        // 仍失败：删除旧服务，用随包 sys 文件重建（摆脱被标记/损坏的服务项）。
+                        Logger.Warn($"预置 DD 内核服务：恢复失败（err={err}），删除并重建服务...");
+                        DeleteService(service);
+                        CloseServiceHandle(service);
+                        service = CreateServiceW(scm, "dd63330", "dd63330", SERVICE_ALL_ACCESS,
+                            SERVICE_KERNEL_DRIVER, SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
+                            sysPath, null, IntPtr.Zero, null, null, null);
+                        if (service != IntPtr.Zero && StartServiceW(service, 0, IntPtr.Zero))
+                        {
+                            Logger.Info("预置 DD 内核服务：已重建并启动 dd63330 驱动。");
+                            return;
+                        }
+                        err = Marshal.GetLastWin32Error();
+                        Logger.Warn($"预置 DD 内核服务：重建启动失败（err={err}），交由 DD 自行处理。");
+                        if (service != IntPtr.Zero) CloseServiceHandle(service);
+                        return;
+                    }
+
+                    Logger.Warn($"预置 DD 内核服务：StartService 失败（err={err}），交由 DD 自行处理。");
+                    return;
+                }
+                Logger.Info("预置 DD 内核服务：dd63330 驱动已启动。");
+            }
+            finally
+            {
+                CloseServiceHandle(scm);
+            }
+        }
+        catch (Exception ex)
+        {
+            // 预置属于尽力而为：任何异常都不阻断 DD 自身的安装路径。
+            Logger.Warn($"预置 DD 内核服务异常（交由 DD 自行安装）：{ex.Message}");
+        }
+    }
+
+    /// <summary>定位随包分发的内核驱动文件：exe 目录 → %TEMP%（DD 自身释放位置）。</summary>
+    private static string? ResolveDriverSysPath()
+    {
+        var candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "dd63330.sys"),
+            Path.Combine(Path.GetTempPath(), "dd63330.sys")
+        };
+        return candidates.FirstOrDefault(File.Exists);
     }
 
     /// <summary>释放 DD 资源（退出时序调用；模式切换时保留已加载 DLL 以便快速回切）。</summary>
@@ -162,9 +364,13 @@ public static class DdDriverService
 
             if (code < 0) return false; // DD 键码表不含该 VK（如 F13+）
 
-            var ret = SafeCall(_ddKey, MakeKeyArgs(code, down), out _);
-            // 实测成功返回 0，失败返回非 0（-2 等）。
-            return ret == 0;
+            // 预登记待决回环名额（必须在注入调用之前：回环事件可能在
+            // DD_key 返回前就到达钩子）；注入失败则撤销（见 EchoGuard）。
+            var stamp = EchoGuard.NoteInjection(vk, down);
+            var ret = SafeCall(_ddKey, MakeKeyArgs(code, down), out var seh);
+            if (!seh && ret == 0) return true;
+            EchoGuard.CancelNote(vk, down, stamp);
+            return false;
         }
     }
 

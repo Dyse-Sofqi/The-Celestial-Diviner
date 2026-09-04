@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -9,6 +9,19 @@ using TheCelestialDiviner.Models;
 using TheCelestialDiviner.Services;
 
 namespace TheCelestialDiviner.ViewModels;
+
+/// <summary>键位录入选择态的用途（方案面板两个设置项：行为不同，触发 / 取消流程一致）。</summary>
+public enum PickKind
+{
+    /// <summary>未处于选择态。</summary>
+    None,
+
+    /// <summary>录入连发键（“添加连发键”按钮）。</summary>
+    AddScheme,
+
+    /// <summary>设置全局开关热键（方案面板顶部的热键设置项）。</summary>
+    SetMasterKey
+}
 
 /// <summary>
 /// 主视图模型（核心部分）：服务引用、状态属性、命令、钩子事件接入、日志。
@@ -22,28 +35,79 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private readonly InputHookService _hookService;
     private readonly TaskSchedulerService _scheduler;
     private readonly TimerResolutionService _timerResolution;
+    private readonly KeyVisualizerService _visualizer;
 
     // ---------- 状态字段 ----------
     private AppConfig _config = new();
     private bool _globallyEnabled; // 总开关默认关闭（v2 语义，加载后随配置覆盖）
-    private bool _logsExpanded;
     private bool _hookInstalled;
     private bool _isAdmin = true;
-    private bool _timerHighRes;
     private string _hookStatusText = "钩子：未安装";
     private string _permissionText = "权限：检测中";
-    private string _timerStatusText = "定时器：默认分辨率";
     private string _masterStateText = "全局开关：已关闭";
     private string _masterKeyText = "F9";
-    private string _hintText = "左键点击按键设置方案，右键更多操作";
+    private string _hintText = "点击“添加连发键”后在左侧键鼠视图点击或直接按键录入";
     private double _soundVolume = Constants.DefaultSoundVolume;
+    private bool _globalVisualEnabled = true;          // 键位可视化总开关（默认开启；关闭时仅禁用显示，各键开关状态保留）
     private int _keyboardMode; // 键盘注入模式：0 普通 / 1 扫描码 / 2 消息
+    private int _activeProfile;                        // 方案面板当前档位（0/1/2 ↔ ①②③）
+    private bool _pickingActive;                       // 键位录入选择态
+    private TriggerMode _selectedMode = TriggerMode.Toggle; // 方案面板当前标签模式
+    private ToggleSection _selectedSection = ToggleSection.Normal; // 方案面板当前开关分区
+    private ToggleSection _pickingSection = ToggleSection.Normal;  // 本次选择态录入的分区快照
+    private InputSource? _dualFirstPick;               // 双宏两步录入：已选的第 1 键
+    private string _pickingPromptText = "请选择按键";  // 选择态提示条文字
 
     /// <summary>全局总开关提示语音服务（开启 = “启动”，关闭 = “关闭”）。</summary>
     private readonly SoundCueService _soundCue = new();
 
     /// <summary>键盘注入模式变更通知（导入配置后由 VM 触发，UI 回填下拉框）。</summary>
     public event Action<int>? KeyboardModeChanged;
+
+    /// <summary>方案档位数量（①②③）。</summary>
+    public const int ProfileCount = 3;
+
+    /// <summary>当前选中的方案档位（0/1/2 ↔ ①②③，默认①）。切换时同步方案字典与调度器并实时落盘。</summary>
+    public int ActiveProfile
+    {
+        get => _activeProfile;
+        set
+        {
+            var index = value is >= 0 and < ProfileCount ? value : 0;
+            if (!Set(ref _activeProfile, index)) return;
+            _config.ActiveProfile = index;
+            // 旧档位镜像字典脱钩，运行期字典指向新档位；调度器重建任务并落盘。
+            SyncProfileRuntime();
+            RefreshAllButtons();
+            UpdateMasterKeyHighlight();
+            RefreshSchemeList();
+            ApplyConfigToScheduler();
+            SyncVisualizerRegistry();
+            SaveConfig();
+            AddLog($"已切换到方案{ProfileLabel(index)}。");
+        }
+    }
+
+    /// <summary>档位序号 → 显示名（0 → "①"）。</summary>
+    public static string ProfileLabel(int index) => index switch
+    {
+        0 => "①",
+        1 => "②",
+        _ => "③"
+    };
+
+    /// <summary>
+    /// 运行期档位对齐：把 Schemes 指向 Profiles[ActiveProfile] 同一实例（方案编辑直接落在活动档位）。
+    /// 配置加载 / 导入 / 档位切换后调用；Profiles 不足 3 套时补齐空档位。
+    /// </summary>
+    private void SyncProfileRuntime()
+    {
+        while (_config.Profiles.Count < ProfileCount)
+            _config.Profiles.Add(new Dictionary<string, KeyScheme>(StringComparer.Ordinal));
+        _activeProfile = Compat.Clamp(_config.ActiveProfile, 0, ProfileCount - 1);
+        _config.ActiveProfile = _activeProfile; // 越界回退后同步回配置，避免保存越界值。
+        _config.Schemes = _config.Profiles[_activeProfile];
+    }
 
     /// <summary>创建主视图模型：加载配置、构建输入源集合、应用调度器。</summary>
     public MainViewModel(ConfigService configService, InputHookService hookService,
@@ -53,11 +117,18 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _hookService = hookService;
         _scheduler = scheduler;
         _timerResolution = timerResolution;
+        _visualizer = new KeyVisualizerService(hookService);
 
         _config = _configService.Load();
+        SyncProfileRuntime();
         _globallyEnabled = _config.GlobalSwitch.Enabled;
+        _globalVisualEnabled = _config.GlobalVisualEnabled;
+        _visualizer.SetGlobalEnabled(_globalVisualEnabled);
+        // 调度器字段默认为启用，须与配置中的总开关状态同步，
+        // 否则冷启动时横幅显示"已关闭"而方案实际处于待触发状态。
+        _scheduler.SetMasterEnabled(_globallyEnabled);
         _masterKeyText = _config.GlobalSwitch.HasKey
-            ? InputNameMapper.GetKeyName(_config.GlobalSwitch.VirtualKey)
+            ? InputNameMapper.GetKeyName(_config.GlobalSwitch.VirtualKey, _config.GlobalSwitch.Extended)
             : "未设置";
         _soundVolume = Compat.Clamp(_config.SoundVolume, 0, 100);
         _soundCue.Volume = _soundVolume / 100.0;
@@ -67,30 +138,17 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             Application.Current?.Dispatcher.BeginInvoke(() => AddLog(msg));
 
         // 命令。
-        SetGlobalSwitchCommand = RelayCommand.Create(
-            () => GlobalSwitchSetupRequested?.Invoke());
         ImportCommand = RelayCommand.Create(() => ImportRequested?.Invoke());
         ExportCommand = RelayCommand.Create(() => ExportRequested?.Invoke());
-        ToggleLogCommand = RelayCommand.Create(() => LogsExpanded = !LogsExpanded);
+        StartPickingCommand = RelayCommand.Create(StartPicking);
+        SetMasterKeyPickingCommand = RelayCommand.Create(StartMasterKeyPicking);
         SourceClickedCommand = new RelayCommand(p =>
         {
             if (p is KeySourceViewModel svm && !svm.IsSpacer && svm.Source is not null)
-                SchemeEditRequested?.Invoke(svm);
-        });
-        EditSchemeCommand = new RelayCommand(p =>
-        {
-            if (p is KeySourceViewModel svm && !svm.IsSpacer && svm.Source is not null)
-                SchemeEditRequested?.Invoke(svm);
-        });
-        ToggleSchemeCommand = new RelayCommand(p =>
-        {
-            if (p is KeySourceViewModel svm) ToggleSchemeEnabled(svm);
-        });
-        ClearSchemeCommand = new RelayCommand(p =>
-        {
-            if (p is KeySourceViewModel svm) ClearScheme(svm);
+                HandleSourceClicked(svm);
         });
         ToggleGlobalCommand = RelayCommand.Create(ToggleGlobalEnabled);
+        ToggleGlobalVisualCommand = RelayCommand.Create(() => GlobalVisualEnabled = !GlobalVisualEnabled);
 
         // 音量滑块防抖：拖动停止 500ms 后落盘（避免拖动过程高频写配置文件）。
         _volumeSaveTimer.Tick += (_, _) =>
@@ -100,12 +158,18 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             SaveConfig();
         };
 
-        // 构建输入源按钮集合并从配置恢复注册状态。
+        // 旧版方案迁移（仅保留按键自身连发）→ 构建输入源按钮集合。
+        MigrateLegacySchemes();
         BuildSourceButtons();
         ApplyConfigToScheduler();
         RefreshAllButtons();
+        RefreshSchemeList();
+        // 键位可视化注册表：当前档位全部方案键位默认注册并开启显示。
+        SyncVisualizerRegistry();
         // 按钮创建晚于配置加载：构造阶段补一次暗淡状态传播（开启时暗淡）。
         ApplyDimState();
+        // 总开关键绿色高亮（按钮创建后；默认 F9）。
+        UpdateMasterKeyHighlight();
 
         // 键盘注入模式：默认 DD 驱动（物理级）；配置优先，越界回退默认。
         // DD 需 dd63330.dll + 管理员权限，冷启动就绪检查失败时回退普通模式。
@@ -115,6 +179,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         if (_keyboardMode == 3 && !DdDriverService.EnsureReady())
         {
             _keyboardMode = 0;
+            Logger.Warn($"DD 驱动初始化失败，本次启动回退普通模式：{DdDriverService.LastError}");
         }
         InputSimulatorService.KeyboardMode = _keyboardMode;
     }
@@ -126,49 +191,46 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// <summary>键盘区行（含占位空白，用于对齐标准 104 键布局）。</summary>
     public ObservableCollection<ObservableCollection<KeySourceViewModel>> KeyboardRows { get; } = new();
 
+    /// <summary>键盘区右列小键盘图块（6 行 4 列网格：+ 与 ENT 竖向两格、N0 双倍宽）。</summary>
+    public ObservableCollection<KeySourceViewModel> NumpadKeys { get; } = new();
+
     /// <summary>运行日志（最新在最上）。</summary>
     public ObservableCollection<string> Logs { get; } = new();
 
-    // ---------- 命令 ----------
-    /// <summary>打开全局开关键设置对话框。</summary>
-    public ICommand SetGlobalSwitchCommand { get; }
+    /// <summary>方案面板当前模式的连发键行。</summary>
+    public ObservableCollection<SchemeRowViewModel> SchemeRows { get; } = new();
 
+    // ---------- 命令 ----------
     /// <summary>导入配置。</summary>
     public ICommand ImportCommand { get; }
 
     /// <summary>导出配置。</summary>
     public ICommand ExportCommand { get; }
 
-    /// <summary>折叠 / 展开日志面板。</summary>
-    public ICommand ToggleLogCommand { get; }
+    /// <summary>进入键位录入选择态（点击键鼠区 / 直接按键完成录入）。</summary>
+    public ICommand StartPickingCommand { get; }
 
-    /// <summary>输入源左键点击 → 编辑方案。</summary>
+    /// <summary>进入总开关键录入选择态（与添加连发键同一套触发 / 取消流程）。</summary>
+    public ICommand SetMasterKeyPickingCommand { get; }
+
+    /// <summary>键鼠区图块左键点击（选择态 → 录入该键；非选择态 → 无操作）。</summary>
     public ICommand SourceClickedCommand { get; }
-
-    /// <summary>右键菜单：编辑方案。</summary>
-    public ICommand EditSchemeCommand { get; }
-
-    /// <summary>右键菜单：启用/停用方案。</summary>
-    public ICommand ToggleSchemeCommand { get; }
-
-    /// <summary>右键菜单：清空方案。</summary>
-    public ICommand ClearSchemeCommand { get; }
 
     /// <summary>托盘 / 横幅：全局启用 / 停用切换。</summary>
     public ICommand ToggleGlobalCommand { get; }
 
     // ---------- View 回调事件 ----------
-    /// <summary>请求打开方案设置对话框（参数：输入源控件 VM）。</summary>
-    public event Action<KeySourceViewModel>? SchemeEditRequested;
-
-    /// <summary>请求打开全局开关键设置对话框。</summary>
-    public event Action? GlobalSwitchSetupRequested;
-
     /// <summary>请求弹出导入文件对话框。</summary>
     public event Action? ImportRequested;
 
     /// <summary>请求弹出导出保存对话框。</summary>
     public event Action? ExportRequested;
+
+    /// <summary>
+    /// 键位录入选择态中收到鼠标源按下（钩子线程调用，View 已封送 UI 线程）。
+    /// View 命中测试光标位置：落在键鼠图块上 → 录入该键；否则退出选择态。
+    /// </summary>
+    public event Action<InputSource>? PickingMouseReceived;
 
     // ---------- 状态属性 ----------
     /// <summary>全局功能是否启用（停用时横幅显示 + 控件半透明）。</summary>
@@ -197,13 +259,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         foreach (var row in KeyboardRows)
             foreach (var b in row)
                 if (!b.IsSpacer) b.GloballyDimmed = _globallyEnabled;
-    }
-
-    /// <summary>日志面板是否展开。</summary>
-    public bool LogsExpanded
-    {
-        get => _logsExpanded;
-        set => Set(ref _logsExpanded, value);
+        foreach (var b in NumpadKeys) b.GloballyDimmed = _globallyEnabled;
     }
 
     /// <summary>低级钩子是否安装成功。</summary>
@@ -234,20 +290,6 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         private set => Set(ref _permissionText, value);
     }
 
-    /// <summary>定时器是否已提升到 1ms。</summary>
-    public bool TimerHighRes
-    {
-        get => _timerHighRes;
-        private set => Set(ref _timerHighRes, value);
-    }
-
-    /// <summary>定时器状态文本（顶部状态栏）。</summary>
-    public string TimerStatusText
-    {
-        get => _timerStatusText;
-        private set => Set(ref _timerStatusText, value);
-    }
-
     /// <summary>全局开关状态文本（顶部状态栏）。</summary>
     public string MasterStateText
     {
@@ -269,6 +311,60 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         private set => Set(ref _hintText, value);
     }
 
+    /// <summary>键位录入选择态的用途（驱动两个设置项的录入文案与后续行为）。</summary>
+    public PickKind PickingKind { get; private set; } = PickKind.None;
+
+    /// <summary>键位录入选择态：键鼠区透明度下降并高亮悬停键，点击/按键完成录入。</summary>
+    public bool PickingActive
+    {
+        get => _pickingActive;
+        private set
+        {
+            if (Set(ref _pickingActive, value)) OnPropertyChanged(nameof(PickingPromptVisible));
+        }
+    }
+
+    /// <summary>选择态提示条是否显示（与选择态同步，但不在非选择态显示占位）。</summary>
+    public Visibility PickingPromptVisible => PickingActive ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>选择态提示条文字（双宏两步录入时提示当前进度）。</summary>
+    public string PickingPromptText
+    {
+        get => _pickingPromptText;
+        private set => Set(ref _pickingPromptText, value);
+    }
+
+    /// <summary>方案面板当前标签模式（开关 / 按压），新增方案按该模式录入。</summary>
+    public TriggerMode SelectedMode
+    {
+        get => _selectedMode;
+        set
+        {
+            if (Set(ref _selectedMode, value))
+            {
+                OnPropertyChanged(nameof(SectionTabsVisible));
+                RefreshSchemeList();
+            }
+        }
+    }
+
+    /// <summary>开关分区子标签是否可见（仅开关模式显示：常规 / 轮转 / 双宏）。</summary>
+    public Visibility SectionTabsVisible =>
+        SelectedMode == TriggerMode.Toggle ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>方案面板当前开关分区（常规 / 轮转 / 双宏），新增方案按该分区录入。</summary>
+    public ToggleSection SelectedSection
+    {
+        get => _selectedSection;
+        set
+        {
+            if (Set(ref _selectedSection, value)) RefreshSchemeList();
+        }
+    }
+
+    /// <summary>当前模式是否存在连发键（控制空态提示显隐）。</summary>
+    public bool HasSchemeRows => SchemeRows.Count > 0;
+
     /// <summary>当前全局开关键对应的输入源（未设置返回 null）。</summary>
     public InputSource? GlobalSwitchSource => _config.GlobalSwitch.HasKey
         ? new InputSource
@@ -281,7 +377,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
     // ---------- 运行时初始化 ----------
     /// <summary>
-    /// 运行时初始化：提升定时器分辨率、安装钩子、回填状态栏文本。
+    /// 运行时初始化：提升定时器分辨率（连发间隔精度依赖，无状态栏展示）、安装钩子。
     /// 在 UI 线程的窗口 Loaded 阶段调用一次。
     /// </summary>
     public void InitializeRuntime(bool isAdmin)
@@ -289,9 +385,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         IsAdmin = isAdmin;
         PermissionText = isAdmin ? "权限：管理员" : "权限：非管理员（功能受限）";
 
+        // 顶部定时器状态栏已移除，但 1ms 分辨率仍是 Sleep(1) 级连发间隔的功能基础，保留提升。
         _timerResolution.Start();
-        TimerHighRes = _timerResolution.IsHighResolution;
-        TimerStatusText = TimerHighRes ? "定时器：1ms 高精度" : "定时器：默认分辨率";
 
         HookInstalled = _hookService.Install();
         HookStatusText = HookInstalled
@@ -305,16 +400,39 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     }
 
     // ---------- 钩子事件接入（由 View 在安装成功后绑定） ----------
-    /// <summary>输入源按下（钩子线程调用）：优先处理总开关键，其余交调度器。</summary>
+    /// <summary>
+    /// 输入源按下（钩子线程调用，已封送 UI 线程）：
+    /// 优先总开关键 → 键位录入选择态 → 调度器。
+    /// </summary>
     public void HandleHookDown(InputSource source)
     {
         if (GlobalSwitchSource is { } gk && gk.Equals(source))
         {
-            // 热键录制期间不响应（避免把总开关键录为方案源时误切总开关）。
-            if (!KeyRecorder.IsAnyRecording)
+            // 键位录入选择态 / 录制期间不响应（避免把总开关键录为方案源或热键时误切总开关）。
+            if (!KeyRecorder.IsAnyRecording && !_pickingActive)
                 Application.Current?.Dispatcher.BeginInvoke(ToggleGlobalEnabled);
             return;
         }
+
+        if (_pickingActive)
+        {
+            // 选择态：键盘按键直接录入（Esc 取消）；鼠标按下交 View 命中测试
+            // （落在键鼠图块上 → 录入，否则退出选择态）。
+            if (source.Kind == InputKind.Keyboard)
+            {
+                if (source.VirtualKey == 0x1B) CancelPicking();
+                else CompletePick(source);
+                return;
+            }
+            if (source.Kind == InputKind.Mouse &&
+                source.Mouse is not (MouseInput.WheelUp or MouseInput.WheelDown))
+            {
+                PickingMouseReceived?.Invoke(source);
+                return;
+            }
+            return; // 滚轮滚动不打断选择态
+        }
+
         _scheduler.HandleSourceDown(source);
     }
 
@@ -345,6 +463,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             MasterKeyText = "未设置";
             OnPropertyChanged(nameof(GlobalSwitchSource));
             SaveConfig();
+            UpdateMasterKeyHighlight();
             AddLog("全局开关键已清除（总开关只能通过界面托盘菜单切换）。");
             return true;
         }
@@ -367,6 +486,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         MasterKeyText = InputNameMapper.GetSourceName(key);
         OnPropertyChanged(nameof(GlobalSwitchSource));
         SaveConfig();
+        UpdateMasterKeyHighlight();
         AddLog($"总开关键已设置为 [{InputNameMapper.GetSourceName(key)}]。");
         return true;
     }
@@ -445,6 +565,57 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
     /// <summary>把当前配置应用到连发调度器（方案变更后调用）。</summary>
     private void ApplyConfigToScheduler() => _scheduler.ApplyConfig(_config);
+
+    // ---------- 键位可视化 ----------
+
+    /// <summary>键位可视化服务（悬浮层驱动；由 App / MainWindow 接线）。</summary>
+    public KeyVisualizerService Visualizer => _visualizer;
+
+    /// <summary>键位可视化总开关（默认开启）。关闭时仅整体禁用显示，各键位开关状态保留，恢复后延续。</summary>
+    public bool GlobalVisualEnabled
+    {
+        get => _globalVisualEnabled;
+        set
+        {
+            if (!Set(ref _globalVisualEnabled, value)) return;
+            _config.GlobalVisualEnabled = value;
+            _visualizer.SetGlobalEnabled(value);
+            SaveConfig();
+            AddLog($"键位可视化已{(value ? "开启" : "全部禁用（各键位开关状态保留）")}。");
+        }
+    }
+
+    /// <summary>键位可视化总开关联动命令。</summary>
+    public ICommand ToggleGlobalVisualCommand { get; }
+
+    /// <summary>
+    /// 同步键位可视化注册表（当前档位全部方案键位，含每键显示开关；键位集合变化后调用：
+    /// 启动 / 导入 / 删除 / 总开关键迁移）。
+    /// </summary>
+    private void SyncVisualizerRegistry()
+    {
+        var entries = new List<KeyValuePair<string, bool>>(_config.Schemes.Count);
+        foreach (var key in _config.Schemes.Keys)
+            entries.Add(new(key, GetVisualEnabled(key)));
+        _visualizer.ReplaceRegistry(entries);
+    }
+
+    /// <summary>读取键位可视化显示开关（未记忆过的键位默认开启可视化）。</summary>
+    public bool GetVisualEnabled(string key)
+    {
+        return _config.VisualKeys.TryGetValue(key, out var v) ? v : true;
+    }
+
+    /// <summary>设置键位可视化显示开关（方案行 eye 图标切换；实时落盘）。</summary>
+    public void SetVisualEnabled(string key, bool visible)
+    {
+        if (GetVisualEnabled(key) == visible) return;
+        _config.VisualKeys[key] = visible;
+        _visualizer.SetVisible(key, visible);
+        SaveConfig();
+        var source = TaskSchedulerService.ParseSourceKey(key);
+        AddLog($"键位可视化 [{(source is null ? key : InputNameMapper.GetSourceName(source))}] 已{(visible ? "开启" : "关闭")}。");
+    }
 
     /// <summary>INotifyPropertyChanged。</summary>
     public event PropertyChangedEventHandler? PropertyChanged;

@@ -220,5 +220,22 @@ public static class NativeMethods
 
     /// <summary>WM_APP 自定义消息基址（内部线程通信用）。</summary>
     public const uint WM_APP_STOP_ALL = 0x8000 + 0x0001;
+
+    // ---------- 窗口扩展样式（键帽可视化悬浮层点击穿透用） ----------
+
+    public const int GWL_EXSTYLE = -20;
+    public const int WS_EX_TRANSPARENT = 0x00000020;   // 鼠标事件穿透
+    public const int WS_EX_NOACTIVATE = 0x08000000;    // 不抢焦点
+    public const int WS_EX_TOOLWINDOW = 0x00000080;    // 不入 Alt-Tab
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
+    /// <summary>取指定虚拟键状态（高位 1 = 按下；用于可视化层组合键检测）。</summary>
+    [DllImport("user32.dll")]
+    public static extern short GetAsyncKeyState(int vKey);
 }
 #pragma warning restore CA1707

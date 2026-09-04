@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using TheCelestialDiviner.Helpers;
@@ -44,6 +44,7 @@ public sealed class ConfigService
                 var json = File.ReadAllText(ConfigPath);
                 var config = JsonSerializer.Deserialize<AppConfig>(json, JsonOptions) ?? new AppConfig();
                 MigrateIfNeeded(config);
+                NormalizeIntervals(config);
                 config.SoundVolume = Compat.Clamp(config.SoundVolume, 0, 100);
                 return config;
             }
@@ -61,22 +62,55 @@ public sealed class ConfigService
     /// 配置版本迁移（加载与导入共用）。
     /// v1 → v2：取消“全部停止”，全局开关升级为按键总开关：默认关闭、
     /// 默认键 F9（仅当未被存量方案占用时）、热键可自定义。
+    /// v2 → v3：开关模式分区（常规 / 轮转 / 双宏）——字段有默认值，反序列化自动补齐，仅推进版本号。
+    /// v3 → v4：新增方案三档位（①②③）——存量方案整体迁入档位①，其余档位为空，当前档位默认①。
     /// </summary>
     public static void MigrateIfNeeded(AppConfig config)
     {
         if (config.Version >= AppConfig.CurrentVersion) return;
         var fromVersion = config.Version;
 
-        if (!config.GlobalSwitch.HasKey &&
-            !config.Schemes.ContainsKey($"K:{Constants.DefaultMasterKeyVk}:0"))
+        if (fromVersion < 2)
         {
-            // 默认键 F9：未被存量方案占用时启用，避免与注册源冲突。
-            config.GlobalSwitch.HasKey = true;
-            config.GlobalSwitch.VirtualKey = Constants.DefaultMasterKeyVk;
+            if (!config.GlobalSwitch.HasKey &&
+                !config.Schemes.ContainsKey($"K:{Constants.DefaultMasterKeyVk}:0"))
+            {
+                // 默认键 F9：未被存量方案占用时启用，避免与注册源冲突。
+                config.GlobalSwitch.HasKey = true;
+                config.GlobalSwitch.VirtualKey = Constants.DefaultMasterKeyVk;
+            }
+            config.GlobalSwitch.Enabled = false; // 总开关默认关闭（v2 语义）
         }
-        config.GlobalSwitch.Enabled = false; // 总开关默认关闭（v2 语义）
+
+        if (fromVersion < 4)
+        {
+            // v3 → v4：旧配置无档位字段（反序列化时属性初始化器已生成 3 个空档位），
+            // 先清空再把存量方案整体迁入档位①，其余档位为空。
+            // v4 配置（Version >= 4）不走此处：Profiles 已随 JSON 反序列化还原。
+            config.Profiles.Clear();
+            config.Profiles.Add(config.Schemes);
+            while (config.Profiles.Count < 3)
+                config.Profiles.Add(new Dictionary<string, KeyScheme>(StringComparer.Ordinal));
+        }
+        // 反序列化默认 ActiveProfile = 0（方案①），无需显式处理。
+        // v5：键位可视化开关表——字段有默认值（空字典 = 全部键位默认开启），无需迁移动作。
+
         config.Version = AppConfig.CurrentVersion;
-        Logger.Info($"配置 v{fromVersion} 已迁移到 v{AppConfig.CurrentVersion}（总开关默认关闭、默认键 F9）。");
+        Logger.Info($"配置 v{fromVersion} 已迁移到 v{AppConfig.CurrentVersion}（总开关默认关闭、默认键 F9、开关模式分区、方案三档位、键位可视化）。" );
+    }
+
+    /// <summary>
+    /// 连发间隔归一化：低于下限（10ms）的值统一提升到下限。
+    /// 加载与导入配置后调用，覆盖旧版本配置里的 1~9ms 间隔。
+    /// </summary>
+    public static void NormalizeIntervals(AppConfig config)
+    {
+        config.DefaultIntervalMs =
+            Compat.Clamp(config.DefaultIntervalMs, Constants.MinIntervalMs, Constants.MaxIntervalMs);
+        foreach (var scheme in config.Schemes.Values)
+            foreach (var target in scheme.Targets)
+                target.IntervalMs =
+                    Compat.Clamp(target.IntervalMs, Constants.MinIntervalMs, Constants.MaxIntervalMs);
     }
 
     /// <summary>保存配置（原子写入：先写临时文件再替换）。</summary>
