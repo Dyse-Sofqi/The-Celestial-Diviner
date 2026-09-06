@@ -283,8 +283,9 @@
                                                Visibility="Collapsed"/>
                                 </Grid>
                             </Border>
-                            <!-- 二级弹出层（仅 SubmenuHeader 角色会展开）：显式定位到分组项右侧 2px，
-                                 规避 MenuDropAlignment 把 Right 摆位镜像到主菜单左侧 -->
+                            <!-- 二级弹出层（仅 SubmenuHeader 角色会展开）：无缝贴齐分组项右侧（无间隙，
+                                 间隙会使慢速鼠标永远选不中子菜单，详见 MenuPlacements.RightOfTarget），
+                                 并规避 MenuDropAlignment 把 Right 摆位镜像到主菜单左侧 -->
                             <Popup Placement="Custom"
                                    CustomPopupPlacementCallback="{x:Static conv:MenuPlacements.RightOfTarget}"
                                    IsOpen="{TemplateBinding IsSubmenuOpen}"
