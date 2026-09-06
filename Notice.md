@@ -2,4 +2,4 @@
 不求一世红尘梦，但问千年月朗稀。
 我要成为，衍天高手！
 
-[衍天计算器](https://dps.btcsg.top/dps?xf=txj)
+登龙！我说，我要登龙！！[衍天计算器](https://dps.btcsg.top/dps?xf=txj)
