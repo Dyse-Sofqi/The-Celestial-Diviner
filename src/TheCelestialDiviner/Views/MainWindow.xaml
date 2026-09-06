@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:sys="clr-namespace:System;assembly=mscorlib"
         xmlns:conv="clr-namespace:TheCelestialDiviner.Helpers"
-        Title="衍天高手 The Celestial Diviner v1.5"
+        Title="衍天高手 The Celestial Diviner v1.6"
         Width="1000" Height="620" MinWidth="900" MinHeight="580"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource ThemeBg}"
@@ -13,12 +13,25 @@
         <conv:BoolToDisabledOpacityConverter x:Key="BoolToOpacity"/>
         <conv:BoolToVisibilityConverter x:Key="BoolToVis"/>
         <conv:EmptyToCollapsedConverter x:Key="EmptyToCollapsed"/>
+        <conv:IntervalWatermarkConverter x:Key="IntervalWatermark"/>
 
         <!-- lucide eye / eye-off 图标（ISC 许可，lucide-static v0.544）。
              必须声明为 Geometry 类型：Setter 的 StaticResource 不走 TypeConverter，
              sys:String 会导致 Path.Data 类型不匹配异常 → 渲染管线反复异常 → 栈溢出闪退。 -->
         <Geometry x:Key="EyeIconPath">M2.062,12.348 A1,1 0 0,1 2.062,11.652 A10.75,10.75 0 0,1 21.938,11.652 A1,1 0 0,1 21.938,12.348 A10.75,10.75 0 0,1 2.062,12.348 M12,15 A3,3 0 1,0 12,9 A3,3 0 0,0 12,15 Z</Geometry>
         <Geometry x:Key="EyeOffIconPath">M10.733,5.076 A10.744,10.744 0 0,1 21.938,11.651 A1,1 0 0,1 21.938,12.347 A10.747,10.747 0 0,1 20.494,14.837 M14.084,14.158 A3,3 0 0,1 9.842,9.916 M17.479,17.499 A10.75,10.75 0 0,1 2.062,12.348 A1,1 0 0,1 2.062,11.652 A10.75,10.75 0 0,1 6.508,6.509 M2,2 L22,22</Geometry>
+        <!-- 白天模式（lucide sun）：中心圆 + 八向光线；夜间切 lucide eclipse -->
+        <Geometry x:Key="SunIconPath">M16,12 A4,4 0 1,1 8,12 A4,4 0 1,1 16,12 M12,2 L12,4 M12,20 L12,22 M4.93,4.93 L6.34,6.34 M17.66,17.66 L19.07,19.07 M2,12 L4,12 M20,12 L22,12 M6.34,17.66 L4.93,19.07 M19.07,4.93 L17.66,6.34</Geometry>
+        <!-- 夜间模式（lucide eclipse）：外圈大圆 + 月牙弧线 -->
+        <Geometry x:Key="EclipseIconPath">M22,12 A10,10 0 1,1 12,2 A7,7 0 1,0 22,12</Geometry>
+        <!-- lucide volume-2 / volume-x（ISC 许可，隐式弧已展开为显式 A 命令） -->
+        <Geometry x:Key="VolumeIconPath">M11,4.702 A0.705,0.705 0 0,0 9.797,4.204 L6.413,7.587 A1.4,1.4 0 0,1 5.416,8 L3,8 A1,1 0 0,0 2,9 L2,15 A1,1 0 0,0 3,16 L5.416,16 A1.4,1.4 0 0,1 6.413,16.413 L9.796,19.797 A0.705,0.705 0 0,0 11,19.298 Z M16,9 A5,5 0 0,1 16,15 M19.364,18.364 A9,9 0 0,0 19.364,5.636</Geometry>
+        <Geometry x:Key="VolumeXIconPath">M11,4.702 A0.705,0.705 0 0,0 9.797,4.204 L6.413,7.587 A1.4,1.4 0 0,1 5.416,8 L3,8 A1,1 0 0,0 2,9 L2,15 A1,1 0 0,0 3,16 L5.416,16 A1.4,1.4 0 0,1 6.413,16.413 L9.796,19.797 A0.705,0.705 0 0,0 11,19.298 Z M22,9 L16,15 M16,9 L22,15</Geometry>
+        <!-- lucide message-square-dot（ISC 许可，lucide-static v0.544；隐式弧已展开为显式 A 命令，
+             右上圆点 = circle 子路径改写的双弧圆）。状态提醒按钮图标 -->
+        <Geometry x:Key="MessageSquareDotIconPath">M12.7,3 L4,3 A2,2 0 0,0 2,5 L2,21.286 A0.71,0.71 0 0,0 3.212,21.788 L5.414,19.586 A2,2 0 0,1 6.828,19 L20,19 A2,2 0 0,0 22,17 L22,12.3 M19,3 A3,3 0 1,1 19,9 A3,3 0 1,1 19,3 Z</Geometry>
+        <!-- lucide menu（ISC 许可，lucide-static v0.544；三条横线）。设置菜单键图标 -->
+        <Geometry x:Key="MenuIconPath">M4,5 L20,5 M4,12 L20,12 M4,19 L20,19</Geometry>
 
         <!-- 输入源控件模板：图标 + 名称 + 目标键小字；占位空白透明 -->
         <DataTemplate x:Key="SourceButtonTemplate">
@@ -30,7 +43,8 @@
                     Margin="2"
                     Opacity="{Binding GloballyDimmed, Converter={StaticResource BoolToOpacity}}">
                 <Border.InputBindings>
-                    <!-- 左键单击：选择态 → 录入该键；非选择态 → 无操作 -->
+                    <!-- 左键单击：仅作钩子不可用时的兜底录入（钩子正常时由钩子路径区分左键添加 / 右键取消）；
+                         非选择态 → 无操作 -->
                     <MouseBinding Gesture="LeftClick" Command="{Binding DataContext.SourceClickedCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}"/>
                 </Border.InputBindings>
                 <!-- 键位字符统一字号并居中（不做逐键缩放，保证整版观感一致） -->
@@ -49,10 +63,10 @@
                     <Setter TargetName="Root" Property="BorderBrush" Value="Transparent"/>
                     <Setter TargetName="Root" Property="IsHitTestVisible" Value="False"/>
                 </DataTrigger>
-                <!-- 全局总开关键：主题紫高亮（改键后自动刷新） -->
+                <!-- 全局总开关键：黑色高亮（与热键按钮一致；改键后自动刷新） -->
                 <DataTrigger Binding="{Binding IsMasterKey}" Value="True">
-                    <Setter TargetName="Root" Property="Background" Value="{DynamicResource AccentPrimary}"/>
-                    <Setter TargetName="Root" Property="BorderBrush" Value="#6D47D0"/>
+                    <Setter TargetName="Root" Property="Background" Value="{DynamicResource HotkeyBg}"/>
+                    <Setter TargetName="Root" Property="BorderBrush" Value="#333333"/>
                     <Setter TargetName="IconLabel" Property="Foreground" Value="White"/>
                     <Setter TargetName="NameLabel" Property="Foreground" Value="White"/>
                 </DataTrigger>
@@ -69,7 +83,7 @@
                     </MultiDataTrigger.Conditions>
                     <MultiDataTrigger.Setters>
                         <Setter TargetName="Root" Property="Opacity" Value="1"/>
-                        <Setter TargetName="Root" Property="BorderBrush" Value="#8A5CF5"/>
+                        <Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource AccentPrimary}"/>
                         <Setter TargetName="Root" Property="Cursor" Value="Hand"/>
                     </MultiDataTrigger.Setters>
                 </MultiDataTrigger>
@@ -80,11 +94,12 @@
         <Style x:Key="ModeTabStyle" TargetType="RadioButton">
             <Setter Property="Foreground" Value="{DynamicResource ThemeFg}"/>
             <Setter Property="FontSize" Value="11"/>
-            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Cursor" Value="Arrow"/>
+            <Setter Property="Focusable" Value="False"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="RadioButton">
-                        <Border x:Name="TabBg" Background="{DynamicResource TabIdleBg}" CornerRadius="3" Margin="1">
+                        <Border x:Name="TabBg" Background="Transparent" CornerRadius="3" Margin="1">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
                                               Margin="0,5"/>
                         </Border>
@@ -94,8 +109,54 @@
                                 <Setter Property="Foreground" Value="White"/>
                                 <Setter Property="FontWeight" Value="SemiBold"/>
                             </Trigger>
+                            <!-- 未选中项：仅悬停时显示灰底（选中项保持主题紫不受影响） -->
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsMouseOver" Value="True"/>
+                                    <Condition Property="IsChecked" Value="False"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="TabBg" Property="Background" Value="{DynamicResource TabIdleBg}"/>
+                            </MultiTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 模式滑块样式（开关 / 按压共用，两枚独立胶囊钮）：字体恒定加粗（含未选中）；
+             底色常驻紫 / 金（实例 Background 指定），置于白色轨道容器中；
+             选中 / 悬停时在钮背后垫一圈灰色衬底（绘制图形，非描边）：
+             无缝紧贴钮边缘向外扩 4px、圆角随之放大，无描边留白；
+             衬底色与方案档位悬停色同源（TabIdleBg），透明 ↔ 灰切换零布局位移；
+             钮高 20 + 上下外扩 4 = 28，轨道 Padding=4,6（内高 32）→ 衬底距容器边 2px、
+             距标签无缝；水平 Margin 5,0 使两枚钮的衬底相距 8px、互不侵犯 -->
+        <Style x:Key="ModeSegmentStyle" TargetType="RadioButton">
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Height" Value="20"/>
+            <Setter Property="Margin" Value="5,0"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Grid>
+                            <!-- 灰色衬底：垫在钮背后、负 Margin 外扩 4px（无缝无留白），透明 ↔ 灰切换 -->
+                            <Border x:Name="Halo" Margin="-4" Background="Transparent" CornerRadius="14"/>
+                            <!-- 主体：紫 / 金底胶囊钮（圆角 = 高度一半） -->
+                            <Border Background="{TemplateBinding Background}" CornerRadius="10" SnapsToDevicePixels="True">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                  Margin="0,2"/>
+                            </Border>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <!-- 悬停：灰色衬底 -->
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="TabBg" Property="Opacity" Value="0.85"/>
+                                <Setter TargetName="Halo" Property="Background" Value="{DynamicResource TabIdleBg}"/>
+                            </Trigger>
+                            <!-- 选中：灰色衬底（常驻） -->
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Halo" Property="Background" Value="{DynamicResource TabIdleBg}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -108,11 +169,232 @@
             <Setter Property="MinWidth" Value="26"/>
             <Setter Property="MinHeight" Value="26"/>
         </Style>
+
+        <!-- 开关分区子标签（常规/轮转/双宏）：选中色 = 深灰（ThemeButtonBg，同底栏按钮底色，
+             不引入界面外新颜色），文字保持主题色（灰底上白字日间不可读）；
+             层次 = 背景 < 悬停(TabIdleBg) < 选中(ThemeButtonBg)，日/夜主题各自成阶梯 -->
+        <Style x:Key="SectionTabStyle" TargetType="RadioButton" BasedOn="{StaticResource ModeTabStyle}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="TabBg" Background="Transparent" CornerRadius="3" Margin="1">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              Margin="0,5"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="TabBg" Property="Background" Value="{DynamicResource ThemeButtonBg}"/>
+                                <Setter Property="FontWeight" Value="SemiBold"/>
+                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsMouseOver" Value="True"/>
+                                    <Condition Property="IsChecked" Value="False"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="TabBg" Property="Background" Value="{DynamicResource TabIdleBg}"/>
+                            </MultiTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ===== 底栏设置菜单（菜单键 + 二级级联子菜单）=====
+             自绘模板：系统默认 MenuItem 在夜间模式下为白底黑字不可用，改用主题资源；
+             选中标记为自绘 ●（规避系统勾选符号硬编码配色），IsCheckable=False +
+             代码同步 IsChecked 实现单选语义；全部 Focusable=False（仅鼠标操作，
+             悬停展开不受影响），与全窗口键盘不可达策略一致 -->
+        <!-- 顶层菜单项（菜单键）：按钮观感（lucide menu 图标 + 文本，配色同 IconButtonStyle），
+             悬停 / 展开高亮；位于窗口左下角 → 子菜单向上弹出 -->
+        <Style x:Key="MenuTopStyle" TargetType="MenuItem">
+            <Setter Property="Foreground" Value="{DynamicResource ThemeFg}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="MenuItem">
+                        <Grid>
+                            <Border x:Name="Bg" Background="{DynamicResource ThemeButtonBg}"
+                                    BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1"
+                                    CornerRadius="4" Padding="9,4">
+                                <StackPanel Orientation="Horizontal">
+                                    <Path Data="{StaticResource MenuIconPath}"
+                                          Stroke="{DynamicResource ThemeFg}" StrokeThickness="1.8"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                          StrokeLineJoin="Round"
+                                          Width="13" Height="13" Stretch="Uniform"
+                                          VerticalAlignment="Center"/>
+                                    <ContentPresenter ContentSource="Header" Margin="6,0,0,0"
+                                                      VerticalAlignment="Center" RecognizesAccessKey="True"/>
+                                </StackPanel>
+                            </Border>
+                            <!-- 左下角 → 向上弹出且左对齐：显式坐标定位（Custom），规避系统
+                                 菜单右对齐辅助选项（MenuDropAlignment）把 Top 摆位镜像成右对齐 -->
+                            <Popup Placement="Custom" PlacementTarget="{Binding ElementName=Bg}"
+                                   CustomPopupPlacementCallback="{x:Static conv:MenuPlacements.AboveTarget}"
+                                   IsOpen="{TemplateBinding IsSubmenuOpen}" AllowsTransparency="True"
+                                   Focusable="False" PopupAnimation="Fade">
+                                <Border Background="{DynamicResource ThemePanel}"
+                                        BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1"
+                                        CornerRadius="4" Padding="0,2">
+                                    <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource TabIdleBg}"/>
+                            </Trigger>
+                            <!-- 展开（按下）态：与 IconButtonStyle 按压配色一致 -->
+                            <Trigger Property="IsSubmenuOpen" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource ThemeBorder}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 二级菜单项：SubmenuItem（叶子，可带 ● 选中标记）/ SubmenuHeader（带 ▸ 箭头的级联组）共用一套模板 -->
+        <Style x:Key="MenuSubStyle" TargetType="MenuItem">
+            <Setter Property="Foreground" Value="{DynamicResource ThemeFg}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="MenuItem">
+                        <Grid>
+                            <!-- 左内边距 14 + ● 标记列 14 = 选项文本起点 28px，
+                                 与菜单键按钮文本起点（内边距 9 + 图标 13 + 间距 6）左对齐 -->
+                            <Border x:Name="Bg" Background="Transparent" Padding="14,5">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="14"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="CheckMark" Text="●" FontSize="9" FontWeight="Bold"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource AccentPrimary}" Visibility="Collapsed"/>
+                                    <ContentPresenter Grid.Column="1" ContentSource="Header"
+                                                      VerticalAlignment="Center" RecognizesAccessKey="True"/>
+                                    <TextBlock x:Name="SubArrow" Grid.Column="2" Text="▸" FontSize="10"
+                                               Margin="10,0,0,0" VerticalAlignment="Center" Opacity="0.65"
+                                               Visibility="Collapsed"/>
+                                </Grid>
+                            </Border>
+                            <!-- 二级弹出层（仅 SubmenuHeader 角色会展开）：显式定位到分组项右侧 2px，
+                                 规避 MenuDropAlignment 把 Right 摆位镜像到主菜单左侧 -->
+                            <Popup Placement="Custom"
+                                   CustomPopupPlacementCallback="{x:Static conv:MenuPlacements.RightOfTarget}"
+                                   IsOpen="{TemplateBinding IsSubmenuOpen}"
+                                   AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
+                                <Border Background="{DynamicResource ThemePanel}"
+                                        BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1"
+                                        CornerRadius="4" Padding="0,2">
+                                    <ScrollViewer MaxHeight="460" VerticalScrollBarVisibility="Auto">
+                                        <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="Role" Value="SubmenuHeader">
+                                <Setter TargetName="SubArrow" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <!-- 悬停 = 选中同款紫底白字（IsHighlighted 覆盖菜单展开路径的路径高亮，
+                                 IsMouseOver 纯命中测试保证悬停必有反馈，二者视觉一致） -->
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource AccentPrimary}"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource AccentPrimary}"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                            <!-- 选中（当前生效项）：同款紫底白字 + 常驻白色 ●（与悬停项区分） -->
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource AccentPrimary}"/>
+                                <Setter Property="Foreground" Value="White"/>
+                                <Setter TargetName="CheckMark" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="CheckMark" Property="Foreground" Value="White"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 全局滚动条：细长圆角滑块（无轨道无箭头，悬停主题紫） -->
+        <Style TargetType="ScrollBar">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Width" Value="6"/>
+            <Setter Property="MinWidth" Value="6"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Background="Transparent">
+                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                <Track.Thumb>
+                                    <Thumb>
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border x:Name="ThumbBg" Background="{DynamicResource ThemeBorder}"
+                                                        CornerRadius="3" MinHeight="24"/>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="ThumbBg" Property="Background"
+                                                                Value="{DynamicResource AccentPrimary}"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="Orientation" Value="Horizontal">
+                    <Setter Property="Width" Value="Auto"/>
+                    <Setter Property="Height" Value="6"/>
+                    <Setter Property="MinHeight" Value="6"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ScrollBar">
+                                <Grid Background="Transparent">
+                                    <Track x:Name="PART_Track">
+                                        <Track.Thumb>
+                                            <Thumb>
+                                                <Thumb.Template>
+                                                    <ControlTemplate TargetType="Thumb">
+                                                        <Border x:Name="ThumbBg" Background="{DynamicResource ThemeBorder}"
+                                                                CornerRadius="3" MinWidth="24"/>
+                                                        <ControlTemplate.Triggers>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter TargetName="ThumbBg" Property="Background"
+                                                                        Value="{DynamicResource AccentPrimary}"/>
+                                                            </Trigger>
+                                                        </ControlTemplate.Triggers>
+                                                    </ControlTemplate>
+                                                </Thumb.Template>
+                                            </Thumb>
+                                        </Track.Thumb>
+                                    </Track>
+                                </Grid>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
 
     <DockPanel>
         <!-- ===== 全局开关横幅（常驻：关闭=金色 / 开启=主题紫）===== -->
-        <Border DockPanel.Dock="Top" Height="32">
+        <Border DockPanel.Dock="Top" Height="32" Margin="10,6,10,4" CornerRadius="4">
             <Border.Style>
                 <Style TargetType="Border">
                     <Setter Property="Background" Value="{DynamicResource AccentGold}"/>
@@ -157,60 +439,226 @@
         </Border>
 
         <!-- ===== 底部控制栏（36px）===== -->
-        <Border DockPanel.Dock="Bottom" Height="36" Background="{DynamicResource ThemePanel}">
+        <Border DockPanel.Dock="Bottom" Height="36" Margin="10,0,10,6"
+                Background="{DynamicResource ThemePanel}" CornerRadius="4">
             <DockPanel Margin="10,0">
-                <TextBlock DockPanel.Dock="Right" Text="{Binding HintText}"
-                           Foreground="{DynamicResource ThemeFg}" Opacity="0.6"
-                           FontSize="11" VerticalAlignment="Center"/>
+                <!-- 最右：提示语音音量（点击弹出滑块；0 时显示 volume-x 暗淡态）。
+                     键位可视化总开关已迁至方案列表表头（eye 列）。 -->
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                    <!-- 状态提醒按钮（lucide message-square-dot）：开启后总开关开启时常驻应用图标键帽，
+                         任一方案连发时自动隐藏，全部停止 2.5s 后恢复；不受键位可视化总开关约束。
+                         激活态 = 金色墨迹（与夜间模式钮同源 AccentGold），未激活 = 默认文字色；默认激活 -->
+                    <Button x:Name="StatusReminderButton" Width="26" Height="26" Padding="0"
+                            Style="{StaticResource IconButtonStyle}"
+                            Command="{Binding ToggleStatusReminderCommand}"
+                            ToolTip="状态提醒：总开关开启时在键帽悬浮区常驻应用图标键帽；任一方案连发时自动隐藏，全部连发停止 2.5 秒后恢复（不受键位可视化总开关约束）"
+                            Margin="0,0,6,0">
+                        <Grid Background="Transparent">
+                            <Path StrokeThickness="1.8" Fill="Transparent"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round"
+                                  Width="15" Height="15" Stretch="Uniform">
+                                <Path.Style>
+                                    <Style TargetType="Path">
+                                        <!-- Data / Stroke 全部走 Style Setter：本地值会压过 DataTrigger
+                                             （墨迹颜色区分激活态：金 = 已激活 / 文字色 = 未激活） -->
+                                        <Setter Property="Data" Value="{StaticResource MessageSquareDotIconPath}"/>
+                                        <Setter Property="Stroke" Value="{DynamicResource ThemeFg}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding StatusReminderEnabled}" Value="True">
+                                                <Setter Property="Stroke" Value="{DynamicResource AccentGold}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Path.Style>
+                            </Path>
+                        </Grid>
+                    </Button>
+                    <!-- 夜间模式按钮（lucide eclipse：外圈大圆 + 月牙弧线） -->
+                    <Button x:Name="NightModeButton" Width="26" Height="26" Padding="0"
+                            Style="{StaticResource IconButtonStyle}"
+                            ToolTip="切换白天 / 夜间模式"
+                            Margin="0,0,6,0">
+                        <Grid Background="Transparent">
+                            <Path Stroke="{DynamicResource AccentGold}"
+                                  StrokeThickness="1.8" Fill="Transparent"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round"
+                                  Width="15" Height="15" Stretch="Uniform">
+                                <Path.Style>
+                                    <Style TargetType="Path">
+                                        <Setter Property="Data" Value="{StaticResource SunIconPath}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding NightMode}" Value="True">
+                                                <Setter Property="Data" Value="{StaticResource EclipseIconPath}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Path.Style>
+                            </Path>
+                        </Grid>
+                    </Button>
+                    <Button x:Name="VolumeButton" Width="26" Height="26" Padding="0"
+                            Style="{StaticResource IconButtonStyle}"
+                            ToolTip="总开关提示语音音量（0 = 静音）">
+                        <Grid Background="Transparent">
+                            <Path Stroke="{DynamicResource ThemeFg}"
+                                  StrokeThickness="1.8" Fill="Transparent"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round"
+                                  Width="15" Height="15" Stretch="Uniform">
+                                <Path.Style>
+                                    <Style TargetType="Path">
+                                        <Setter Property="Data" Value="{StaticResource VolumeIconPath}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SoundVolume}" Value="0">
+                                                <Setter Property="Data" Value="{StaticResource VolumeXIconPath}"/>
+                                                <Setter Property="Opacity" Value="0.4"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Path.Style>
+                            </Path>
+                            <Popup x:Name="VolumePopup" PlacementTarget="{Binding ElementName=VolumeButton}"
+                                   Placement="Top" StaysOpen="False" AllowsTransparency="True"
+                                   VerticalOffset="4">
+                                <Border Background="{DynamicResource ThemePanel}"
+                                        BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1"
+                                        CornerRadius="4" Padding="10,8" Margin="4">
+                                    <StackPanel Orientation="Vertical">
+                                        <TextBlock Text="提示语音音量" FontSize="10" Opacity="0.7"
+                                                   HorizontalAlignment="Center" Margin="0,0,0,4"
+                                                   Foreground="{DynamicResource ThemeFg}"/>
+                                        <Slider x:Name="SoundVolumeSlider" Width="130"
+                                                Minimum="0" Maximum="100" Value="{Binding SoundVolume}"
+                                                TickFrequency="10" TickPlacement="None" IsSnapToTickEnabled="False"/>
+                                        <TextBlock Text="{Binding SoundVolume, StringFormat={}{0:0}%}"
+                                                   HorizontalAlignment="Center" FontSize="10" Opacity="0.8"
+                                                   Margin="0,4,0,0"
+                                                   Foreground="{DynamicResource ThemeFg}"/>
+                                    </StackPanel>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                    </Button>
+                </StackPanel>
+                <!-- 右二：全局开关（热键录入，自右面板首行搬入） -->
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="全局开关热键设置：" VerticalAlignment="Center" FontSize="11"
+                               Foreground="{DynamicResource ThemeFg}"/>
+                    <Button Height="26" MinWidth="34" Padding="4,0" Margin="0,0,8,0"
+                            Command="{Binding SetMasterKeyPickingCommand}"
+                            ToolTip="点击修改总开关键：点击左侧键位或直接按键即完成录入（默认 F9）">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
+                                <!-- 夜间沿用近黑底白字；日间复用普通按钮配色（HotkeySetting* 随主题注入） -->
+                                <Setter Property="Background" Value="{DynamicResource HotkeySettingBg}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource HotkeySettingFg}"/>
+                                <Setter Property="BorderBrush" Value="{DynamicResource HotkeySettingBorder}"/>
+                                <Setter Property="Content" Value="{Binding MasterKeyText}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding PickingKind}" Value="SetMasterKey">
+                                        <Setter Property="Content" Value="录入中…"/>
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding PickingKind}" Value="AddScheme">
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </StackPanel>
+                <!-- 左一：设置菜单键（键盘注入 / 键帽配色 / 键帽可视化 收录为二级级联菜单；
+                     ● 标记当前项，点击选项即生效并落盘） -->
+                <Menu DockPanel.Dock="Left" VerticalAlignment="Center" Background="Transparent"
+                      Padding="0" Margin="0,0,8,0" Focusable="False">
+                    <MenuItem Header="选项" Style="{StaticResource MenuTopStyle}"
+                              SubmenuOpened="OnSettingsMenuSubmenuOpened">
+                        <MenuItem x:Name="KeyboardModeMenu" Header="键盘注入" Style="{StaticResource MenuSubStyle}"
+                                  MouseEnter="OnMenuCommentEnter" MouseLeave="OnMenuCommentLeave">
+                            <MenuItem Header="普通（SendInput）" Tag="0" Style="{StaticResource MenuSubStyle}"
+                                      Command="{Binding SetKeyboardModeCommand}"
+                                      CommandParameter="{Binding RelativeSource={RelativeSource Self}, Path=Tag}"/>
+                            <MenuItem Header="扫描码（DirectInput）" Tag="1" Style="{StaticResource MenuSubStyle}"
+                                      Command="{Binding SetKeyboardModeCommand}"
+                                      CommandParameter="{Binding RelativeSource={RelativeSource Self}, Path=Tag}"/>
+                            <MenuItem Header="消息（PostMessage）" Tag="2" Style="{StaticResource MenuSubStyle}"
+                                      Command="{Binding SetKeyboardModeCommand}"
+                                      CommandParameter="{Binding RelativeSource={RelativeSource Self}, Path=Tag}"/>
+                            <MenuItem Header="DD 驱动（物理级）" Tag="3" Style="{StaticResource MenuSubStyle}"
+                                      Command="{Binding SetKeyboardModeCommand}"
+                                      CommandParameter="{Binding RelativeSource={RelativeSource Self}, Path=Tag}"/>
+                        </MenuItem>
+                        <MenuItem x:Name="KeycapSchemeMenu" Header="键帽配色" Style="{StaticResource MenuSubStyle}"
+                                  ItemsSource="{Binding KeycapSchemeNames}"
+                                  MouseEnter="OnMenuCommentEnter" MouseLeave="OnMenuCommentLeave">
+                            <MenuItem.ItemContainerStyle>
+                                <Style TargetType="MenuItem" BasedOn="{StaticResource MenuSubStyle}">
+                                    <Setter Property="Header" Value="{Binding}"/>
+                                    <Setter Property="IsCheckable" Value="False"/>
+                                    <Setter Property="Command" Value="{Binding DataContext.SetKeycapSchemeCommand, RelativeSource={RelativeSource AncestorType=Menu}}"/>
+                                    <Setter Property="CommandParameter" Value="{Binding}"/>
+                                    <EventSetter Event="MouseEnter" Handler="OnMenuCommentEnter"/>
+                                    <EventSetter Event="MouseLeave" Handler="OnMenuCommentLeave"/>
+                                </Style>
+                            </MenuItem.ItemContainerStyle>
+                        </MenuItem>
+                        <MenuItem x:Name="VisualizerModeMenu" Header="键帽可视化" Style="{StaticResource MenuSubStyle}"
+                                  MouseEnter="OnMenuCommentEnter" MouseLeave="OnMenuCommentLeave">
+                            <MenuItem Header="全部" Tag="0" Style="{StaticResource MenuSubStyle}"
+                                      Command="{Binding SetVisualizerModeCommand}"
+                                      CommandParameter="{Binding RelativeSource={RelativeSource Self}, Path=Tag}"/>
+                            <MenuItem Header="修饰键和自定义键" Tag="1" Style="{StaticResource MenuSubStyle}"
+                                      Command="{Binding SetVisualizerModeCommand}"
+                                      CommandParameter="{Binding RelativeSource={RelativeSource Self}, Path=Tag}"/>
+                            <MenuItem Header="自定义键" Tag="2" Style="{StaticResource MenuSubStyle}"
+                                      Command="{Binding SetVisualizerModeCommand}"
+                                      CommandParameter="{Binding RelativeSource={RelativeSource Self}, Path=Tag}"/>
+                        </MenuItem>
+                    </MenuItem>
+                </Menu>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="键盘注入：" VerticalAlignment="Center"
-                               Foreground="{DynamicResource ThemeFg}" FontSize="11"/>
-                    <ComboBox x:Name="KeyboardModeBox" Width="130" Margin="0,0,10,0"
-                              FontSize="11"
-                              ToolTip="游戏内键盘连发不生效时逐个尝试：扫描码模式 → 消息模式 → DD 驱动模式。消息模式仅游戏在前台时有效；DD 驱动模式为物理级注入（需 dd63330.dll + 管理员权限）">
-                        <ComboBoxItem Content="普通（SendInput）"/>
-                        <ComboBoxItem Content="扫描码（DirectInput）"/>
-                        <ComboBoxItem Content="消息（PostMessage）"/>
-                        <ComboBoxItem Content="DD 驱动（物理级）"/>
-                    </ComboBox>
+                    <!-- 导入 / 导出配置（自方案面板底部移入，紧跟「选项」菜单键之后；
+                         作用于当前方案档位） -->
                     <Button Content="导入配置" Style="{StaticResource IconButtonStyle}"
-                            Padding="8,3" Margin="0,0,8,0" Command="{Binding ImportCommand}"/>
+                            Height="26" Padding="8,0" Margin="0,0,8,0" Command="{Binding ImportCommand}"
+                            ToolTip="从 JSON 文件导入当前档位的连发键配置"/>
                     <Button Content="导出配置" Style="{StaticResource IconButtonStyle}"
-                            Padding="8,3" Margin="0,0,8,0" Command="{Binding ExportCommand}"/>
-                    <!-- 方案档位切换（①②③ 各存一套按键方案；选中=蓝底白字，随切换实时落盘）。
-                         选中态由 code-behind 随 VM.ActiveProfile 同步（避开 RadioButton 组内互斥取消选中
-                         破坏绑定的 WPF 已知问题），点击经 Checked 事件回写 VM。 -->
-                    <TextBlock Text="方案" VerticalAlignment="Center" Margin="4,0,6,0"
-                               Foreground="{DynamicResource ThemeFg}" FontSize="11"/>
-                    <RadioButton x:Name="Profile1Button" Content="①" GroupName="SchemeProfile" Tag="0"
-                                 Checked="OnProfileChecked" Style="{StaticResource ProfileTabStyle}"
-                                 ToolTip="方案①（默认）"/>
-                    <RadioButton x:Name="Profile2Button" Content="②" GroupName="SchemeProfile" Tag="1"
-                                 Checked="OnProfileChecked" Style="{StaticResource ProfileTabStyle}"
-                                 ToolTip="方案②"/>
-                    <RadioButton x:Name="Profile3Button" Content="③" GroupName="SchemeProfile" Tag="2"
-                                 Checked="OnProfileChecked" Style="{StaticResource ProfileTabStyle}"
-                                 ToolTip="方案③"/>
+                            Height="26" Padding="8,0" Margin="0,0,8,0" Command="{Binding ExportCommand}"
+                            ToolTip="将当前档位的连发键配置导出为 JSON 文件"/>
+                    <!-- 调整可视化键帽位置：弹出独立窗口（应用图标键帽 + 区域虚线框），拖拽定位，
+                         键帽上方确定按钮保存退出 -->
+                    <Button Content="调整可视化位置" Style="{StaticResource IconButtonStyle}"
+                            Height="26" Padding="8,0" Command="{Binding AdjustVisualizerCommand}"
+                            ToolTip="调整键帽显示位置：拖动应用图标键帽到目标处，虚线框为键帽可显示区域，点击确定保存"/>
                 </StackPanel>
             </DockPanel>
         </Border>
 
-        <!-- ===== 键鼠视图（左：鼠标 / 键盘 + 日志）+ 方案面板（右）：自适应填充 ===== -->
+        <!-- ===== 键鼠视图（左：鼠标 / 键盘 + 注释）+ 方案面板（右）：自适应填充 ===== -->
         <Grid>
             <Grid.RowDefinitions>
+                <!-- 键鼠视图：Auto 行 → Viewbox 按列宽等比缩放出自然高度（不变形），不占满星号空间 -->
+                <RowDefinition Height="Auto"/>
+                <!-- 注释区：吃满键鼠图缩放后剩余的全部空白 -->
                 <RowDefinition Height="*"/>
-                <!-- 日志面板：常驻展开 8 行（行高 18px）；仅占列 0，避让右侧方案面板 -->
-                <RowDefinition Height="144"/>
             </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <!-- 左列：鼠标键栏 + 键盘视图（同一列 → 等宽）-->
-            <DockPanel Grid.Column="0" Grid.Row="0" Margin="10,4,6,4">
-                <!-- 鼠标键栏（全宽铺满与键盘一致；压缩高度给键盘区让出空间）-->
-                <Border x:Name="MouseArea" DockPanel.Dock="Top" Height="48" Padding="0,4" Margin="0,0,0,4">
+            <!-- 左列：键鼠视图（Viewbox 等比缩放：设计基准 700×396，窗口变化时整体等比缩放不变形）-->
+            <Viewbox Grid.Column="0" Grid.Row="0" Margin="10,4,6,4" Stretch="Uniform">
+                <Grid Width="700" Height="332">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="48"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <!-- 鼠标键栏（与键盘同宽等比缩放）-->
+                    <Border x:Name="MouseArea" Grid.Row="0" Padding="0,4" Margin="0,0,0,4"
+                            Background="Transparent">
                     <ItemsControl ItemsSource="{Binding MouseButtons}"
                                   ItemTemplate="{StaticResource SourceButtonTemplate}">
                         <ItemsControl.ItemsPanel>
@@ -224,7 +672,7 @@
                 <!-- 键盘区：左列主键区+导航簇（74 单位），右列小键盘（16 单位）。
                      左列行内 主键区 60u | 0.25u | 导航簇 12u | 0.25u —— 数字区与导航簇的间隔和字母区与导航簇等宽。
                      禁用纵向滚动：内容高度经布局保证可容纳（窗口 MinHeight 下限），不出现滚动轴 -->
-                <Grid x:Name="KeyboardArea" Margin="0,4">
+                <Grid x:Name="KeyboardArea" Grid.Row="1" Margin="0,4">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="74*"/>
                         <ColumnDefinition Width="16*"/>
@@ -294,75 +742,199 @@
                         </ItemsControl.ItemContainerStyle>
                     </ItemsControl>
                 </Grid>
-            </DockPanel>
+                </Grid>
+            </Viewbox>
 
-            <!-- 日志面板（常驻展开；新日志自动滚动到最新；仅占左列，避让方案面板）-->
+            <!-- 注释区域（默认仅显示可点击的衍天计算器链接；悬停分区/模式标签时显示对应注释并隐藏默认文本）-->
             <Border Grid.Column="0" Grid.Row="1" Margin="10,0,6,4"
-                    Background="{DynamicResource ThemePanel}" ClipToBounds="True">
-                <ListBox x:Name="LogList" ItemsSource="{Binding Logs}"
-                         FontSize="11" BorderThickness="0"
-                         Background="Transparent"
-                         Foreground="{DynamicResource ThemeFg}"
-                         TextBlock.LineHeight="16" TextBlock.LineStackingStrategy="BlockLineHeight"
-                         ScrollViewer.HorizontalScrollBarVisibility="Hidden">
-                    <ListBox.ItemContainerStyle>
-                        <Style TargetType="ListBoxItem">
-                            <Setter Property="Height" Value="18"/>
-                            <Setter Property="Padding" Value="0"/>
-                            <Setter Property="Margin" Value="0"/>
-                            <Setter Property="IsTabStop" Value="False"/>
-                        </Style>
-                    </ListBox.ItemContainerStyle>
-                </ListBox>
+                    Background="{DynamicResource ThemePanel}" ClipToBounds="True"
+                    CornerRadius="4" Padding="10,8">
+                <Grid>
+                    <!-- 悬停注释文本（默认 Collapsed；显示时同时隐藏默认文本防重叠） -->
+                    <TextBlock x:Name="CommentText" Visibility="Collapsed"
+                               FontSize="12" TextWrapping="Wrap"
+                               Foreground="{DynamicResource ThemeFg}"/>
+                    <!-- 默认内容：诗句 + 可点击的衍天计算器链接 -->
+                    <TextBlock x:Name="DefaultComment" FontSize="12"
+                               HorizontalAlignment="Left" VerticalAlignment="Top"
+                               LineHeight="20"
+                               Foreground="{DynamicResource ThemeFg}">
+                        <Run>象载古今循大道，星占太乙衍天机。</Run><LineBreak/>
+                        <Run>不求一世红尘梦，但问千年月朗稀。</Run><LineBreak/>
+                        <Run>我要成为，衍天高手！</Run><LineBreak/>
+                        <Hyperlink NavigateUri="https://dps.btcsg.top/dps?xf=txj"
+                                   RequestNavigate="OnCommentLinkClick"
+                                   Foreground="{DynamicResource AccentPrimary}">衍天计算器</Hyperlink>
+                    </TextBlock>
+                </Grid>
             </Border>
 
-            <!-- 右列：连发键方案面板（全局开关热键 → 连发间隔 → 模式标签 → 添加 → 方案列表）-->
+            <!-- 右列：连发键方案面板（最顶：方案档位①②③④ → 连发时序档位 → 模式分段条 →
+                 方案列表 → 分区子标签 → 最底：「从左侧键盘管理方案」按钮）-->
             <Border Grid.Column="1" Grid.Row="0" Grid.RowSpan="2" Width="262" Margin="0,4,10,4"
                     Background="{DynamicResource ThemePanel}"
                     BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1"
                     CornerRadius="4" Padding="10,8">
-                <DockPanel>
-                    <!-- 全局开关热键 + 语音音量（同一行，音量在热键后面） -->
-                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
-                        <TextBlock Text="全局开关热键" VerticalAlignment="Center" FontSize="11"
-                                   Foreground="{DynamicResource ThemeFg}"/>
-                        <Button Margin="4,0,0,0" Padding="4,3"
-                                Command="{Binding SetMasterKeyPickingCommand}"
-                                ToolTip="点击修改总开关键（与“添加连发键”相同的录入方式，默认 F9）">
-                            <Button.Style>
-                                <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
-                                    <!-- 用户指定：热键按钮黑色底（白字，IconButtonStyle 默认前景即白 / 浅主题下也清晰） -->
-                                    <Setter Property="Background" Value="{DynamicResource HotkeyBg}"/>
-                                    <Setter Property="Foreground" Value="White"/>
-                                    <Setter Property="BorderBrush" Value="#333333"/>
-                                    <Setter Property="Content" Value="{Binding MasterKeyText}"/>
-                                    <Setter Property="Background" Value="#000000"/>
-                                    <Setter Property="Foreground" Value="White"/>
-                                    <Setter Property="BorderBrush" Value="#333333"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding PickingKind}" Value="SetMasterKey">
-                                            <Setter Property="Content" Value="录入中…"/>
-                                            <Setter Property="IsEnabled" Value="False"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding PickingKind}" Value="AddScheme">
-                                            <Setter Property="IsEnabled" Value="False"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Button.Style>
-                        </Button>
-                        <TextBlock Text="音量：" VerticalAlignment="Center" FontSize="11"
-                                   Margin="8,0,0,0" Foreground="{DynamicResource ThemeFg}"/>
-                        <Slider x:Name="SoundVolumeSlider" Width="46" Margin="0,0,4,0"
-                                Minimum="0" Maximum="100" Value="{Binding SoundVolume}"
-                                TickFrequency="10" TickPlacement="None" IsSnapToTickEnabled="False"
-                                ToolTip="总开关提示语音音量（0 = 静音）"/>
-                        <TextBlock Text="{Binding SoundVolume, StringFormat={}{0:0}%}"
-                                   VerticalAlignment="Center" FontSize="11"
-                                   Foreground="{DynamicResource ThemeFg}" Opacity="0.8"/>
-                        <!-- 全局键位可视化总开关（lucide eye / eye-off，样式同行内开关；
-                             关闭时仅整体禁用悬浮层显示，各键位开关状态保留，恢复后延续） -->
-                        <Button Margin="6,0,0,0" Width="22" Height="20" Padding="0"
+                <!-- IsSharedSizeScope：表头与方案行的列宽经 SharedSizeGroup 对齐 -->
+                <DockPanel Grid.IsSharedSizeScope="True">
+                    <!-- 方案档位切换（①②③④ 各存一套按键方案；选中=紫底白字，随切换实时落盘；
+                         移至面板最顶部：DockPanel 首个子元素 + Dock=Top，位于连发时序档位之上。
+                         选中态由 code-behind 随 VM.ActiveProfile 同步（避开 RadioButton 组内互斥取消选中
+                         破坏绑定的 WPF 已知问题），点击经 Checked 事件回写 VM。 -->
+                    <Border DockPanel.Dock="Top" Background="{DynamicResource ThemeBg}"
+                            CornerRadius="4" Padding="2" Margin="0,0,0,8">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <RadioButton x:Name="Profile1Button" Content="方案①" GroupName="SchemeProfile" Tag="0"
+                                         Checked="OnProfileChecked" Style="{StaticResource ModeTabStyle}"
+                                         ToolTip="方案①（默认）"/>
+                            <RadioButton Grid.Column="1" x:Name="Profile2Button" Content="方案②" GroupName="SchemeProfile" Tag="1"
+                                         Checked="OnProfileChecked" Style="{StaticResource ModeTabStyle}"
+                                         ToolTip="方案②"/>
+                            <RadioButton Grid.Column="2" x:Name="Profile3Button" Content="方案③" GroupName="SchemeProfile" Tag="2"
+                                         Checked="OnProfileChecked" Style="{StaticResource ModeTabStyle}"
+                                         ToolTip="方案③"/>
+                            <RadioButton Grid.Column="3" x:Name="Profile4Button" Content="方案④" GroupName="SchemeProfile" Tag="3"
+                                         Checked="OnProfileChecked" Style="{StaticResource ModeTabStyle}"
+                                         ToolTip="方案④"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- 导入 / 导出配置：已移至底栏「选项」菜单键之后（作用于当前方案档位）。
+                         原位置改放「从左侧键盘管理方案」按钮：DockPanel 内声明在分区标签 Border 之后、
+                         停靠 Bottom → 位于分区标签下方、面板最底部。
+                         空闲 = 进入方案管理（左键添加 / 右键取消，持续到退出）；
+                         管理中 = 显示“退出管理方案”。点击退出经钩子空白路径处理
+                         （WPF 侧由 StartPicking 的 PickingActive 守卫 + 退出冷却防陈旧点击重进）-->
+                    <Button DockPanel.Dock="Bottom" Height="30"
+                            Command="{Binding StartPickingCommand}">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
+                                <Setter Property="Content" Value="从左侧键盘管理方案"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding PickingKind}" Value="AddScheme">
+                                        <Setter Property="Content" Value="退出管理方案"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding PickingKind}" Value="SetMasterKey">
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+
+                    <!-- 开关模式分区子标签（常规开关 / 轮转开关 / 双宏开关；仅开关模式显示，
+                         选中色 = 深灰 SectionTabStyle；DockPanel 内声明在管理按钮之后 → 置于其上方）-->
+                    <Border DockPanel.Dock="Bottom" Background="{DynamicResource ThemeBg}"
+                            CornerRadius="4" Padding="2" Margin="0,0,0,6"
+                            Visibility="{Binding SectionTabsVisible}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <RadioButton GroupName="SchemeSection" Content="常规开关" Tag="Normal"
+                                         IsChecked="True" Checked="OnSectionTabChecked"
+                                         Style="{StaticResource SectionTabStyle}"
+                                         MouseEnter="OnSectionTabMouseEnter" MouseLeave="OnSectionTabMouseLeave"/>
+                            <RadioButton Grid.Column="1" GroupName="SchemeSection" Content="轮转开关" Tag="Rotate"
+                                         Checked="OnSectionTabChecked"
+                                         Style="{StaticResource SectionTabStyle}"
+                                         MouseEnter="OnSectionTabMouseEnter" MouseLeave="OnSectionTabMouseLeave"/>
+                            <RadioButton Grid.Column="2" GroupName="SchemeSection" Content="双宏开关" Tag="Dual"
+                                         Checked="OnSectionTabChecked"
+                                         Style="{StaticResource SectionTabStyle}"
+                                         MouseEnter="OnSectionTabMouseEnter" MouseLeave="OnSectionTabMouseLeave"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- 连发时序档位（常规 / 极限；切换即统一应用到全部连发键；
+                         位于方案档位①②③④之下、模式分段条之上）-->
+                    <Border DockPanel.Dock="Top" Background="{DynamicResource ThemeBg}"
+                            CornerRadius="4" Padding="2" Margin="0,0,0,8">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <RadioButton x:Name="TimingRegularRadio" GroupName="TimingPreset" Content="常规档 26ms"
+                                         Tag="0" IsChecked="True" Checked="OnTimingPresetChecked"
+                                         Style="{StaticResource ModeTabStyle}"
+                                         MouseEnter="OnSectionTabMouseEnter" MouseLeave="OnSectionTabMouseLeave"
+                                         ToolTip="按压 26ms / 间隔 26ms（各自独立抖动 ±20%）：40~100 帧全区间零丢失，约 19 发/秒。仅作为之后添加连发键的默认值，已有方案不变。"/>
+                            <RadioButton x:Name="TimingExtremeRadio" Grid.Column="1" GroupName="TimingPreset" Content="极限档 11ms"
+                                         Tag="1" Checked="OnTimingPresetChecked"
+                                         Style="{StaticResource ModeTabStyle}"
+                                         MouseEnter="OnSectionTabMouseEnter" MouseLeave="OnSectionTabMouseLeave"
+                                         ToolTip="按压 11ms / 间隔 11ms：帧率 ≥90 时登记上限约 45 发/秒；低于约 55 帧开始丢发，40 帧附近骤降至约 5 发/秒。仅作为之后添加连发键的默认值，已有方案不变。"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- 模式切换滑块（主题轨道容器 + 两枚独立胶囊色钮：左常驻紫 / 右常驻金；
+                         Padding=4,6：衬底距容器边水平 1px / 垂直 2px，协调不超出；
+                         配色沿用 AccentPrimary / AccentGold） -->
+                    <Border DockPanel.Dock="Top" Background="{DynamicResource SegmentTrackBg}"
+                            CornerRadius="16" Padding="4,6" Margin="0,0,0,8">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                        <RadioButton GroupName="SchemeMode" Content="开关模式" Tag="Toggle"
+                                     IsChecked="True" Checked="OnModeTabChecked"
+                                     Background="{DynamicResource AccentPrimary}"
+                                     Style="{StaticResource ModeSegmentStyle}"
+                                     MouseEnter="OnSectionTabMouseEnter" MouseLeave="OnSectionTabMouseLeave"/>
+                        <RadioButton Grid.Column="1" GroupName="SchemeMode" Content="按压模式" Tag="Hold"
+                                     Checked="OnModeTabChecked"
+                                     Background="{DynamicResource AccentGold}"
+                                     Style="{StaticResource ModeSegmentStyle}"
+                                     MouseEnter="OnSectionTabMouseEnter" MouseLeave="OnSectionTabMouseLeave"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- 选择态提示条 -->
+                    <Border DockPanel.Dock="Top" Background="{DynamicResource AccentPrimary}" CornerRadius="3" Padding="8,5"
+                            Margin="0,0,0,8"
+                            Visibility="{Binding PickingPromptVisible}">
+                        <TextBlock Foreground="White" FontSize="11" TextWrapping="Wrap"
+                                   Text="{Binding PickingPromptText}"/>
+                    </Border>
+
+                    <!-- 方案列表表头（列宽经 SharedSizeGroup 与行模板对齐）：
+                         勾选框 = 一键启用/停用全部；eye = 可视化总开关（自底栏迁入）；
+                         ✕ = 删除全部勾选的连发键；底部边框线与列表内容分隔 -->
+                    <Border DockPanel.Dock="Top" BorderBrush="{DynamicResource ThemeBorder}"
+                            BorderThickness="0,0,0,1" Margin="0,0,0,2">
+                        <Grid Margin="0,0,0,3">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColCheck"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColHold"/>
+                            <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColPlus"/>
+                            <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColInterval"/>
+                            <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColMs2"/>
+                            <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColEye"/>
+                            <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColDel"/>
+                        </Grid.ColumnDefinitions>
+                        <CheckBox IsChecked="{Binding SchemesAllEnabled}"
+                                  Style="{StaticResource RoundCheckStyle}"
+                                  ToolTip="一键启用 / 停用全部连发键"/>
+                        <TextBlock Grid.Column="1" Text="按键" Margin="6,0,0,0" VerticalAlignment="Center"
+                                   FontSize="11" Opacity="0.6" Foreground="{DynamicResource ThemeFg}"/>
+                        <TextBlock Grid.Column="2" Grid.ColumnSpan="4" Text="按压+间隔" TextAlignment="Center"
+                                   VerticalAlignment="Center" FontSize="11" Opacity="0.6"
+                                   Foreground="{DynamicResource ThemeFg}"
+                                   ToolTip="按压 = 按下到弹起；间隔 = 弹起到下次按下；周期 = 按压 + 间隔，各自随机抖动 ±20%"/>
+                        <!-- 可视化总开关（eye / eye-off；关闭时全部键位暂停显示） -->
+                        <Button Grid.Column="6" Width="22" Height="20" Padding="0" Margin="0,0,4,0"
+                                HorizontalAlignment="Left"
                                 Command="{Binding ToggleGlobalVisualCommand}"
                                 Style="{StaticResource IconButtonStyle}"
                                 ToolTip="键位可视化总开关：关闭时全部键位暂停显示（各键位开关状态保留，重新开启后延续）">
@@ -374,7 +946,7 @@
                                     <Path.Style>
                                         <Style TargetType="Path">
                                             <Setter Property="Data" Value="{StaticResource EyeIconPath}"/>
-                                            <Setter Property="Opacity" Value="0.85"/>
+                                            <Setter Property="Opacity" Value="0.75"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding GlobalVisualEnabled}" Value="False">
                                                     <Setter Property="Data" Value="{StaticResource EyeOffIconPath}"/>
@@ -386,80 +958,32 @@
                                 </Path>
                             </Grid>
                         </Button>
-                    </StackPanel>
-
-                    <!-- 模式切换标签 -->
-                    <Border DockPanel.Dock="Top" Background="{DynamicResource ThemeBg}"
-                            CornerRadius="4" Padding="2" Margin="0,0,0,8">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <RadioButton GroupName="SchemeMode" Content="开关模式" Tag="Toggle"
-                                         IsChecked="True" Checked="OnModeTabChecked"
-                                         Style="{StaticResource ModeTabStyle}"/>
-                            <RadioButton Grid.Column="1" GroupName="SchemeMode" Content="按压模式" Tag="Hold"
-                                         Checked="OnModeTabChecked"
-                                         Style="{StaticResource ModeTabStyle}"/>
+                        <!-- 删除全部勾选（启用）的连发键 -->
+                        <Button Grid.Column="7" Content="✕" Width="22" Height="20" Padding="0" FontSize="10"
+                                HorizontalAlignment="Left"
+                                Command="{Binding DeleteCheckedSchemesCommand}"
+                                Style="{StaticResource IconButtonStyle}"
+                                ToolTip="删除所有勾选的连发键（勾选 = 行首复选框，删除前会确认）"/>
                         </Grid>
                     </Border>
 
-                    <!-- 开关模式分区子标签（常规开关 / 轮转开关 / 双宏开关；仅开关模式显示）-->
-                    <Border DockPanel.Dock="Top" Background="{DynamicResource ThemeBg}"
-                            CornerRadius="4" Padding="2" Margin="0,0,0,8"
-                            Visibility="{Binding SectionTabsVisible}">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <RadioButton GroupName="SchemeSection" Content="常规开关" Tag="Normal"
-                                         IsChecked="True" Checked="OnSectionTabChecked"
-                                         Style="{StaticResource ModeTabStyle}"/>
-                            <RadioButton Grid.Column="1" GroupName="SchemeSection" Content="轮转开关" Tag="Rotate"
-                                         Checked="OnSectionTabChecked"
-                                         Style="{StaticResource ModeTabStyle}"/>
-                            <RadioButton Grid.Column="2" GroupName="SchemeSection" Content="双宏开关" Tag="Dual"
-                                         Checked="OnSectionTabChecked"
-                                         Style="{StaticResource ModeTabStyle}"/>
-                        </Grid>
-                    </Border>
-
-                    <!-- 添加按钮（任一选择态下禁用并提示）-->
-                    <Button DockPanel.Dock="Top" Height="30" Margin="0,0,0,8"
-                            Command="{Binding StartPickingCommand}">
-                        <Button.Style>
-                            <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
-                                <Setter Property="Content" Value="＋ 添加连发键"/>
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding PickingKind}" Value="AddScheme">
-                                        <Setter Property="Content" Value="正在录入，点击左侧键鼠…"/>
-                                        <Setter Property="IsEnabled" Value="False"/>
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding PickingKind}" Value="SetMasterKey">
-                                        <Setter Property="IsEnabled" Value="False"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Button.Style>
-                    </Button>
-
-                    <!-- 选择态提示条 -->
-                    <Border DockPanel.Dock="Top" Background="#8A5CF5" CornerRadius="3" Padding="8,5"
-                            Margin="0,0,0,8"
-                            Visibility="{Binding PickingPromptVisible}">
-                        <TextBlock Foreground="White" FontSize="11" TextWrapping="Wrap"
-                                   Text="{Binding PickingPromptText}"/>
-                    </Border>
-
-                    <!-- 方案列表 -->
+                    <!-- 方案列表（ItemContainerStyle 重写模板：无默认蓝色选中 / 悬停底色） -->
                     <ListBox ItemsSource="{Binding SchemeRows}"
-                             BorderThickness="0" Background="Transparent"
+                             BorderThickness="0" Background="Transparent" Focusable="False"
                              HorizontalContentAlignment="Stretch"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              ScrollViewer.VerticalScrollBarVisibility="Auto">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <ContentPresenter SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <Grid Margin="0,1">
@@ -468,32 +992,101 @@
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto"/>
+                                        <!-- SharedSizeGroup：与表头列宽对齐（作用域在方案面板 DockPanel） -->
+                                        <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColCheck"/>
                                         <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColHold"/>
+                                        <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColPlus"/>
+                                        <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColInterval"/>
+                                        <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColMs2"/>
+                                        <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColEye"/>
+                                        <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColDel"/>
                                     </Grid.ColumnDefinitions>
                                     <CheckBox IsChecked="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}"
-                                              VerticalAlignment="Center"
+                                              Style="{StaticResource RoundCheckStyle}"
                                               ToolTip="启用 / 停用该连发键（双宏为整体启停）"/>
                                     <TextBlock Grid.Column="1" Text="{Binding KeyName}"
                                                VerticalAlignment="Center" Margin="6,0,0,0"
                                                FontSize="12" FontWeight="SemiBold"
                                                Foreground="{DynamicResource ThemeFg}"/>
-                                    <TextBox Grid.Column="2" Width="40" Margin="0,0,2,0"
+                                    <!-- 按压时长框（虚影水印与编辑框同格叠加；显示为 [按压]+[间隔]ms） -->
+                                    <TextBlock Grid.Column="2" Width="40" Margin="0,0,2,0" TextAlignment="Center"
+                                               VerticalAlignment="Center" FontSize="11" Opacity="0.35"
+                                               IsHitTestVisible="False"
+                                               Foreground="{DynamicResource ThemeFg}">
+                                        <TextBlock.Text>
+                                            <MultiBinding Converter="{StaticResource IntervalWatermark}">
+                                                <Binding Path="HoldEdit"/>
+                                                <Binding Path="HoldMs" Mode="OneWay"/>
+                                            </MultiBinding>
+                                        </TextBlock.Text>
+                                    </TextBlock>
+                                    <TextBox Grid.Column="2" Width="40" Margin="0,0,2,0" Background="Transparent"
                                              VerticalContentAlignment="Center" HorizontalContentAlignment="Center"
+                                             Padding="-2,0"
+                                             BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
                                              FontSize="11" MaxLength="3"
-                                             Text="{Binding IntervalEdit, UpdateSourceTrigger=LostFocus}"
+                                             Text="{Binding HoldEdit, UpdateSourceTrigger=PropertyChanged}"
+                                             KeyDown="OnHoldBoxKeyDown"
+                                             LostFocus="OnHoldBoxLostFocus"
+                                             GotMouseCapture="OnTimingBoxGotMouseCapture"
+                                             ToolTip="按压时长（毫秒，10~200）：按下到弹起的持续时间。周期 = 按压 + 间隔，两者各自随机抖动 ±20%；悬停时数值变虚，点击即清空直接键入，点击别处自动生效，非法值退回原值">
+                                        <TextBox.Style>
+                                            <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+                                                <Style.Triggers>
+                                                    <!-- 悬停时数值由实变虚：提示点击即清空 -->
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter Property="Opacity" Value="0.35"/>
+                                                    </Trigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBox.Style>
+                                    </TextBox>
+                                    <TextBlock Grid.Column="3" Text="+" VerticalAlignment="Center"
+                                               Margin="0,0,2,0" FontSize="11" Opacity="0.45"
+                                               Foreground="{DynamicResource ThemeFg}"
+                                               ToolTip="连发周期 = 按压时长 + 间隔"/>
+                                    <!-- 连发间隔框（虚影水印与编辑框同格叠加）：弹起 → 下次按下 -->
+                                    <TextBlock Grid.Column="4" Width="40" Margin="0,0,2,0" TextAlignment="Center"
+                                               VerticalAlignment="Center" FontSize="11" Opacity="0.35"
+                                               IsHitTestVisible="False"
+                                               Foreground="{DynamicResource ThemeFg}">
+                                        <TextBlock.Text>
+                                            <MultiBinding Converter="{StaticResource IntervalWatermark}">
+                                                <Binding Path="IntervalEdit"/>
+                                                <Binding Path="IntervalMs" Mode="OneWay"/>
+                                            </MultiBinding>
+                                        </TextBlock.Text>
+                                    </TextBlock>
+                                    <TextBox Grid.Column="4" Width="40" Margin="0,0,2,0" Background="Transparent"
+                                             VerticalContentAlignment="Center" HorizontalContentAlignment="Center"
+                                             Padding="-2,0"
+                                             BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
+                                             FontSize="11" MaxLength="3"
+                                             Text="{Binding IntervalEdit, UpdateSourceTrigger=PropertyChanged}"
                                              KeyDown="OnIntervalBoxKeyDown"
-                                             ToolTip="连发间隔（毫秒，10~100），回车或点击别处生效，越界自动钳制"/>
-                                    <TextBlock Grid.Column="3" Text="ms" VerticalAlignment="Center"
+                                             LostFocus="OnIntervalBoxLostFocus"
+                                             GotMouseCapture="OnTimingBoxGotMouseCapture"
+                                             ToolTip="连发间隔（毫秒，10~100）：弹起到下次按下的间隔。周期 = 按压 + 间隔，两者各自随机抖动 ±20%；悬停时数值变虚，点击即清空直接键入，点击别处自动生效，非法值退回原值">
+                                        <TextBox.Style>
+                                            <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+                                                <Style.Triggers>
+                                                    <!-- 悬停时数值由实变虚：提示点击即清空 -->
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter Property="Opacity" Value="0.35"/>
+                                                    </Trigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBox.Style>
+                                    </TextBox>
+                                    <TextBlock Grid.Column="5" Text="ms" VerticalAlignment="Center"
                                                Margin="0,0,4,0" FontSize="11" Opacity="0.7"
                                                Foreground="{DynamicResource ThemeFg}"/>
                                     <!-- 键位可视化开关（lucide eye / eye-off；仅控制悬浮层显示；
-                                         样式与删除按钮统一（IconButtonStyle），全局总开关关闭时整体暗淡禁用 -->
-                                    <Button Grid.Column="4" Width="22" Height="20" Padding="0"
+                                         样式与删除按钮统一（IconButtonStyle）；与删除按钮留 4px 小间距；
+                                         全局总开关关闭时整体暗淡禁用 -->
+                                    <Button Grid.Column="6" Width="22" Height="20" Padding="0"
+                                            Margin="0,0,4,0"
                                             Command="{Binding ToggleVisualCommand}"
                                             Style="{StaticResource IconButtonStyle}"
                                             IsEnabled="{Binding DataContext.GlobalVisualEnabled, RelativeSource={RelativeSource AncestorType=Window}}"
@@ -523,24 +1116,27 @@
                                             </Path>
                                         </Grid>
                                     </Button>
-                                    <Button Grid.Column="5" Content="✕" Width="22" Height="20"
+                                    <Button Grid.Column="7" Content="✕" Width="22" Height="20"
                                             Padding="0" FontSize="10"
                                             Command="{Binding DeleteCommand}"
                                             Style="{StaticResource IconButtonStyle}"
                                             ToolTip="删除该连发键"/>
-                                    <!-- 第二行：双宏辅键名（占位对齐，无勾选 / 无删除；与主键共为一个整体） -->
-                                    <Grid Grid.Row="1" Visibility="{Binding IsDual, Converter={StaticResource BoolToVis}}">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="1" Margin="6,0,0,0" FontSize="12"
-                                                   Foreground="{DynamicResource ThemeFg}" Opacity="0.75">
-                                            <Run Text="⇄ " FontWeight="SemiBold"/><Run Text="{Binding SecondKeyName, Mode=OneWay}"/>
-                                        </TextBlock>
-                                    </Grid>
+                                    <!-- 第二行：第二勾选框（首键参与连发开关）+ 双宏辅键名。
+                                         取消勾选 = 首键仅作启停触发键，次键单独连发不交替。
+                                         直接作为外层 Grid 的第 1 行单元格（列 0 = 勾选框列、列 1 = 键名列）：
+                                         不得用嵌套 Grid 承载（嵌套会被并进第 0 列的 Auto 宽度把共享勾选列
+                                         撑宽、挤瘦键名列；此前更因嵌套 SharedSizeGroup + 星号列引发
+                                         WPF 无限布局循环 —— UI 线程 100% 空转、列表整行被挤出面板）。 -->
+                                    <CheckBox Grid.Row="1" IsChecked="{Binding FirstKeyFiring, UpdateSourceTrigger=PropertyChanged}"
+                                              Style="{StaticResource RoundCheckStyle}"
+                                              Visibility="{Binding IsDual, Converter={StaticResource BoolToVis}}"
+                                              ToolTip="首键位是否参与连发：勾选 = 首键与次键交替连发（1-2-1-2）；取消 = 首键仅作启停开关，按一次启动 / 再按一次停止次键单独连发"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="1" Margin="6,0,0,0" FontSize="12"
+                                               VerticalAlignment="Center"
+                                               Visibility="{Binding IsDual, Converter={StaticResource BoolToVis}}"
+                                               Foreground="{DynamicResource ThemeFg}" Opacity="0.75">
+                                        <Run Text="⇄ " FontWeight="SemiBold"/><Run Text="{Binding SecondKeyName, Mode=OneWay}"/>
+                                    </TextBlock>
                                 </Grid>
                             </DataTemplate>
                         </ListBox.ItemTemplate>

@@ -11,12 +11,182 @@
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Padding" Value="10,4"/>
             <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <!-- 全部按钮不参与键盘焦点：点击后 Space 不得重复触发、方向键不得游走焦点
+                 （纯鼠标操作策略；文本输入 TextBox 不受影响） -->
+            <Setter Property="Focusable" Value="False"/>
+            <!-- 圆角模板：全局方框改圆角（4px；点击边框变色反馈保留默认 chrome 行为不变） -->
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4">
+                            <ContentPresenter Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource TabIdleBg}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource ThemeBorder}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
         <Style x:Key="StatusTextStyle" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource ThemeFg}"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
             <Setter Property="Margin" Value="8,0"/>
             <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <!-- 全局输入框圆角（TextBox 无内置圆角，借样式资源 Template 实现方框统一圆角） -->
+        <Style TargetType="TextBox">
+            <Setter Property="Background" Value="{DynamicResource ThemeButtonBg}"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeFg}"/>
+            <Setter Property="CaretBrush" Value="{DynamicResource ThemeFg}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4">
+                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 下拉框圆角模板（全局方框统一圆角 4px；下拉弹层与箭头沿用系统默认 chrome） -->
+        <Style x:Key="RoundedComboStyle" TargetType="ComboBox">
+            <Setter Property="Background" Value="{DynamicResource ThemeButtonBg}"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeFg}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="8,0"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <!-- 圆角框体 + 系统箭头区（ToggleButton 透明覆盖保证可点与开合行为不变） -->
+                            <Border x:Name="Chrome"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="4"/>
+                            <ToggleButton x:Name="Toggle" Background="Transparent" BorderThickness="0"
+                                          Focusable="False" ClickMode="Press"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border Background="Transparent">
+                                            <Path Data="M0,0 L4,4 8,0" Stroke="{DynamicResource ThemeFg}"
+                                                  StrokeThickness="1.5" HorizontalAlignment="Right"
+                                                  VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        </Border>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <ContentPresenter Margin="{TemplateBinding Padding}"
+                                              VerticalAlignment="Center" HorizontalAlignment="Left"
+                                              Content="{TemplateBinding SelectionBoxItem}"
+                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                              IsHitTestVisible="False"/>
+                            <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}"
+                                   Placement="Bottom" AllowsTransparency="True" Focusable="False"
+                                   PopupAnimation="Slide">
+                                <Border Background="{DynamicResource ThemePanel}"
+                                        BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1"
+                                        CornerRadius="4" Margin="0,2,0,0" Padding="0,2"
+                                        MinWidth="{TemplateBinding ActualWidth}">
+                                    <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="ItemContainerStyle">
+                <Setter.Value>
+                    <Style TargetType="ComboBoxItem">
+                        <Setter Property="Padding" Value="8,4"/>
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ComboBoxItem">
+                                    <Border x:Name="ItemBg" Background="Transparent" CornerRadius="3"
+                                            Padding="{TemplateBinding Padding}">
+                                        <ContentPresenter/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsHighlighted" Value="True">
+                                            <Setter TargetName="ItemBg" Property="Background" Value="{DynamicResource TabIdleBg}"/>
+                                        </Trigger>
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter TargetName="ItemBg" Property="Background" Value="{DynamicResource TabIdleBg}"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 方案列表圆形勾选框（表头全选 + 行启用 + 双宏首键开关共用）：
+             圆形框，底色经 ThemeRoundCheckFill 随主题切换（日间 = 主题紫、夜间 = 主题金），
+             勾选符号 = 白色圆头对勾；半选态（表头部分行启用）显示白色短横线；
+             悬停圆框描边提亮反馈，禁用时整体 40% 透明 -->
+        <Style x:Key="RoundCheckStyle" TargetType="CheckBox">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Grid Width="15" Height="15" Background="Transparent">
+                            <Ellipse x:Name="Ring"
+                                     Fill="{DynamicResource ThemeRoundCheckFill}"/>
+                            <Path x:Name="Check"
+                                  Data="M 3.6,7.8 L 6.4,10.6 L 11.5,4.4"
+                                  Stroke="White" StrokeThickness="1.8"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round" Opacity="0"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Check" Property="Opacity" Value="1"/>
+                            </Trigger>
+                            <!-- 半选态（IsChecked=null，表头部分行启用时）：白色短横线 -->
+                            <Trigger Property="IsChecked" Value="{x:Null}">
+                                <Setter TargetName="Check" Property="Opacity" Value="1"/>
+                                <Setter TargetName="Check" Property="Data" Value="M 4.4,7.5 L 10.6,7.5"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Ring" Property="Stroke" Value="{DynamicResource ThemeFg}"/>
+                                <Setter TargetName="Ring" Property="StrokeThickness" Value="1"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.4"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
     </Application.Resources>
 </Application>
