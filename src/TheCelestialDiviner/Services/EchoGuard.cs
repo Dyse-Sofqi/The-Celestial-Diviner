@@ -6,32 +6,36 @@ namespace TheCelestialDiviner.Services;
 /// dd63330 经键盘类驱动过滤注入，事件在系统层面与物理按键完全同源：
 /// 无 LLKHF_INJECTED 标记、Raw Input 亦归因到物理键盘设备——低级钩子
 /// 无法从事件本身区分"自己注入的回环"与"用户物理输入"。若不消除，
-/// 任务注入的目标键会再次触发注册源：Toggle 自环方案被回环立即关断、
-/// Hold 自环方案被回环抬起不断打断（表现即"F1-F12 区域在 DD 模式失效"）。
+/// 任务注入的目标键会再次触发注册源：Toggle 自环方案被回环立即关断
+/// （表现即"开关模式连发莫名其妙自动停止"）、Hold 自环方案被回环抬起不断打断。
 ///
-/// 识别依据（时间线）：回环事件由本进程注入产生，其到达钩子的时刻
-/// （KBDLLHOOKSTRUCT.time，与注入同一时基）与注入时刻相差仅数毫秒。
-/// 每次成功注入登记一个"待决回环名额"，事件在名额有效期内到达即判回环。
+/// 识别依据（顺序配额）：注入与回环在同一虚拟键同一方向上严格保序、一一对应。
+/// 每次成功注入登记一个"待决回环名额"（FIFO），该键同方向的下一次到达事件
+/// 即消费一个名额判为回环——不设到达延迟门槛。旧版按"注入时刻 ±12ms 时间窗"
+/// 匹配，游戏卡顿引发的输入管线延迟尖峰下回环迟到即漏判，漏过的回环被当成
+/// 物理按键把运行中的 Toggle 翻转关断；FIFO 按序匹配对延迟完全不敏感。
 ///
 /// 撞车自愈：物理事件与回环抢中同一名额时，真实回环因名额耗尽而漏过，
 /// 整体效果守恒——例如自环 Toggle 的物理按键要么自身翻转、要么其 displaced
 /// 回环翻转，恰好一次；Hold 自环的物理释放要么直接通过、要么由 displaced
 /// 回环抬起来停止任务，不会出现任务卡死。
 ///
-/// 名额有过期时间：回环未按期到达（钩子被系统移除等异常）自动失效，
-/// 不会吞掉之后的物理事件。
+/// 名额有过期时间：回环真丢失（钩子线程被系统超时跳过、钩子被移除等异常）
+/// 时名额到期失效并在下次该键事件时惰性清理，不会长期滞留吞掉之后的物理
+/// 按键。代价：回环丢失后、过期前的第一次物理按键可能被吞（按了无效果，
+/// 再按恢复）——属罕见极端情况，且好于漏气回环把 Toggle 翻转关断。
 /// </summary>
 public static class EchoGuard
 {
-    /// <summary>注入 → 回环到达的最大允许延迟。实测 1~3ms，留裕量。
-    /// 依赖程序启动时的 timeBeginPeriod(1)（TimerResolutionService）提供毫秒级
-    /// 时间戳粒度——默认 15.6ms 粒度下预登记与内核事件时间戳可能跨刻度相差 15.6ms。</summary>
-    private const int MatchWindowMs = 12;
+    /// <summary>名额过期时间（毫秒）。到期名额视为回环真丢失，在下次该键事件时
+    /// 惰性清理。须覆盖极端输入管线积压下的回环延迟（秒级整体冻结除外——
+    /// 冻结期间注入与回环一起停摆，恢复后按序到达仍在窗口内）。</summary>
+    private const int ExpiryMs = 2000;
 
-    /// <summary>每个虚拟键每个方向的待决名额上限。须覆盖 MatchWindowMs 内的全部
-    /// 注入（最小连发间隔 1ms → 约 12 个 + 裕量），否则钩子线程被抢占、回环
-    /// 延迟送达时，旧时间戳在池中找不到匹配名额而漏过。</summary>
-    private const int MaxPendingPerVk = 24;
+    /// <summary>每个虚拟键每个方向的待决名额上限。须覆盖过期窗口内的全部注入
+    /// （极限档约 45 发/秒 × 2s = 90，取 128 留裕量），超出丢弃最旧名额，
+    /// 防止回环系统性丢失（钩子失效）时名额无限累积。</summary>
+    private const int MaxPendingPerVk = 128;
 
     private sealed class VkState
     {
@@ -85,27 +89,14 @@ public static class EchoGuard
             var list = down ? state.PendingDown : state.PendingUp;
             if (list.Count == 0) return false;
 
-            // 取与事件时间最接近且在窗口内的名额（突发延迟下比"最旧优先"分布更均匀）。
-            var best = -1;
-            var bestDelta = int.MaxValue;
-            for (var i = 0; i < list.Count; i++)
-            {
-                var delta = unchecked(eventTime - list[i]);
-                if (delta is >= -MatchWindowMs and <= MatchWindowMs && (best < 0 || Abs(delta) < bestDelta))
-                {
-                    best = i;
-                    bestDelta = Abs(delta);
-                }
-            }
-            if (best >= 0)
-            {
-                list.RemoveAt(best);
-                return true;
-            }
+            // 惰性过期：回环真丢失的名额到期释放，避免陈旧名额吞掉物理事件。
+            list.RemoveAll(t => unchecked(eventTime - t) > ExpiryMs);
+            if (list.Count == 0) return false;
 
-            // 清理过期名额（回环未到达的异常情况），避免陈旧名额吞掉物理事件。
-            list.RemoveAll(t => unchecked(eventTime - t) > MatchWindowMs);
-            return false;
+            // FIFO 按序消除：同键同方向事件在输入管线内保序，注入名额与回环
+            // 事件一一对应；不限到达延迟（时间窗硬门槛会在延迟尖峰下漏判）。
+            list.RemoveAt(0);
+            return true;
         }
     }
 
@@ -121,6 +112,4 @@ public static class EchoGuard
             States[vk] = state = new VkState();
         return state;
     }
-
-    private static int Abs(int v) => v < 0 ? -v : v;
 }

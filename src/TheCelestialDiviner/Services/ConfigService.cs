@@ -44,7 +44,7 @@ public sealed class ConfigService
                 var json = File.ReadAllText(ConfigPath);
                 var config = JsonSerializer.Deserialize<AppConfig>(json, JsonOptions) ?? new AppConfig();
                 MigrateIfNeeded(config);
-                NormalizeIntervals(config);
+                NormalizeTiming(config);
                 config.SoundVolume = Compat.Clamp(config.SoundVolume, 0, 100);
                 return config;
             }
@@ -84,34 +84,55 @@ public sealed class ConfigService
 
         if (fromVersion < 4)
         {
-            // v3 → v4：旧配置无档位字段（反序列化时属性初始化器已生成 3 个空档位），
+            // v3 → v4：旧配置无档位字段（反序列化时属性初始化器已生成 4 个空档位），
             // 先清空再把存量方案整体迁入档位①，其余档位为空。
             // v4 配置（Version >= 4）不走此处：Profiles 已随 JSON 反序列化还原。
             config.Profiles.Clear();
             config.Profiles.Add(config.Schemes);
-            while (config.Profiles.Count < 3)
+            while (config.Profiles.Count < 4)
                 config.Profiles.Add(new Dictionary<string, KeyScheme>(StringComparer.Ordinal));
+        }
+        if (fromVersion < 8)
+        {
+            // v7 → v8：状态提醒默认激活——存量配置（含开发期落盘的关闭态）统一置为开启；
+            // 迁移只执行一次（落盘为 v8 后跳过），用户此后手动关闭不会被重置。
+            config.StatusReminderEnabled = true;
         }
         // 反序列化默认 ActiveProfile = 0（方案①），无需显式处理。
         // v5：键位可视化开关表——字段有默认值（空字典 = 全部键位默认开启），无需迁移动作。
+        // v6：连发时序增加按压时长（HoldMs）——缺失 / 非法值由 NormalizeTiming 落到默认 26ms，无需迁移动作。
+        // v7：状态提醒开关——字段有默认值，无需迁移动作。
+        // v9：切换方案热键——字段有默认值（HasKey = false 未设置），无需迁移动作。
+        // v10：“成为衍天高手”语音按钮——字段有默认值（关闭），无需迁移动作。
 
         config.Version = AppConfig.CurrentVersion;
-        Logger.Info($"配置 v{fromVersion} 已迁移到 v{AppConfig.CurrentVersion}（总开关默认关闭、默认键 F9、开关模式分区、方案三档位、键位可视化）。" );
+        Logger.Info($"配置 v{fromVersion} 已迁移到 v{AppConfig.CurrentVersion}（总开关默认关闭、默认键 F9、开关模式分区、方案四档位、键位可视化）。" );
     }
 
     /// <summary>
-    /// 连发间隔归一化：低于下限（10ms）的值统一提升到下限。
-    /// 加载与导入配置后调用，覆盖旧版本配置里的 1~9ms 间隔。
+    /// 连发时序归一化：间隔低于下限（10ms）提升到下限；按压时长缺失 / 非法（≤0，
+    /// 旧版配置无此字段）落到默认值，其余钳位到 10~200。
+    /// 加载与导入配置后调用。
     /// </summary>
-    public static void NormalizeIntervals(AppConfig config)
+    public static void NormalizeTiming(AppConfig config)
     {
         config.DefaultIntervalMs =
             Compat.Clamp(config.DefaultIntervalMs, Constants.MinIntervalMs, Constants.MaxIntervalMs);
+        config.DefaultHoldMs = NormalizeHold(config.DefaultHoldMs);
+        if (config.TimingPreset is not 0 and not 1) config.TimingPreset = 0;
         foreach (var scheme in config.Schemes.Values)
             foreach (var target in scheme.Targets)
+            {
                 target.IntervalMs =
                     Compat.Clamp(target.IntervalMs, Constants.MinIntervalMs, Constants.MaxIntervalMs);
+                target.HoldMs = NormalizeHold(target.HoldMs);
+            }
     }
+
+    /// <summary>单个按压时长归一化：缺失 / 非法（≤0）落默认值，其余钳位。</summary>
+    private static int NormalizeHold(int holdMs) =>
+        holdMs <= 0 ? Constants.DefaultHoldMs
+                    : Compat.Clamp(holdMs, Constants.MinHoldMs, Constants.MaxHoldMs);
 
     /// <summary>保存配置（原子写入：先写临时文件再替换）。</summary>
     public void Save(AppConfig config)

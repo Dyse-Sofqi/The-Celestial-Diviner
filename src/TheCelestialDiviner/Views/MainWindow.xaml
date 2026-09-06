@@ -235,9 +235,11 @@
                                    CustomPopupPlacementCallback="{x:Static conv:MenuPlacements.AboveTarget}"
                                    IsOpen="{TemplateBinding IsSubmenuOpen}" AllowsTransparency="True"
                                    Focusable="False" PopupAnimation="Fade">
+                                <!-- 上下内边距必须为 0：内边距会使首行比分组项低 2px、
+                                     弹层比内容高 4px，二级弹出时行与主菜单项错位 -->
                                 <Border Background="{DynamicResource ThemePanel}"
                                         BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1"
-                                        CornerRadius="4" Padding="0,2">
+                                        CornerRadius="4" Padding="0">
                                     <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"/>
                                 </Border>
                             </Popup>
@@ -264,18 +266,24 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="MenuItem">
                         <Grid>
-                            <!-- 左内边距 14 + ● 标记列 14 = 选项文本起点 28px，
-                                 与菜单键按钮文本起点（内边距 9 + 图标 13 + 间距 6）左对齐 -->
-                            <Border x:Name="Bg" Background="Transparent" Padding="14,5">
+                            <!-- ● 标记列仅在叶子项保留（Auto 列 + ● Hidden 占位 MinWidth 14）：
+                                 叶子文本起点 = 14 + 14 = 28px，选中与否对齐；分组项由 Role 触发器
+                                 把 ● 折叠为 Collapsed → 列宽归零，文本起点 14px —— 主菜单选项
+                                 无选中效果，不留选中缩进。
+                                 圆角 3 = 弹层圆角 4 − 边框 1：高亮底色首/末项与弹层内圆角
+                                 同心贴合，不再以方角溢出弹层圆角范围 -->
+                            <Border x:Name="Bg" Background="Transparent" Padding="14,5" CornerRadius="3">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="14"/>
+                                        <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
+                                    <!-- 叶子项未选中时用 Hidden 而非 Collapsed：● 仍参与布局占位，
+                                         保持 14px 列宽，选中与未选中项文本起点一致 -->
                                     <TextBlock x:Name="CheckMark" Text="●" FontSize="9" FontWeight="Bold"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center"
-                                               Foreground="{DynamicResource AccentPrimary}" Visibility="Collapsed"/>
+                                               MinWidth="14" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource AccentPrimary}" Visibility="Hidden"/>
                                     <ContentPresenter Grid.Column="1" ContentSource="Header"
                                                       VerticalAlignment="Center" RecognizesAccessKey="True"/>
                                     <TextBlock x:Name="SubArrow" Grid.Column="2" Text="▸" FontSize="10"
@@ -290,9 +298,11 @@
                                    CustomPopupPlacementCallback="{x:Static conv:MenuPlacements.RightOfTarget}"
                                    IsOpen="{TemplateBinding IsSubmenuOpen}"
                                    AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
+                                <!-- 上下内边距必须为 0：RightOfTarget 已使弹层边框与分组项顶边对齐，
+                                     再加内边距会令首行比分组项低 2px、弹层比内容高 4px，与主菜单项错位 -->
                                 <Border Background="{DynamicResource ThemePanel}"
                                         BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1"
-                                        CornerRadius="4" Padding="0,2">
+                                        CornerRadius="4" Padding="0">
                                     <ScrollViewer MaxHeight="460" VerticalScrollBarVisibility="Auto">
                                         <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"/>
                                     </ScrollViewer>
@@ -302,18 +312,20 @@
                         <ControlTemplate.Triggers>
                             <Trigger Property="Role" Value="SubmenuHeader">
                                 <Setter TargetName="SubArrow" Property="Visibility" Value="Visible"/>
+                                <!-- 分组项（主菜单选项）无选中效果：折叠 ● 占位列，消除缩进 -->
+                                <Setter TargetName="CheckMark" Property="Visibility" Value="Collapsed"/>
                             </Trigger>
-                            <!-- 悬停 = 选中同款紫底白字（IsHighlighted 覆盖菜单展开路径的路径高亮，
-                                 IsMouseOver 纯命中测试保证悬停必有反馈，二者视觉一致） -->
+                            <!-- 悬停 = 浅灰底主题字（IsHighlighted 覆盖菜单展开路径的路径高亮，
+                                 IsMouseOver 纯命中测试保证悬停必有反馈，二者视觉一致）；
+                                 用 ThemeButtonBg——TabIdleBg 日间与 ThemePanel 弹层同值会隐形 -->
                             <Trigger Property="IsHighlighted" Value="True">
-                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource AccentPrimary}"/>
-                                <Setter Property="Foreground" Value="White"/>
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource ThemeButtonBg}"/>
                             </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource AccentPrimary}"/>
-                                <Setter Property="Foreground" Value="White"/>
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource ThemeButtonBg}"/>
                             </Trigger>
-                            <!-- 选中（当前生效项）：同款紫底白字 + 常驻白色 ●（与悬停项区分） -->
+                            <!-- 选中（当前生效项）：紫底白字 + 常驻白色 ●（与浅灰悬停项区分）；
+                                 置于悬停触发之后，悬停选中项仍保持紫底 -->
                             <Trigger Property="IsChecked" Value="True">
                                 <Setter TargetName="Bg" Property="Background" Value="{DynamicResource AccentPrimary}"/>
                                 <Setter Property="Foreground" Value="White"/>
@@ -391,6 +403,31 @@
                 </Trigger>
             </Style.Triggers>
         </Style>
+
+        <!-- 浮动滚动条 ScrollViewer（方案列表专用）：纵向滚轴与内容叠放在同一格、不占布局列——
+             默认模板会把滚轴排进独立 Auto 列，列表满溢时行内容被挤窄 6px；
+             改为悬浮后行宽恒定，滚轴贴右缘浮于内容之上（透明轨道 + 细长圆角滑块沿用全局 ScrollBar 样式），
+             PART_* 命名保持 ScrollViewer 的滚轴事件与偏移同步接线 -->
+        <Style x:Key="OverlayScrollViewerStyle" TargetType="ScrollViewer">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollViewer">
+                        <Grid Background="{TemplateBinding Background}">
+                            <ScrollContentPresenter x:Name="PART_ScrollContentPresenter"
+                                                    Content="{TemplateBinding Content}"
+                                                    ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                    CanContentScroll="{TemplateBinding CanContentScroll}"/>
+                            <ScrollBar x:Name="PART_VerticalScrollBar" Orientation="Vertical"
+                                       HorizontalAlignment="Right" Margin="0,1,1,1" Width="6"
+                                       Value="{Binding VerticalOffset, Mode=OneWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                       Maximum="{TemplateBinding ScrollableHeight}"
+                                       ViewportSize="{TemplateBinding ViewportHeight}"
+                                       Visibility="{TemplateBinding ComputedVerticalScrollBarVisibility}"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <DockPanel>
@@ -448,11 +485,12 @@
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                     <!-- 状态提醒按钮（lucide message-square-dot）：开启后总开关开启时常驻应用图标键帽，
                          任一方案连发时自动隐藏，全部停止 2.5s 后恢复；不受键位可视化总开关约束。
-                         激活态 = 金色墨迹（与夜间模式钮同源 AccentGold），未激活 = 默认文字色；默认激活 -->
+                         激活态 = 金色墨迹（与夜间模式钮同源 AccentGold），未激活 = 默认文字色；默认激活。
+                         悬停说明不在 Tooltip：经 MouseEnter 显示于左下注释区（OnBottomBarCommentEnter） -->
                     <Button x:Name="StatusReminderButton" Width="26" Height="26" Padding="0"
                             Style="{StaticResource IconButtonStyle}"
                             Command="{Binding ToggleStatusReminderCommand}"
-                            ToolTip="状态提醒：总开关开启时在键帽悬浮区常驻应用图标键帽；任一方案连发时自动隐藏，全部连发停止 2.5 秒后恢复（不受键位可视化总开关约束）"
+                            MouseEnter="OnBottomBarCommentEnter" MouseLeave="OnCommentMouseLeave"
                             Margin="0,0,6,0">
                         <Grid Background="Transparent">
                             <Path StrokeThickness="1.8" Fill="Transparent"
@@ -543,13 +581,15 @@
                         </Grid>
                     </Button>
                 </StackPanel>
-                <!-- 右二：全局开关（热键录入，自右面板首行搬入） -->
-                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                <!-- 右二：全局开关（热键录入，自右面板首行搬入）。
+                     悬停说明不在 Tooltip：经 MouseEnter 显示于左下注释区（OnBottomBarCommentEnter） -->
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"
+                            x:Name="MasterKeySettingPanel"
+                            MouseEnter="OnBottomBarCommentEnter" MouseLeave="OnCommentMouseLeave">
                     <TextBlock Text="全局开关热键设置：" VerticalAlignment="Center" FontSize="11"
                                Foreground="{DynamicResource ThemeFg}"/>
                     <Button Height="26" MinWidth="34" Padding="4,0" Margin="0,0,8,0"
-                            Command="{Binding SetMasterKeyPickingCommand}"
-                            ToolTip="点击修改总开关键：点击左侧键位或直接按键即完成录入（默认 F9）">
+                            Command="{Binding SetMasterKeyPickingCommand}">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
                                 <!-- 夜间沿用近黑底白字；日间复用普通按钮配色（HotkeySetting* 随主题注入） -->
@@ -563,6 +603,40 @@
                                         <Setter Property="IsEnabled" Value="False"/>
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding PickingKind}" Value="AddScheme">
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </StackPanel>
+                <!-- 右三：切换方案设置（Dock=Right 声明在全局开关热键设置之后 → 落于其左侧）。
+                     按钮缺省显示"未设置"；点击进入录入：左键左侧键位 / 直接按键设置，
+                     右键已设置键位取消恢复缺省；设置后按下该键按顺序切换非空方案档位。
+                     悬停 / 录入时经 MouseEnter/Leave 在注释区显示说明 -->
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"
+                            MouseEnter="OnCycleKeyCommentEnter" MouseLeave="OnCommentMouseLeave">
+                    <TextBlock Text="切换方案设置：" VerticalAlignment="Center" FontSize="11"
+                               Foreground="{DynamicResource ThemeFg}"/>
+                    <Button Height="26" MinWidth="34" Padding="4,0" Margin="0,0,8,0"
+                            Command="{Binding SetCycleKeyPickingCommand}"
+                            ToolTip="切换方案热键：按下按 ①→②→③→④ 顺序切换到下一个非空方案档位；点击按钮进入录入（左键键位 / 直接按键设置，右键已设置键位取消恢复未设置）">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
+                                <!-- 配色与全局开关热键按钮同源（HotkeySetting* 随主题注入） -->
+                                <Setter Property="Background" Value="{DynamicResource HotkeySettingBg}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource HotkeySettingFg}"/>
+                                <Setter Property="BorderBrush" Value="{DynamicResource HotkeySettingBorder}"/>
+                                <Setter Property="Content" Value="{Binding CycleKeyText}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding PickingKind}" Value="SetCycleKey">
+                                        <Setter Property="Content" Value="录入中…"/>
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding PickingKind}" Value="AddScheme">
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding PickingKind}" Value="SetMasterKey">
                                         <Setter Property="IsEnabled" Value="False"/>
                                     </DataTrigger>
                                 </Style.Triggers>
@@ -629,10 +703,28 @@
                             Height="26" Padding="8,0" Margin="0,0,8,0" Command="{Binding ExportCommand}"
                             ToolTip="将当前档位的连发键配置导出为 JSON 文件"/>
                     <!-- 调整可视化键帽位置：弹出独立窗口（应用图标键帽 + 区域虚线框），拖拽定位，
-                         键帽上方确定按钮保存退出 -->
-                    <Button Content="调整可视化位置" Style="{StaticResource IconButtonStyle}"
+                         键帽上方确定按钮保存退出。悬停说明不在 Tooltip：经 MouseEnter
+                         显示于左下注释区（OnBottomBarCommentEnter） -->
+                    <Button x:Name="AdjustVisualizerButton" Content="调整可视化位置" Style="{StaticResource IconButtonStyle}"
                             Height="26" Padding="8,0" Command="{Binding AdjustVisualizerCommand}"
-                            ToolTip="调整键帽显示位置：拖动应用图标键帽到目标处，虚线框为键帽可显示区域，点击确定保存"/>
+                            MouseEnter="OnBottomBarCommentEnter" MouseLeave="OnCommentMouseLeave"/>
+                    <!-- 成为衍天高手：激活时总开关启动的语音播报改为「衍天高手启动」（关闭播报不变）。
+                         激活态墨迹金色（AccentGold），未激活常规文字色（ThemeFg）——均为主题资源，
+                         日间 / 夜间模式自动适配 -->
+                    <Button Content="成为衍天高手" Height="26" Padding="8,0" Margin="8,0,0,0"
+                            Command="{Binding ToggleDivinerVoiceCommand}"
+                            ToolTip="成为衍天高手：激活后总开关启动的语音播报改为「衍天高手启动」（关闭播报不变）">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
+                                <Setter Property="Foreground" Value="{DynamicResource ThemeFg}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding DivinerVoiceEnabled}" Value="True">
+                                        <Setter Property="Foreground" Value="{DynamicResource AccentGold}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
                 </StackPanel>
             </DockPanel>
         </Border>
@@ -913,7 +1005,9 @@
                          ✕ = 删除全部勾选的连发键；底部边框线与列表内容分隔 -->
                     <Border DockPanel.Dock="Top" BorderBrush="{DynamicResource ThemeBorder}"
                             BorderThickness="0,0,0,1" Margin="0,0,0,2">
-                        <Grid Margin="0,0,0,3">
+                                    <!-- 滚动条浮动后行内容统一右让 8px：滚轴（6px 滑块 + 1px 内收）悬浮于余量条上，
+                                         不再覆盖行尾 eye/✕ 按钮；与列表行 ItemsPresenter 的右让量一致，列对齐不变 -->
+                                    <Grid Margin="0,0,8,3">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColCheck"/>
                             <ColumnDefinition Width="*"/>
@@ -968,12 +1062,29 @@
                         </Grid>
                     </Border>
 
-                    <!-- 方案列表（ItemContainerStyle 重写模板：无默认蓝色选中 / 悬停底色） -->
+                    <!-- 方案列表（ItemContainerStyle 重写模板：无默认蓝色选中 / 悬停底色）。
+                         滚动条浮动：自绘 ListBox 模板内接 OverlayScrollViewerStyle，
+                         满溢时滚轴悬浮于行右缘、行内容不被挤压；
+                         底部 8px 缝隙让被裁切的最后一行 / 滚轴与「从左侧键盘管理方案」按钮保持间隔 -->
                     <ListBox ItemsSource="{Binding SchemeRows}"
                              BorderThickness="0" Background="Transparent" Focusable="False"
                              HorizontalContentAlignment="Stretch"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                             ScrollViewer.VerticalScrollBarVisibility="Auto">
+                             Margin="0,0,0,8">
+                        <ListBox.Template>
+                            <ControlTemplate TargetType="ListBox">
+                                <Border Background="{TemplateBinding Background}"
+                                        BorderBrush="{TemplateBinding BorderBrush}"
+                                        BorderThickness="{TemplateBinding BorderThickness}">
+                                    <ScrollViewer Style="{StaticResource OverlayScrollViewerStyle}"
+                                                  Focusable="False"
+                                                  HorizontalScrollBarVisibility="Disabled"
+                                                  VerticalScrollBarVisibility="Auto">
+                                        <!-- 行内容右让 8px 给悬浮滚轴（与表头 Grid 右让量一致） -->
+                                        <ItemsPresenter Margin="0,0,8,0"/>
+                                    </ScrollViewer>
+                                </Border>
+                            </ControlTemplate>
+                        </ListBox.Template>
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
                                 <Setter Property="Template">

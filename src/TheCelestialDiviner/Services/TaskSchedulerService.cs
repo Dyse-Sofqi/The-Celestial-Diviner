@@ -25,6 +25,17 @@ public sealed class RunningTask
 
     /// <summary>工作线程。</summary>
     public Thread? Thread;
+
+    private int _inFlight;   // 在途点击计数（含按压 Sleep，退出 / 重建前须归零防止按键卡死）
+
+    /// <summary>是否有正在执行的点击（按下 → 按住 → 抬起全过程）。</summary>
+    public bool IsBusy => Volatile.Read(ref _inFlight) > 0;
+
+    /// <summary>标记一次点击开始（任务线程 / 滚轮线程池回调调用）。</summary>
+    public void BeginClick() => Interlocked.Increment(ref _inFlight);
+
+    /// <summary>标记一次点击结束。</summary>
+    public void EndClick() => Interlocked.Decrement(ref _inFlight);
 }
 
 /// <summary>
@@ -43,12 +54,24 @@ public sealed class TaskSchedulerService
     /// <summary>运行日志事件（供 UI 日志面板显示）。</summary>
     public event Action<string>? Log;
 
+    /// <summary>连发脉冲事件：目标键每实际发射一次触发一次（任务线程回调，订阅方自行封送）。</summary>
+    public event Action<TargetKeyConfig>? TargetFired;
+
+    /// <summary>
+    /// 连发活动状态变更事件：从"全部停止" ↔ "任一任务激活"翻转时触发一次
+    /// （参数 = 是否有连发中；钩子线程 / 任务线程回调，订阅方自行封送 UI 线程）。
+    /// </summary>
+    public event Action<bool>? FiringChanged;
+
     private readonly object _gate = new();
+    private static readonly object RandGate = new();
+    private static readonly Random Rand = new();   // 仅在 RandGate 内使用（.NET Framework 无 Random.Shared）
     private readonly List<RunningTask> _tasks = new();
     private readonly Dictionary<InputSource, List<RunningTask>> _sourceMap = new();
     private readonly HashSet<InputSource> _downSources = new();   // 物理按住中的输入源（防自动重复）
     private int _activeHoldCount;                                  // 正在连发的 Hold 任务数（Interlocked）
     private bool _masterEnabled = true;
+    private bool _anyFiring;                                       // 上次聚合激活态（FiringChanged 去重）
 
     /// <summary>根据配置重建全部任务：先停止并回收旧线程，再为新方案启动线程。</summary>
     public void ApplyConfig(AppConfig config)
@@ -96,6 +119,7 @@ public sealed class TaskSchedulerService
             }
 
             OnLog($"任务调度器已应用配置：{_tasks.Count} 个连发任务运行中。");
+            NotifyFiringChangedLocked();   // 重建后全部处于停止态：向状态提醒键帽同步（若此前连发中）
         }
     }
 
@@ -129,6 +153,7 @@ public sealed class TaskSchedulerService
             {
                 OnLog("全局启用：连发任务待触发（不自动重启）。");
             }
+            NotifyFiringChangedLocked();
         }
     }
 
@@ -165,8 +190,26 @@ public sealed class TaskSchedulerService
                 if (isWheel && task.Configs[0].Mode == TriggerMode.Hold)
                 {
                     // 滚轮为脉冲输入（无“按住”状态）：Hold 目标键直接发送一次完整点击。
-                    // SendInput 为轻量系统调用，在钩子线程执行不会造成阻塞。
-                    InputSimulatorService.Click(task.Configs[0]);
+                    // 点击含按压时长 Sleep（毫秒级），不得阻塞钩子线程 → 投递线程池；
+                    // 以配置实例为锁串行化，保证同方案连续滚动格的 down/up 严格成对不交错。
+                    var cfg = task.Configs[0];
+                    task.BeginClick();   // 入队前计数：防止"已入队未启动"的点击躲过退出等待
+                    ThreadPool.QueueUserWorkItem(_ =>
+                    {
+                        try
+                        {
+                            lock (cfg)
+                                InputSimulatorService.Click(cfg, JitterMs(cfg.HoldMs, Constants.MinHoldMs, Constants.MaxHoldMs));
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.Error($"滚轮脉冲点击异常（{InputNameMapper.GetTargetName(cfg)}）。", ex);
+                        }
+                        finally
+                        {
+                            task.EndClick();
+                        }
+                    });
                 }
                 else
                 {
@@ -177,6 +220,7 @@ public sealed class TaskSchedulerService
 
             if (!isWheel)
                 OnLog($"输入源 [{InputNameMapper.GetSourceName(source)}] 按下。");
+            NotifyFiringChangedLocked();
         }
     }
 
@@ -196,6 +240,7 @@ public sealed class TaskSchedulerService
             }
 
             OnLog($"输入源 [{InputNameMapper.GetSourceName(source)}] 释放。");
+            NotifyFiringChangedLocked();
         }
     }
 
@@ -207,14 +252,22 @@ public sealed class TaskSchedulerService
         {
             StopAllCore();
             OnLog("已停止所有连发任务（退出）。");
+            NotifyFiringChangedLocked();
         }
     }
 
-    /// <summary>核心停止逻辑（须在锁内调用）：解除全部激活状态。</summary>
+    /// <summary>核心停止逻辑（须在锁内调用）：解除全部激活状态，并等待在途点击完成
+    /// （点击含按压 Sleep，不等待会在退出 / 重建时把目标键留在"按住"状态；
+    /// 上限 500ms 覆盖最大按压 200ms + 抖动，超时放弃属可接受的极端情况）。</summary>
     private void StopAllCore()
     {
         foreach (var task in _tasks) Deactivate(task);
         _downSources.Clear();
+
+        var deadline = Environment.TickCount + 500;
+        foreach (var task in _tasks)
+            while (task.IsBusy && Environment.TickCount < deadline)
+                Thread.Sleep(1);
     }
 
     /// <summary>
@@ -269,12 +322,22 @@ public sealed class TaskSchedulerService
             Interlocked.Decrement(ref _activeHoldCount);
     }
 
+    /// <summary>聚合连发激活态并在翻转时触发事件（须在锁内调用）：任一任务 Active 即视为连发中
+    /// （Toggle 被 Hold 暂停时 Hold 必在连发，语义一致）；状态无变化不触发。</summary>
+    private void NotifyFiringChangedLocked()
+    {
+        var any = _tasks.Any(t => t.Active);
+        if (any == _anyFiring) return;
+        _anyFiring = any;
+        FiringChanged?.Invoke(any);
+    }
+
     /// <summary>任务主循环：Stopwatch + Sleep(1)（配合 timeBeginPeriod(1)）控制间隔；异常自动恢复。
+    /// 每轮按压时长与间隔各自独立抖动 ±20%（消除恒定周期的机器指纹）。
     /// 多目标任务（双宏开关）按索引轮流触发，未触发时相位归零（重新激活从第 1 键开始）。</summary>
     private void TaskLoop(RunningTask task)
     {
         var sw = new Stopwatch();
-        var interval = Compat.Clamp(task.Configs[0].IntervalMs, Constants.MinIntervalMs, Constants.MaxIntervalMs);
         var phase = 0;
 
         while (!task.StopRequested)
@@ -295,15 +358,26 @@ public sealed class TaskSchedulerService
                     continue;
                 }
 
-                // 发射一次完整输入（按下+抬起 / 滚动一格）；多目标依次轮换。
-                InputSimulatorService.Click(task.Configs[phase]);
+                // 发射一次完整输入（按住 HoldMs → 抬起）；多目标依次轮换。
+                var cfg = task.Configs[phase];
+                task.BeginClick();
+                try
+                {
+                    InputSimulatorService.Click(cfg, JitterMs(cfg.HoldMs, Constants.MinHoldMs, Constants.MaxHoldMs));
+                }
+                finally
+                {
+                    task.EndClick();
+                }
+                TargetFired?.Invoke(cfg);   // 可视化：目标键脉冲键帽
                 phase = (phase + 1) % task.Configs.Count;
                 sw.Restart();
 
-                // 间隔等待：保持响应停止信号，每毫秒轮询一次。
+                // 间隔等待（弹起 → 下次按下，独立抖动）：保持响应停止信号，每毫秒轮询一次。
+                var gapMs = JitterMs(cfg.IntervalMs, Constants.MinIntervalMs, Constants.MaxIntervalMs);
                 while (!task.StopRequested && task.Active &&
                        (!isToggle || Interlocked.CompareExchange(ref _activeHoldCount, 0, 0) == 0) &&
-                       sw.ElapsedMilliseconds < interval)
+                       sw.ElapsedMilliseconds < gapMs)
                 {
                     Thread.Sleep(1);
                 }
@@ -315,6 +389,20 @@ public sealed class TaskSchedulerService
                 OnLog($"连发任务 [{InputNameMapper.GetTargetName(task.Configs[0])}] 异常已自动恢复。");
                 Thread.Sleep(100);
             }
+        }
+    }
+
+    /// <summary>
+    /// 时序抖动：baseMs × (1 ± 20%) 均匀取整后钳位到 [min, max]。
+    /// 按压与间隔各自独立调用（不共享随机量），避免固定比例形成可识别节奏。
+    /// </summary>
+    private static int JitterMs(int baseMs, int min, int max)
+    {
+        lock (RandGate)
+        {
+            // 百分比在 80~120 含端点均匀取值，整数运算：26ms → 20~31ms。
+            var percent = 100 - Constants.TimingJitterPercent + Rand.Next(Constants.TimingJitterPercent * 2 + 1);
+            return Compat.Clamp(baseMs * percent / 100, min, max);
         }
     }
 

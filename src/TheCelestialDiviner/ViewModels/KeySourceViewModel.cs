@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
+using TheCelestialDiviner.Helpers;
 using TheCelestialDiviner.Models;
 using TheCelestialDiviner.Services;
 using System.Windows.Media;
@@ -37,14 +38,20 @@ public sealed class KeySourceViewModel : INotifyPropertyChanged
     private static bool s_isDark;
     private static Brush s_emptyBrush = MakeBrush("#F2F2F2");
     private static Brush s_emptyForeground = MakeBrush("#666666");
-    private static readonly Brush s_toggleBrush = MakeBrush("#8A5CF5");   // 开关模式：主题紫
-    private static readonly Brush s_holdBrush = MakeBrush("#D6A01D");     // 按压模式：金色
-    private static readonly Brush s_dualBrush = MakeBrush("#6D47D0");     // 双宏开关：主题紫深一档
+    // 图块强调色（色值唯一落点 Helpers/Constants.cs；UpdateTheme 时重建，便于全局换色）。
+    private static Brush s_toggleBrush = MakeBrush(Constants.AccentPrimaryHex);   // 开关模式：主题紫
+    private static Brush s_holdBrush = MakeBrush(Constants.AccentGoldHex);        // 按压模式：金色
+    private static Brush s_dualBrush = MakeBrush(Constants.AccentDualHex);        // 双宏开关：主题紫深一档
     private static readonly Brush s_registeredForeground = Brushes.White;
 
     /// <summary>更新主题静态刷子（深色 / 浅色），随后需对每个实例调。?RefreshTheme。?。</summary>
     public static void UpdateTheme(bool isDark)
     {
+        // 强调色与主题资源同源（Constants 唯一落点）；每次重建刷子，改常量后重跑即全局生效。
+        s_toggleBrush = MakeBrush(Constants.AccentPrimaryHex);
+        s_holdBrush = MakeBrush(Constants.AccentGoldHex);
+        s_dualBrush = MakeBrush(Constants.AccentDualHex);
+
         if (s_isDark == isDark) return;
         s_isDark = isDark;
         s_emptyBrush = MakeBrush(isDark ? "#2F2F2F" : "#F2F2F2");

@@ -134,8 +134,16 @@ public sealed class TargetKeyConfig
     /// <summary>触发模式（Toggle 开关 / Hold 按压）。</summary>
     public TriggerMode Mode { get; set; } = TriggerMode.Toggle;
 
-    /// <summary>连发间隔（毫秒，10~100，默认 10）。</summary>
-    public int IntervalMs { get; set; } = 10;
+    /// <summary>
+    /// 按压时长（毫秒，10~200，默认 26）：按下到弹起的持续时间。
+    /// 逐帧轮询输入的游戏每帧采样一次，按压须 ≥ 帧窗口（40fps ≈ 25ms）才能保证
+    /// 按下状态必被采样到；实际注入时逐发独立抖动 ±20%。
+    /// </summary>
+    public int HoldMs { get; set; } = Constants.DefaultHoldMs;
+
+    /// <summary>连发间隔（毫秒，10~100，默认 26）：弹起到下一次按下的间隔；
+    /// 连发周期 = 按压时长 + 间隔，实际注入时逐发独立抖动 ±20%。</summary>
+    public int IntervalMs { get; set; } = Constants.DefaultIntervalMs;
 
     /// <summary>实验功能：连发时附带 Ctrl（注入修饰按下 → 目标 → 修饰抬起）。</summary>
     public bool ModCtrl { get; set; }
@@ -159,6 +167,7 @@ public sealed class TargetKeyConfig
         Mouse = Mouse,
         Wheel = Wheel,
         Mode = Mode,
+        HoldMs = HoldMs,
         IntervalMs = IntervalMs,
         ModCtrl = ModCtrl,
         ModShift = ModShift,
@@ -213,6 +222,27 @@ public sealed class GlobalSwitchConfig
     };
 }
 
+/// <summary>切换方案热键配置（按下按顺序切换非空方案档位；默认未设置 = 缺省）。</summary>
+public sealed class ProfileCycleConfig
+{
+    /// <summary>是否已设置切换方案热键（默认 false = 缺省未设置）。</summary>
+    public bool HasKey { get; set; }
+
+    /// <summary>切换方案热键虚拟键码（HasKey = true 时有效）。</summary>
+    public int VirtualKey { get; set; }
+
+    /// <summary>切换方案热键扩展键标志。</summary>
+    public bool Extended { get; set; }
+
+    /// <summary>创建当前实例的副本。</summary>
+    public ProfileCycleConfig Clone() => new()
+    {
+        HasKey = HasKey,
+        VirtualKey = VirtualKey,
+        Extended = Extended
+    };
+}
+
 /// <summary>应用配置根对象（持久化到 %APPDATA%\TheCelestialDiviner\config.json）。</summary>
 public sealed class AppConfig
 {
@@ -220,14 +250,15 @@ public sealed class AppConfig
     public const int DefaultKeyboardMode = 3;
 
     /// <summary>配置文件当前版本（v2：总开关默认关闭 + 默认键 F9 + 提示语音音量；v3：开关模式分区；
-    /// v4：方案三档位 ①②③ + 当前档位；v5：键位可视化开关表）。</summary>
-    public const int CurrentVersion = 5;
+    /// v4：方案三档位 ①②③ + 当前档位；v5：键位可视化开关表；v6：连发时序增加按压时长；
+    /// v7：状态提醒开关；v8：状态提醒默认激活；v9：切换方案热键；v10：成为衍天高手语音按钮）。</summary>
+    public const int CurrentVersion = 10;
 
     /// <summary>配置文件版本号（预留迁移能力）。</summary>
     public int Version { get; set; } = CurrentVersion;
 
     /// <summary>
-    /// 方案档位列表（固定 3 套：①②③，各存一套按键方案；默认选中①）。
+    /// 方案档位列表（固定 4 套：①②③④，各存一套按键方案；默认选中①）。
     /// 运行期约定：<see cref="Schemes"/> 与 <see cref="Profiles"/>[ActiveProfile] 是同一字典实例
     /// （加载 / 导入 / 切换档位时对齐），所有方案编辑经 Schemes 直接落在活动档位。
     /// 序列化时 Schemes 为兼容镜像（旧版程序导入可读）。
@@ -236,10 +267,11 @@ public sealed class AppConfig
     {
         new(StringComparer.Ordinal),
         new(StringComparer.Ordinal),
+        new(StringComparer.Ordinal),
         new(StringComparer.Ordinal)
     };
 
-    /// <summary>当前选中的方案档位（0/1/2 ↔ ①②③，默认①；切换时实时落盘）。</summary>
+    /// <summary>当前选中的方案档位（0~3 ↔ ①②③④，默认①；切换时实时落盘）。</summary>
     public int ActiveProfile { get; set; }
 
     /// <summary>键位可视化显示开关（键为输入源标识字符串；缺省视为开启可视化）。</summary>
@@ -248,11 +280,40 @@ public sealed class AppConfig
     /// <summary>键位可视化总开关（关闭时全部键位暂停显示；缺省 true）。</summary>
     public bool GlobalVisualEnabled { get; set; } = true;
 
+    /// <summary>状态提醒开关（底栏按钮；开启后总开关开启时常驻应用图标键帽、连发期间隐藏；默认开启）。</summary>
+    public bool StatusReminderEnabled { get; set; } = true;
+
+    /// <summary>“成为衍天高手”按钮（底栏；激活时总开关启动的语音播报改为衍天高手启动音；默认关闭）。</summary>
+    public bool DivinerVoiceEnabled { get; set; }
+
+    /// <summary>键帽配色方案名（KeycapSchemes.All 之一；缺省 Pansy）。</summary>
+    public string KeycapScheme { get; set; } = "Pansy";
+
+    /// <summary>夜间模式：true 夜间深色 / false 白天浅色（底栏按钮切换）。</summary>
+    public bool NightMode { get; set; }
+
+    /// <summary>主题跟随系统变化：true 按 AppsUseLightTheme 判断，false 固定白天浅色。</summary>
+    public bool ThemeFollowSystem { get; set; } = true;
+
+    /// <summary>可视化悬浮窗保存位置 X（null = 默认屏幕右下角）。</summary>
+    public double? VisualizerLeft { get; set; }
+
+    /// <summary>可视化悬浮窗保存位置 Y（null = 默认屏幕右下角）。</summary>
+    public double? VisualizerTop { get; set; }
+
+    /// <summary>
+    /// 可视化方案：0 全部键位 / 1 修饰键和自定义键 / 2 仅自定义键（方案内键位）。默认 0。
+    /// </summary>
+    public int VisualizerMode { get; set; }
+
     /// <summary>所有输入源方案（键为输入源标识字符串；镜像当前档位 Profiles[ActiveProfile]）。</summary>
     public Dictionary<string, KeyScheme> Schemes { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>全局开关键配置。</summary>
     public GlobalSwitchConfig GlobalSwitch { get; set; } = new();
+
+    /// <summary>切换方案热键配置（按下按顺序切换非空方案档位；与全局开关键、连发方案互斥）。</summary>
+    public ProfileCycleConfig ProfileCycle { get; set; } = new();
 
     /// <summary>全局开关提示语音音量（0~100，默认 70）。</summary>
     public double SoundVolume { get; set; } = Constants.DefaultSoundVolume;
@@ -270,7 +331,14 @@ public sealed class AppConfig
     public int KeyboardMode { get; set; } = DefaultKeyboardMode;
 
     /// <summary>方案面板默认连发间隔（毫秒，添加连发键时录入该值），10~100。</summary>
-    public int DefaultIntervalMs { get; set; } = 10;
+    public int DefaultIntervalMs { get; set; } = Constants.DefaultIntervalMs;
+
+    /// <summary>方案面板默认按压时长（毫秒，添加连发键时录入该值），10~200。</summary>
+    public int DefaultHoldMs { get; set; } = Constants.DefaultHoldMs;
+
+    /// <summary>连发时序档位：0 = 常规（26/26，40~100 帧零丢失）、1 = 极限（11/11，帧率 ≥90
+    /// 上限 ~45 发/秒，低帧率丢发）。切换时把该档值应用到全部连发键并作为新方案默认。</summary>
+    public int TimingPreset { get; set; }
 
     /// <summary>创建当前实例的深拷贝。</summary>
     public AppConfig Clone() => new()
@@ -279,12 +347,23 @@ public sealed class AppConfig
         Profiles = Profiles.Select(p => p.ToDictionary(kv => kv.Key, kv => kv.Value.Clone(), StringComparer.Ordinal)).ToList(),
         ActiveProfile = ActiveProfile,
         GlobalVisualEnabled = GlobalVisualEnabled,
+        StatusReminderEnabled = StatusReminderEnabled,
+        DivinerVoiceEnabled = DivinerVoiceEnabled,
+        KeycapScheme = KeycapScheme,
+        NightMode = NightMode,
+        ThemeFollowSystem = ThemeFollowSystem,
+        VisualizerLeft = VisualizerLeft,
+        VisualizerTop = VisualizerTop,
+        VisualizerMode = VisualizerMode,
         VisualKeys = new Dictionary<string, bool>(VisualKeys, StringComparer.Ordinal),
         Schemes = Schemes.ToDictionary(p => p.Key, p => p.Value.Clone(), StringComparer.Ordinal),
         GlobalSwitch = GlobalSwitch.Clone(),
+        ProfileCycle = ProfileCycle.Clone(),
         SoundVolume = SoundVolume,
         UseScanCodes = UseScanCodes,
         KeyboardMode = KeyboardMode,
-        DefaultIntervalMs = DefaultIntervalMs
+        DefaultIntervalMs = DefaultIntervalMs,
+        DefaultHoldMs = DefaultHoldMs,
+        TimingPreset = TimingPreset
     };
 }

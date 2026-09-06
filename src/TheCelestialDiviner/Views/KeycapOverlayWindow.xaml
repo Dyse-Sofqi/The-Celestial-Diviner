@@ -4,11 +4,13 @@
         Title="KeycapOverlay" ShowInTaskbar="False" ShowActivated="False"
         WindowStyle="None" ResizeMode="NoResize" AllowsTransparency="True"
         Background="Transparent" Width="940" Height="180" Topmost="True"
-        Focusable="False" IsHitTestVisible="False" UseLayoutRounding="True"
+        Focusable="False" UseLayoutRounding="True"
         TextOptions.TextFormattingMode="Ideal">
     <!--
-        键帽可视化悬浮层（右下角）：点击穿透 + 置顶 + 不抢焦点。
-        键帽视觉树由 code-behind 构建以精确复刻 keyviz PBT 键帽双层结构。
+        键帽可视化悬浮层（右下角）：置顶 + 不抢焦点。
+        穿透由 Win32 WS_EX_TRANSPARENT 控制（正常态全穿透；调整模式临时解除）。
+        注意：根元素不可设 IsHitTestVisible=False，否则调整模式无法拖拽。
     -->
-    <Grid x:Name="Root" VerticalAlignment="Bottom" HorizontalAlignment="Right"/>
+    <!-- 键帽容器：单行水平排列（右下角对齐；超出一行宽度的键帽不再换行，直接不显示） -->
+    <StackPanel x:Name="Root" Orientation="Horizontal" VerticalAlignment="Bottom" HorizontalAlignment="Right"/>
 </Window>

@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Threading;
 using TheCelestialDiviner.Helpers;
 using TheCelestialDiviner.Models;
 
@@ -190,33 +191,38 @@ public static class InputSimulatorService
         return Send(ref input);
     }
 
-    /// <summary>发送一次完整的“按下并抬起”（点击 / 滚动一格）。</summary>
-    public static bool Click(TargetKeyConfig target)
+    /// <summary>
+    /// 发送一次完整的"按下并抬起"（点击 / 滚动一格）。
+    /// <paramref name="holdMs"/> 为按压时长（按下到弹起的 Sleep 毫秒数）：逐帧轮询输入的
+    /// 游戏只有按压持续 ≥ 帧窗口才能保证按下状态被采样到，0 = 瞬时点击（旧语义）。
+    /// 调用方保证该值已钳位；含 Sleep，不得在低级钩子线程调用。
+    /// </summary>
+    public static bool Click(TargetKeyConfig target, int holdMs = 0)
     {
         return target.Kind switch
         {
-            TargetKind.Keyboard => ClickKeyWithMods(target),
-            TargetKind.Mouse => ClickButtonWithMods(target),
+            TargetKind.Keyboard => ClickKeyWithMods(target, holdMs),
+            TargetKind.Mouse => ClickButtonWithMods(target, holdMs),
             TargetKind.Wheel => MouseWheel(target.Wheel == MouseInput.WheelUp
                 ? NativeMethods.WHEEL_DELTA : -NativeMethods.WHEEL_DELTA),
             _ => false
         };
     }
 
-    /// <summary>键盘目标点击：先按下勾选的修饰键 → 点击目标 → 按逆序抬起修饰键。</summary>
-    private static bool ClickKeyWithMods(TargetKeyConfig target)
+    /// <summary>键盘目标点击：先按下勾选的修饰键 → 按住目标 holdMs → 弹起 → 按逆序抬起修饰键。</summary>
+    private static bool ClickKeyWithMods(TargetKeyConfig target, int holdMs)
     {
         var ok = PressModsDown(target);
-        ok &= PressKey(target.VirtualKey, target.Extended);
+        ok &= PressKey(target.VirtualKey, target.Extended, holdMs);
         ReleaseModsUp(target);
         return ok;
     }
 
-    /// <summary>鼠标目标点击：先按下勾选的修饰键 → 鼠标点击 → 按逆序抬起修饰键。</summary>
-    private static bool ClickButtonWithMods(TargetKeyConfig target)
+    /// <summary>鼠标目标点击：先按下勾选的修饰键 → 按住鼠标 holdMs → 弹起 → 按逆序抬起修饰键。</summary>
+    private static bool ClickButtonWithMods(TargetKeyConfig target, int holdMs)
     {
         var ok = PressModsDown(target);
-        ok &= ClickButton(target.Mouse);
+        ok &= ClickButton(target.Mouse, holdMs);
         ReleaseModsUp(target);
         return ok;
     }
@@ -239,18 +245,21 @@ public static class InputSimulatorService
         if (target.ModCtrl) KeyUp(0x11);
     }
 
-    /// <summary>键盘键完整按下并抬起。</summary>
-    private static bool PressKey(int vk, bool extended)
+    /// <summary>键盘键完整"按下并抬起"，按下与抬起之间按住 holdMs（0 = 背靠背瞬时）。
+    /// Sleep 精度依赖 timeBeginPeriod(1)（TimerResolutionService）。</summary>
+    private static bool PressKey(int vk, bool extended, int holdMs)
     {
         var ok = KeyDown(vk, extended);
+        if (holdMs > 0) Thread.Sleep(holdMs);
         ok &= KeyUp(vk, extended);
         return ok;
     }
 
-    /// <summary>鼠标键完整按下并抬起。</summary>
-    private static bool ClickButton(MouseInput button)
+    /// <summary>鼠标键完整"按下并抬起"，按下与抬起之间按住 holdMs（0 = 背靠背瞬时）。</summary>
+    private static bool ClickButton(MouseInput button, int holdMs)
     {
         var ok = MouseDown(button);
+        if (holdMs > 0) Thread.Sleep(holdMs);
         ok &= MouseUp(button);
         return ok;
     }

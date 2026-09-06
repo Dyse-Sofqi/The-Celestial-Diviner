@@ -24,6 +24,25 @@ public sealed class BoolToVisibilityConverter : IValueConverter
         => throw new NotSupportedException();
 }
 
+/// <summary>
+/// 连发间隔框水印转换器：仅在编辑框被点击清空（编辑文本为空）时显示已提交间隔数值虚影；
+/// 键入任意内容（含非法中间态）都不再显示水印，避免与输入重叠。
+/// values[0] = IntervalEdit（编辑文本），values[1] = IntervalMs（已提交值，int）。
+/// </summary>
+public sealed class IntervalWatermarkConverter : IMultiValueConverter
+{
+    public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture)
+    {
+        if (values.Length < 2) return "";
+        var edit = values[0] as string ?? "";
+        if (edit.Length > 0) return "";
+        return values[1] is int i ? i.ToString(culture) : "";
+    }
+
+    public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}
+
 /// <summary>string → Visibility：空/空字符串 → Collapsed。</summary>
 public sealed class EmptyToCollapsedConverter : IValueConverter
 {
