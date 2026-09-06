@@ -149,7 +149,7 @@ public partial class App : Application
 
         _trayIcon = new Forms.NotifyIcon
         {
-            Text = "衍天高手 v1.6",
+            Text = "衍天高手 v1.7",
             Visible = true
         };
         try
@@ -163,7 +163,7 @@ public partial class App : Application
             _trayIconOff = (Icon)baseIcon.Clone();
             _trayIconOn = ComposeTrayIcon(baseIcon, enabled: true);
             _trayIcon.Icon = _vm.GloballyEnabled ? _trayIconOn : _trayIconOff;
-            _trayIcon.Text = _vm.GloballyEnabled ? "衍天高手 v1.6 — 已开启" : "衍天高手 v1.6";
+            _trayIcon.Text = _vm.GloballyEnabled ? "衍天高手 v1.7 — 已开启" : "衍天高手 v1.7";
         }
         catch
         {
@@ -175,7 +175,7 @@ public partial class App : Application
         {
             if (_trayIcon is null) return;
             _trayIcon.Icon = enabled ? _trayIconOn : _trayIconOff;
-            _trayIcon.Text = enabled ? "衍天高手 v1.6 — 已开启" : "衍天高手 v1.6";
+            _trayIcon.Text = enabled ? "衍天高手 v1.7 — 已开启" : "衍天高手 v1.7";
         };
 
         var menu = new Forms.ContextMenuStrip();
@@ -198,6 +198,13 @@ public partial class App : Application
 
     /// <summary>托盘菜单退出：置位退出标记并执行退出时序。</summary>
     private void ExitFromTray()
+    {
+        IsExiting = true;
+        ExitApp();
+    }
+
+    /// <summary>自更新重启：置位退出标记并走完整退出时序（自更新脚本等待进程退出后覆盖安装目录并重启）。</summary>
+    public void ExitForUpdateRestart()
     {
         IsExiting = true;
         ExitApp();

@@ -177,6 +177,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         ToggleGlobalVisualCommand = RelayCommand.Create(() => GlobalVisualEnabled = !GlobalVisualEnabled);
         ToggleStatusReminderCommand = RelayCommand.Create(() => StatusReminderEnabled = !StatusReminderEnabled);
         ToggleDivinerVoiceCommand = RelayCommand.Create(() => DivinerVoiceEnabled = !DivinerVoiceEnabled);
+        CheckUpdateCommand = RelayCommand.Create(() => _ = RunCheckUpdateAsync());
         // 底栏设置菜单（键盘注入 / 键帽配色 / 键帽可视化）：参数沿用原下拉框语义，
         // 点击选项即热生效 + 落盘。
         SetKeyboardModeCommand = new RelayCommand(o =>
@@ -481,6 +482,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
         AddLog($"初始化完成：总开关{(_globallyEnabled ? "已开启" : "已关闭（按 [" + _masterKeyText + "] 开启）")}，"
                + $"方案 {_config.Schemes.Count} 个。");
+
+        // 公告更新检查：后台查询 Gitee，成功且内容有变化才覆盖注释区默认内容（失败保持旧内容）。
+        _ = CheckNoticeUpdateAsync();
     }
 
     // ---------- 钩子事件接入（由 View 在安装成功后绑定） ----------
@@ -669,6 +673,107 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// <summary>退出前静音提示语音（避免退出时序还播报语音）。</summary>
     public void SoundCueMuteForExit() => _soundCue.Volume = 0;
 
+    // ---------- 注释区公告（Notice.md：内嵌兜底 + Gitee 远端更新） ----------
+    /// <summary>注释区默认公告内容：优先显示已同步的远端更新缓存，未同步过时用内嵌 Notice.md。</summary>
+    public string NoticeContent => string.IsNullOrEmpty(_config.NoticeContent)
+        ? NoticeService.EmbeddedNotice
+        : _config.NoticeContent;
+
+    /// <summary>
+    /// 启动时查询公告更新（Gitee raw，后台执行不阻塞启动）：拉取成功且内容与当前不同，
+    /// 覆盖缓存并落盘 + 刷新注释区；没更新 / 失败静默保持旧默认内容。
+    /// </summary>
+    public async Task CheckNoticeUpdateAsync()
+    {
+        try
+        {
+            var remote = await NoticeService.FetchLatestAsync();
+            if (remote is null || remote == NoticeContent) return;
+            _config.NoticeContent = remote;
+            SaveConfig();
+            OnPropertyChanged(nameof(NoticeContent));   // View 订阅刷新注释区默认内容
+            AddLog("注释区公告已同步远端更新。");
+        }
+        catch (Exception ex)
+        {
+            // 双保险：公告检查任何异常不得影响主流程（FetchLatestAsync 内部已兜底）。
+            Logger.Error("公告更新检查异常。", ex);
+        }
+    }
+
+    // ---------- 检查更新（Gitee Release：检查 → 确认 → 下载安装自动重启） ----------
+    private bool _checkingUpdate;
+
+    /// <summary>检查 / 下载更新进行中（按钮禁用并显示“检查中…”）。</summary>
+    public bool CheckingUpdate
+    {
+        get => _checkingUpdate;
+        private set => Set(ref _checkingUpdate, value);
+    }
+
+    /// <summary>更新确认弹窗请求（View 弹 Yes/No 框列出远端版本与说明，返回是否继续）。</summary>
+    public event Func<UpdateCheck, bool>? UpdateConfirmRequested;
+
+    /// <summary>检查 / 更新结果消息弹窗请求（View 弹信息框；参数 = 标题、内容）。</summary>
+    public event Action<string, string>? UpdateMessageRequested;
+
+    /// <summary>更新包就绪并已启动自更新脚本 → 请求走正常退出时序（脚本接管覆盖与重启）。</summary>
+    public event Action? UpdateRestartRequested;
+
+    /// <summary>
+    /// 检查更新主流程：查询 Gitee 最新 Release → 有新版本经确认后下载 → 解包校验 →
+    /// 启动自更新脚本 → 请求退出（脚本在进程退出后覆盖安装目录并重启）。
+    /// 没更新 / 远端不可用 / 用户取消 / 任何失败均停在当前版本。
+    /// </summary>
+    private async Task RunCheckUpdateAsync()
+    {
+        if (CheckingUpdate) return;
+        CheckingUpdate = true;
+        try
+        {
+            AddLog("正在检查更新（Gitee Release）…");
+            var check = await UpdateService.FetchLatestAsync();
+            if (check is null)
+            {
+                AddLog("检查更新：Gitee 上没有可用的 Release 或网络不可用。");
+                UpdateMessageRequested?.Invoke("检查更新",
+                    $"未能从 Gitee 获取新版本（可能暂无 Release / 附件缺失 / 网络不可用）。\n当前版本 v{UpdateService.CurrentVersion.ToString(3)}。");
+                return;
+            }
+            if (check.Version <= UpdateService.CurrentVersion)
+            {
+                AddLog($"检查更新：已是最新版本（远端 {check.TagName}）。");
+                UpdateMessageRequested?.Invoke("检查更新",
+                    $"当前已是最新版本 v{UpdateService.CurrentVersion.ToString(3)}。");
+                return;
+            }
+
+            // 有新版本 → 弹框确认（View 列出远端版本与发布说明）。
+            AddLog($"发现新版本 {check.TagName}。");
+            if (UpdateConfirmRequested?.Invoke(check) != true)
+            {
+                AddLog("已取消更新。");
+                return;
+            }
+
+            // 下载 + 解包校验 + 启动自更新脚本，随后走正常退出（脚本在进程退出后覆盖并重启）。
+            AddLog($"开始下载更新包 {check.AssetName}…");
+            var zip = await UpdateService.DownloadAsync(check);
+            AddLog("更新包就绪，程序将退出并自动完成安装重启。");
+            UpdateService.PrepareAndLaunchUpdater(zip);
+            UpdateRestartRequested?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("检查 / 安装更新失败。", ex);
+            UpdateMessageRequested?.Invoke("检查更新", $"更新失败：{ex.Message}");
+        }
+        finally
+        {
+            CheckingUpdate = false;   // 重启路径下进程即将退出，复位无实际影响
+        }
+    }
+
     // ---------- 日志 / 保存 ----------
     /// <summary>把当前配置对象交给外部保存（退出时序用）。</summary>
     public AppConfig CurrentConfig => _config;
@@ -848,6 +953,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
     /// <summary>“成为衍天高手”开关联动命令（底栏按钮）。</summary>
     public ICommand ToggleDivinerVoiceCommand { get; }
+
+    /// <summary>检查更新命令（Gitee Release：检查 → 确认 → 下载安装并自动重启）。</summary>
+    public ICommand CheckUpdateCommand { get; }
 
     /// <summary>底栏设置菜单：切换键盘注入模式（参数 = 模式索引 0 普通 / 1 扫描码 / 2 消息 / 3 DD 驱动）。</summary>
     public ICommand SetKeyboardModeCommand { get; }

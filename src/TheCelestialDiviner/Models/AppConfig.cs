@@ -251,8 +251,9 @@ public sealed class AppConfig
 
     /// <summary>配置文件当前版本（v2：总开关默认关闭 + 默认键 F9 + 提示语音音量；v3：开关模式分区；
     /// v4：方案三档位 ①②③ + 当前档位；v5：键位可视化开关表；v6：连发时序增加按压时长；
-    /// v7：状态提醒开关；v8：状态提醒默认激活；v9：切换方案热键；v10：成为衍天高手语音按钮）。</summary>
-    public const int CurrentVersion = 10;
+    /// v7：状态提醒开关；v8：状态提醒默认激活；v9：切换方案热键；v10：成为衍天高手语音按钮；
+    /// v11：注释区公告内容缓存）。</summary>
+    public const int CurrentVersion = 11;
 
     /// <summary>配置文件版本号（预留迁移能力）。</summary>
     public int Version { get; set; } = CurrentVersion;
@@ -288,6 +289,12 @@ public sealed class AppConfig
 
     /// <summary>键帽配色方案名（KeycapSchemes.All 之一；缺省 Pansy）。</summary>
     public string KeycapScheme { get; set; } = "Pansy";
+
+    /// <summary>
+    /// 注释区公告内容缓存（空 = 使用内嵌 Notice.md 默认公告）。
+    /// 启动时远端（Gitee）公告与当前内容不同则覆盖并落盘，此后离线启动仍显示上次同步到的内容。
+    /// </summary>
+    public string NoticeContent { get; set; } = "";
 
     /// <summary>夜间模式：true 夜间深色 / false 白天浅色（底栏按钮切换）。</summary>
     public bool NightMode { get; set; }
@@ -350,6 +357,7 @@ public sealed class AppConfig
         StatusReminderEnabled = StatusReminderEnabled,
         DivinerVoiceEnabled = DivinerVoiceEnabled,
         KeycapScheme = KeycapScheme,
+        NoticeContent = NoticeContent,
         NightMode = NightMode,
         ThemeFollowSystem = ThemeFollowSystem,
         VisualizerLeft = VisualizerLeft,

@@ -53,6 +53,13 @@ public static class Constants
     /// <summary>录制目标键的超时（毫秒）。</summary>
     public const int RecordTimeoutMs = 5000;
 
+    /// <summary>注释区公告远端地址（Gitee raw 文件）：软件启动时查询更新，
+    /// 成功拉取且内容有变化才覆盖本地缓存；没更新 / 失败保持旧内容。</summary>
+    public const string NoticeRemoteUrl = "https://gitee.com/sofqi/The-Celestial-Diviner/raw/main/Notice.md";
+
+    /// <summary>公告内容长度上限（字符）：超长视为异常内容丢弃，防止远端文件误传撑爆注释区。</summary>
+    public const int NoticeMaxLength = 2000;
+
     /// <summary>全局开关键默认虚拟键码（F9 = 0x78）。</summary>
     public const int DefaultMasterKeyVk = 0x78;
 

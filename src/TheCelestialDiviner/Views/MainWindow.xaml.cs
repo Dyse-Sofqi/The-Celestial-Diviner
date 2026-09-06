@@ -1,5 +1,7 @@
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Threading;
 using TheCelestialDiviner.Helpers;
@@ -155,6 +157,12 @@ public partial class MainWindow : Window
         // 不用 IsChecked 双向绑定：同组互斥取消选中会破坏绑定（WPF 已知问题）。
         // 设置菜单选中标记：键盘注入 / 键帽配色 / 键帽可视化 随 VM 状态同步
         //（菜单点击 / 导入配置 / DD 就绪检查回退）。
+        // 注释区公告：初渲染（内嵌兜底或已同步的远端缓存）；随 VM.NoticeContent 更新刷新。
+        RenderDefaultComment(_vm.NoticeContent);
+        // 方案档位按钮：初值回填；后续随 VM.ActiveProfile 变更同步选中态。
+        // 不用 IsChecked 双向绑定：同组互斥取消选中会破坏绑定（WPF 已知问题）。
+        // 设置菜单选中标记：键盘注入 / 键帽配色 / 键帽可视化 随 VM 状态同步
+        //（菜单点击 / 导入配置 / DD 就绪检查回退）。
         SyncProfileButtons(_vm.ActiveProfile);
         _vm.PropertyChanged += (_, args) =>
         {
@@ -162,6 +170,8 @@ public partial class MainWindow : Window
                 Dispatcher.BeginInvoke(() => SyncProfileButtons(_vm.ActiveProfile));
             else if (args.PropertyName == nameof(MainViewModel.PickingKind))
                 Dispatcher.BeginInvoke(UpdateCycleKeyPickingComment);   // 进入/退出切换方案热键录入 → 注释区联动
+            else if (args.PropertyName == nameof(MainViewModel.NoticeContent))
+                Dispatcher.BeginInvoke(() => RenderDefaultComment(_vm.NoticeContent));   // 公告远端更新 → 默认内容刷新
             else if (args.PropertyName is nameof(MainViewModel.KeyboardMode)
                      or nameof(MainViewModel.KeycapSchemeName)
                      or nameof(MainViewModel.VisualizerModeIndex))
@@ -194,6 +204,23 @@ public partial class MainWindow : Window
                 return;
             _vm.DeleteCheckedSchemes();
         };
+
+        // 检查更新：确认框（列出远端版本与发布说明）→ 结果消息框（无图标无提示音）→ 重启退出。
+        _vm.UpdateConfirmRequested += check =>
+        {
+            var notes = check.Notes?.Trim() ?? "";
+            if (notes.Length > 600) notes = notes.Substring(0, 600) + "…";
+            return MessageBox.Show(this,
+                $"发现新版本 {check.TagName}（当前 v{UpdateService.CurrentVersion.ToString(3)}），是否下载并安装？"
+                + "\n\n确认后程序将自动下载更新包并重启完成安装。"
+                + (notes.Length > 0 ? "\n\n—— 发布说明 ——\n" + notes : ""),
+                "检查更新 — 衍天高手", MessageBoxButton.YesNo, MessageBoxImage.Question)
+                == MessageBoxResult.Yes;
+        };
+        // 未发现新版本 / 检查失败等结果提示：不带图标的普通消息框（Information 图标会响提示音）。
+        _vm.UpdateMessageRequested += (title, message) =>
+            MessageBox.Show(this, message, title, MessageBoxButton.OK);
+        _vm.UpdateRestartRequested += () => _app.ExitForUpdateRestart();
 
         // 运行时初始化（定时器分辨率提升 + 钩子安装 + 权限状态回填）。
         _vm.InitializeRuntime(IsElevated());
@@ -282,6 +309,7 @@ public partial class MainWindow : Window
         ["键盘注入"] = "游戏内键盘连发不生效时逐个尝试：扫描码模式 → 消息模式 → DD 驱动模式。消息模式仅游戏在前台时有效；DD 驱动模式为物理级注入（需 dd63330.dll + 管理员权限）。",
         ["键帽配色"] = "可视化键帽配色方案（复刻自 keyviz 预设），切换实时生效并落盘。",
         ["键帽可视化"] = "键帽可视化方案：全部 = 所有键位；修饰键和自定义键 = 修饰键与方案内键位；自定义键 = 仅方案内键位（均受单键开关约束）。",
+        ["检查更新"] = "查询 Gitee 上的最新 Release：发现新版本时经确认自动下载安装并重启；没有更新或网络不可用会以普通消息提示。",
     };
 
     /// <summary>悬停菜单项：在注释区展示所属分组的说明文本（分组项取自身标题，叶子项取父分组标题）。</summary>
@@ -332,6 +360,68 @@ public partial class MainWindow : Window
             // 浏览器启动失败时静默（不影响主功能）。
         }
         e.Handled = true;
+    }
+
+    // ---------- 注释区公告渲染（Notice.md：内嵌兜底 + Gitee 远端更新） ----------
+    /// <summary>行内链接标记 [文本](URL) 识别。</summary>
+    private static readonly Regex s_noticeLinkRegex = new(@"\[([^]\r\n]+)]\(([^)\r\n]+)\)");
+
+    /// <summary>裸 URL 识别（中文全角标点/括号收尾不算 URL 的一部分）。</summary>
+    private static readonly Regex s_noticeUrlRegex = new(@"https?://[^\s（）【】<>，。；、]+");
+
+    /// <summary>把公告文本渲染进注释区默认内容（按行拆分；链接标记与裸 URL 渲染为可点击超链接）。</summary>
+    private void RenderDefaultComment(string content)
+    {
+        DefaultComment.Inlines.Clear();
+        if (string.IsNullOrEmpty(content)) return;
+        var lines = content.Replace("\r\n", "\n").Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (i > 0) DefaultComment.Inlines.Add(new LineBreak());
+            AppendNoticeLine(lines[i]);
+        }
+    }
+
+    /// <summary>渲染一行公告：链接标记之外的部分再扫描裸 URL，其余按纯文本输出。</summary>
+    private void AppendNoticeLine(string line)
+    {
+        var index = 0;
+        foreach (Match link in s_noticeLinkRegex.Matches(line))
+        {
+            AppendPlainTextWithUrls(line.Substring(index, link.Index - index));
+            AppendHyperlink(link.Groups[1].Value, link.Groups[2].Value);
+            index = link.Index + link.Length;
+        }
+        AppendPlainTextWithUrls(line.Substring(index));
+    }
+
+    /// <summary>纯文本中再识别裸 URL（其余直接输出；空片段跳过）。</summary>
+    private void AppendPlainTextWithUrls(string text)
+    {
+        var index = 0;
+        foreach (Match url in s_noticeUrlRegex.Matches(text))
+        {
+            if (url.Index > index) DefaultComment.Inlines.Add(new Run(text.Substring(index, url.Index - index)));
+            AppendHyperlink(url.Value, url.Value);
+            index = url.Index + url.Length;
+        }
+        if (index < text.Length) DefaultComment.Inlines.Add(new Run(text.Substring(index)));
+    }
+
+    /// <summary>插入可点击超链接（主题紫随日/夜切换；非法 URL 退化为纯文本）。</summary>
+    private void AppendHyperlink(string text, string url)
+    {
+        if (text.Length == 0) return;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            DefaultComment.Inlines.Add(new Run(text));
+            return;
+        }
+        var link = new Hyperlink { NavigateUri = uri };
+        link.Inlines.Add(new Run(text));
+        link.SetResourceReference(Hyperlink.ForegroundProperty, "AccentPrimary");
+        link.RequestNavigate += OnCommentLinkClick;
+        DefaultComment.Inlines.Add(link);
     }
 
     /// <summary>方案档位按钮选中态同步（仅驱动选中项，不回写 VM）。</summary>

@@ -17,8 +17,8 @@
     <!-- 管理员权限 + PerMonitorV2 DPI 声明 -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Resources\app.ico</ApplicationIcon>
-    <Version>1.6.0</Version>
-    <FileVersion>1.6.0.0</FileVersion>
+    <Version>1.7.0</Version>
+    <FileVersion>1.7.0.0</FileVersion>
     <AssemblyTitle>衍天高手</AssemblyTitle>
     <Product>衍天高手 (The Celestial Diviner)</Product>
     <Description>键盘 / 鼠标连发工具（全局钩子 + SendInput，.NET Framework 4.8）</Description>
@@ -31,6 +31,11 @@
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
   </ItemGroup>
 
+  <!-- NoticeService 公告远端检查（net48 不默认引用 in-box 的 HttpClient 程序集） -->
+  <ItemGroup>
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+
   <ItemGroup>
     <Resource Include="Resources\app.ico" />
   </ItemGroup>
@@ -39,6 +44,12 @@
        启动 / 停止 / 衍天高手启动（“成为衍天高手”激活时替代启动音） -->
   <ItemGroup>
     <Resource Include="Resources\Sounds\*.mp3" />
+  </ItemGroup>
+
+  <!-- 注释区公告（仓库根目录 Notice.md）：内嵌为兜底默认内容，
+       同一文件同步托管于 Gitee（Constants.NoticeRemoteUrl），启动时查询更新 -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\Notice.md" Link="Notice.md" LogicalName="TheCelestialDiviner.Notice.md" />
   </ItemGroup>
 
   <!-- DD 驱动模式依赖：官方 DD 虚拟驱动 x64 DLL（原生库，无法内嵌单文件，随目录分发）。

@@ -104,6 +104,7 @@ public sealed class ConfigService
         // v7：状态提醒开关——字段有默认值，无需迁移动作。
         // v9：切换方案热键——字段有默认值（HasKey = false 未设置），无需迁移动作。
         // v10：“成为衍天高手”语音按钮——字段有默认值（关闭），无需迁移动作。
+        // v11：注释区公告缓存——字段有默认值（空 = 内嵌默认公告），无需迁移动作。
 
         config.Version = AppConfig.CurrentVersion;
         Logger.Info($"配置 v{fromVersion} 已迁移到 v{AppConfig.CurrentVersion}（总开关默认关闭、默认键 F9、开关模式分区、方案四档位、键位可视化）。" );

@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:sys="clr-namespace:System;assembly=mscorlib"
         xmlns:conv="clr-namespace:TheCelestialDiviner.Helpers"
-        Title="衍天高手 The Celestial Diviner v1.6"
+        Title="衍天高手 The Celestial Diviner v1.7"
         Width="1000" Height="620" MinWidth="900" MinHeight="580"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource ThemeBg}"
@@ -331,6 +331,13 @@
                                 <Setter Property="Foreground" Value="White"/>
                                 <Setter TargetName="CheckMark" Property="Visibility" Value="Visible"/>
                                 <Setter TargetName="CheckMark" Property="Foreground" Value="White"/>
+                            </Trigger>
+                            <!-- 动作项（Tag = action，如「检查更新」）：无选中语义 → 折叠 ● 占位列，
+                                 文本起点与分组项一致（14px），保证同一级菜单内左对齐。
+                                 用普通属性触发器（模板触发器按 TemplatedParent 依赖属性求值，确定性生效），
+                                 不用绑定式 DataTrigger（模板实例化期求值不可靠） -->
+                            <Trigger Property="Tag" Value="action">
+                                <Setter TargetName="CheckMark" Property="Visibility" Value="Collapsed"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -691,6 +698,22 @@
                                       Command="{Binding SetVisualizerModeCommand}"
                                       CommandParameter="{Binding RelativeSource={RelativeSource Self}, Path=Tag}"/>
                         </MenuItem>
+                        <!-- 检查更新（动作项，Tag = action 折叠 ● 占位列 → 与上方分组项 14px 文本起点左对齐）：
+                             查询 Gitee Release，发现新版本经确认后下载安装自动重启；
+                             检查 / 下载期间禁用并显示“检查中…”；悬停说明走注释区（MenuComments） -->
+                        <MenuItem Header="检查更新" Tag="action" Command="{Binding CheckUpdateCommand}"
+                                  MouseEnter="OnMenuCommentEnter" MouseLeave="OnMenuCommentLeave">
+                            <MenuItem.Style>
+                                <Style TargetType="MenuItem" BasedOn="{StaticResource MenuSubStyle}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding CheckingUpdate}" Value="True">
+                                            <Setter Property="Header" Value="检查中…"/>
+                                            <Setter Property="IsEnabled" Value="False"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </MenuItem.Style>
+                        </MenuItem>
                     </MenuItem>
                 </Menu>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -847,18 +870,12 @@
                     <TextBlock x:Name="CommentText" Visibility="Collapsed"
                                FontSize="12" TextWrapping="Wrap"
                                Foreground="{DynamicResource ThemeFg}"/>
-                    <!-- 默认内容：诗句 + 可点击的衍天计算器链接 -->
-                    <TextBlock x:Name="DefaultComment" FontSize="12"
+                    <!-- 默认内容：注释区公告（仓库根目录 Notice.md 内嵌兜底 + Gitee 远端更新，
+                         由 code-behind 渲染，支持 [文本](链接) 与裸 URL 超链接） -->
+                    <TextBlock x:Name="DefaultComment" FontSize="12" TextWrapping="Wrap"
                                HorizontalAlignment="Left" VerticalAlignment="Top"
                                LineHeight="20"
-                               Foreground="{DynamicResource ThemeFg}">
-                        <Run>象载古今循大道，星占太乙衍天机。</Run><LineBreak/>
-                        <Run>不求一世红尘梦，但问千年月朗稀。</Run><LineBreak/>
-                        <Run>我要成为，衍天高手！</Run><LineBreak/>
-                        <Hyperlink NavigateUri="https://dps.btcsg.top/dps?xf=txj"
-                                   RequestNavigate="OnCommentLinkClick"
-                                   Foreground="{DynamicResource AccentPrimary}">衍天计算器</Hyperlink>
-                    </TextBlock>
+                               Foreground="{DynamicResource ThemeFg}"/>
                 </Grid>
             </Border>
 
