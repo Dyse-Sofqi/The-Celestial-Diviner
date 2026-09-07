@@ -258,6 +258,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         var confirmed = DdDriverFetchConfirmRequested?.Invoke(
             "本软件的键盘连发功能完全依赖 DD 驱动运作，当前未找到 DD 驱动（dd63330.dll），"
             + "未安装驱动时连发可能被多数游戏过滤而无效。\n\n"
+            + "DD 驱动虽由作者免费提供，但它是闭源软件，我们无权将其打包分发，"
+            + "所以这一步需要由您来完成：\n\n"
             + "是否自动从 DD 官方发布渠道下载并安装（约 3.7MB，仅首次）？\n"
             + "确认后全程自动完成并启用 DD 驱动模式；官方渠道网络不稳定，"
             + "下载失败会自动重试直至成功。") == true;
