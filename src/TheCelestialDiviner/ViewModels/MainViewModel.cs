@@ -642,7 +642,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
     /// <summary>
     /// 切换方案热键按下：按 ①→②→③→④ 顺序切到下一个非空方案档位（空档位跳过，环绕循环）；
-    /// 其余档位均为空时不切换并提示。
+    /// 其余档位均为空时不切换并提示。实际切换时播放“切换”提示语音，并在键帽可视化区域
+    /// 显示目标方案代号键帽（与状态提醒键帽同语义：无视键位可视化总开关独立运行，触发后自然淡出）。
     /// </summary>
     public void CycleToNextProfile()
     {
@@ -651,6 +652,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             var index = (_activeProfile + step) % ProfileCount;
             if (_config.Profiles[index].Count == 0) continue;
             ActiveProfile = index;
+            _soundCue.PlayCycle();
+            _visualizer.ShowCycleKeycap(ProfileLabel(index));
             return;
         }
         AddLog("切换方案热键：其他方案档位均为空，未切换。");

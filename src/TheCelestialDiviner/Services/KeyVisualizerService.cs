@@ -315,6 +315,24 @@ public sealed class KeyVisualizerService
         _overlay.SetReminderVisible(desired);
     }
 
+    // ---------- 切换方案热键键帽（触发即显示目标方案代号，与状态提醒同语义独立运行） ----------
+    // 键帽显隐无视键位可视化总开关（_globalEnabled）与模式过滤，不做物理按键快照登记；
+    // 走连发脉冲通道渲染：一次完整按下弹起后按空闲宽限独立淡出（触发后自然消失）。
+
+    /// <summary>切换方案键帽的按压时长（一次自然敲击的按下弹起节奏）。</summary>
+    private const int CycleKeycapHoldMs = 80;
+
+    /// <summary>
+    /// 切换方案热键触发键帽：显示目标方案代号（①②③④）。重复触发复用同帽递增连击角标；
+    /// 停止触发 1.2s 后随活动巡检独立淡出移除。UI 线程外可安全调用（内部封送）。
+    /// </summary>
+    public void ShowCycleKeycap(string label)
+    {
+        var overlay = _overlay;
+        var dispatcher = _dispatcher;
+        dispatcher?.BeginInvoke(() => overlay?.HoldPulse(label, CycleKeycapHoldMs, repeat: 1));
+    }
+
     private void OnSourceDown(InputSource source)
     {
         string label;

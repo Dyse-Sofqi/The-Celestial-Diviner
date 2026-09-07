@@ -6,7 +6,8 @@ using TheCelestialDiviner.Helpers;
 namespace TheCelestialDiviner.Services;
 
 /// <summary>
-/// 全局开关提示语音服务：播放内嵌 MP3（开启 = 启动 / 衍天高手启动，关闭 = 停止）。
+/// 提示语音服务：播放内嵌 MP3（总开关开启 = 启动 / 衍天高手启动，关闭 = 停止，
+/// 切换方案热键触发 = 切换）。
 /// WPF MediaPlayer 的媒体管线不解析 pack://application 资源 URI——Open 会静默失败
 /// （HasAudio=false、不触发异常、Play 无声），故启动时把 MP3 解包到临时目录，
 /// 以文件 URI 播放；音量（0.0~1.0）在每次播放前应用，Play 异步非阻塞。
@@ -22,9 +23,13 @@ public sealed class SoundCueService
     private static readonly Uri DivinerStartCueUri =
         new("pack://application:,,,/Resources/Sounds/DivinerStartVoice.mp3");
 
+    private static readonly Uri CycleCueUri =
+        new("pack://application:,,,/Resources/Sounds/CycleVoice.mp3");
+
     private readonly MediaPlayer _startPlayer = new();
     private readonly MediaPlayer _stopPlayer = new();
     private readonly MediaPlayer _divinerStartPlayer = new();
+    private readonly MediaPlayer _cyclePlayer = new();
     private double _volume = Constants.DefaultSoundVolume / 100.0;
 
     public SoundCueService()
@@ -35,6 +40,8 @@ public sealed class SoundCueService
             Logger.Error("停止提示音加载失败。", e.ErrorException);
         _divinerStartPlayer.MediaFailed += (_, e) =>
             Logger.Error("衍天高手启动提示音加载失败。", e.ErrorException);
+        _cyclePlayer.MediaFailed += (_, e) =>
+            Logger.Error("切换提示音加载失败。", e.ErrorException);
 
         try
         {
@@ -43,6 +50,7 @@ public sealed class SoundCueService
             _startPlayer.Open(ExtractToTemp(StartCueUri, dir, "StartVoice.mp3"));
             _stopPlayer.Open(ExtractToTemp(StopCueUri, dir, "StopVoice.mp3"));
             _divinerStartPlayer.Open(ExtractToTemp(DivinerStartCueUri, dir, "DivinerStartVoice.mp3"));
+            _cyclePlayer.Open(ExtractToTemp(CycleCueUri, dir, "CycleVoice.mp3"));
         }
         catch (Exception ex)
         {
@@ -109,6 +117,9 @@ public sealed class SoundCueService
 
     /// <summary>播放“停止”提示音（总开关停用时）。</summary>
     public void PlayStop() => Play(_stopPlayer);
+
+    /// <summary>播放“切换”提示音（切换方案热键触发并实际切换档位时；独立播放器，可与开关语音叠加）。</summary>
+    public void PlayCycle() => Play(_cyclePlayer);
 
     private void Play(MediaPlayer player)
     {
