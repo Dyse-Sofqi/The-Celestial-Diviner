@@ -17,8 +17,8 @@
     <!-- 管理员权限 + PerMonitorV2 DPI 声明 -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Resources\app.ico</ApplicationIcon>
-    <Version>1.7.2</Version>
-    <FileVersion>1.7.2.0</FileVersion>
+    <Version>1.7.3</Version>
+    <FileVersion>1.7.3.0</FileVersion>
     <AssemblyTitle>衍天高手</AssemblyTitle>
     <Product>衍天高手 (The Celestial Diviner)</Product>
     <Description>键盘 / 鼠标连发工具（全局钩子 + SendInput，.NET Framework 4.8）</Description>
