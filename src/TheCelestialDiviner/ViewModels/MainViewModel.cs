@@ -249,23 +249,26 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// 引导获取 DD 驱动（UI 线程调用）：弹出确认框——由用户发起官方渠道下载，
-    /// 程序只做下载器（下载 → 解包 → 安装全程自动），不分发闭源驱动；
-    /// 拒绝则保持普通模式并日志提示手动途径。
+    /// 引导获取 DD 驱动（UI 线程调用）：弹出确认框——告知用户本软件键盘连发完全依赖
+    /// DD 驱动运作；由用户发起官方渠道下载，程序只做下载器（下载 → 解包 → 安装全程自动，
+    /// 失败自动重试直至成功），不分发闭源驱动；拒绝则保持普通模式并日志提示手动途径。
     /// </summary>
     private void RequestDdDriverFetch()
     {
         var confirmed = DdDriverFetchConfirmRequested?.Invoke(
-            "未找到 DD 驱动（dd63330.dll），\"DD 驱动\"注入模式暂不可用。\n\n"
+            "本软件的键盘连发功能完全依赖 DD 驱动运作，当前未找到 DD 驱动（dd63330.dll），"
+            + "未安装驱动时连发可能被多数游戏过滤而无效。\n\n"
             + "是否自动从 DD 官方发布渠道下载并安装（约 3.7MB，仅首次）？\n"
-            + "确认后自动完成下载安装，并启用 DD 驱动模式。") == true;
+            + "确认后全程自动完成并启用 DD 驱动模式；官方渠道网络不稳定，"
+            + "下载失败会自动重试直至成功。") == true;
         if (confirmed)
         {
             DdDriverService.StartAutoFetch();
             return;
         }
         _ddAutoActivate = false;
-        AddLog("已保持普通模式。可从 ddxoft 官网（www.ddxoft.com）下载 dd63330.dll 放到程序目录后重启，"
+        AddLog("已保持普通模式。DD 驱动是连发功能的核心依赖，建议尽快获取："
+               + "可从 ddxoft 官网（www.ddxoft.com）下载 dd63330.dll 放到程序目录后重启，"
                + "或稍后在「选项」菜单重试 DD 模式。");
     }
 
@@ -903,7 +906,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
                 value = 0;
                 Set(ref _keyboardMode, 0);
                 _ddAutoActivate = true;
-                RequestDdDriverFetch();
+                if (DdDriverService.IsAutoFetchRunning)
+                    AddLog("DD 驱动正在后台获取（失败自动重试直至成功），完成后将自动启用 DD 模式。");
+                else
+                    RequestDdDriverFetch();
             }
 
             // 同步到模拟器（连发线程每次注入时读取）。

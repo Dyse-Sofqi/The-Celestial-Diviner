@@ -434,7 +434,8 @@ public static class DdDriverService
         });
     }
 
-    /// <summary>自动获取主流程（后台线程调用；任何失败以日志收尾）。</summary>
+    /// <summary>自动获取主流程（后台线程调用）：用户已确认获取，失败后积极重试直至成功——
+    /// DD 官方渠道在 GitHub，国内可达性波动大，重试是常态而非异常。</summary>
     private static void RunAutoFetch()
     {
         // 只认可加载的 x64 版 dd63330.dll（exe / APPDATA）；Change Box 的 DD64.dll 是
@@ -450,67 +451,94 @@ public static class DdDriverService
         Directory.CreateDirectory(workDir);
         try
         {
-            // 1. 解析官方资产直链：优先 GitHub API 拿最新 Release，失败退回硬编码直链。
-            var assetUrl = ResolveLatestAssetUrl() ?? DdFallbackAssetUrl;
-
-            // 2. 下载官方 7z 包（约 3.7MB，3 分钟超时兜底）。
-            var archivePath = Path.Combine(workDir, "dd.7z");
-            using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3)))
-            using (var response = AutoFetchHttp.GetAsync(assetUrl, cts.Token).ConfigureAwait(false).GetAwaiter().GetResult())
+            var attempt = 0;
+            while (true)
             {
-                response.EnsureSuccessStatusCode();
-                File.WriteAllBytes(archivePath,
-                    response.Content.ReadAsByteArrayAsync().ConfigureAwait(false).GetAwaiter().GetResult());
-            }
-            Logger.Info($"DD 驱动自动获取：官方包已下载（{new FileInfo(archivePath).Length / 1024}KB）。");
-
-            // 3. 解包：随包 7zr.exe（7-Zip 独立版，LGPL）。缺失视为安装包不完整。
-            var sevenZip = Path.Combine(AppContext.BaseDirectory, "7zr.exe");
-            if (!File.Exists(sevenZip))
-            {
-                Logger.Error("DD 驱动自动获取失败：缺少 7zr.exe 解包工具（请从官方发布包完整安装）。");
-                return;
-            }
-            var extractDir = Path.Combine(workDir, "x");
-            using (var proc = Process.Start(new ProcessStartInfo
-            {
-                FileName = sevenZip,
-                Arguments = $"x \"{archivePath}\" -o\"{extractDir}\" -y",
-                UseShellExecute = false,
-                CreateNoWindow = true
-            }))
-            {
-                if (proc is null || !proc.WaitForExit(60_000) || proc.ExitCode != 0)
+                attempt++;
+                try
                 {
-                    Logger.Error($"DD 驱动自动获取失败：官方包解包失败（exit={(proc?.HasExited == true ? proc.ExitCode : -1)}）。");
+                    FetchOnce(workDir);
+                    Logger.Info($"DD 驱动自动获取成功（第 {attempt} 次尝试），已安装到 %APPDATA%\\TheCelestialDiviner\\drivers。");
                     return;
                 }
+                catch (NoRetryException ex)
+                {
+                    // 重试也无济于事的硬性失败（缺解包工具 / 上游内容变化）：终止并留痕，
+                    // 用户可稍后在「选项」菜单重试或手动下载。
+                    Logger.Error($"DD 驱动自动获取终止：{ex.Message}");
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    // 积极重试：间隔 5s 起步线性递增，上限 60s，直至成功。
+                    var delaySec = Math.Min(5 * attempt, 60);
+                    Logger.Warn($"DD 驱动自动获取第 {attempt} 次尝试失败：{ex.Message}；{delaySec}s 后自动重试（直至成功）。");
+                    Thread.Sleep(delaySec * 1000);
+                }
             }
-
-            // 4. 定位 dd63330.dll：官方包内含多个版本变体（1.simple 为免费标准版），优先取 simple。
-            var dll = Directory.EnumerateFiles(extractDir, "dd63330.dll", SearchOption.AllDirectories)
-                .OrderBy(path => path.IndexOf("simple", StringComparison.OrdinalIgnoreCase) >= 0 ? 0 : 1)
-                .ThenBy(path => path.Length)
-                .FirstOrDefault();
-            if (dll is null)
-            {
-                Logger.Error("DD 驱动自动获取失败：官方包内未找到 dd63330.dll（上游内容可能已变化）。");
-                return;
-            }
-
-            // 5. 安装到 %APPDATA% drivers（探测顺序中的既有位置；包内含 sys 时一并安装）。
-            Directory.CreateDirectory(AppDataDriversDir);
-            File.Copy(dll, Path.Combine(AppDataDriversDir, "dd63330.dll"), overwrite: true);
-            var sys = Directory.EnumerateFiles(extractDir, "dd63330.sys", SearchOption.AllDirectories)
-                .FirstOrDefault();
-            if (sys is not null)
-                File.Copy(sys, Path.Combine(AppDataDriversDir, "dd63330.sys"), overwrite: true);
-            Logger.Info("DD 驱动自动获取完成，已安装到 %APPDATA%\\TheCelestialDiviner\\drivers。");
         }
         finally
         {
             try { Directory.Delete(workDir, true); } catch { /* 临时目录清理失败不影响主流程 */ }
         }
+    }
+
+    /// <summary>单次获取尝试：解析官方直链 → 下载 7z → 解包 → 安装到 %APPDATA% drivers。
+    /// 抛 <see cref="NoRetryException"/> 表示重试无意义的硬性失败；其余异常由重试循环处理。</summary>
+    private static void FetchOnce(string workDir)
+    {
+        // 1. 解析官方资产直链：优先 GitHub API 拿最新 Release，失败退回硬编码直链。
+        var assetUrl = ResolveLatestAssetUrl() ?? DdFallbackAssetUrl;
+
+        // 2. 下载官方 7z 包（约 3.7MB，3 分钟超时兜底）。
+        var archivePath = Path.Combine(workDir, "dd.7z");
+        using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3)))
+        using (var response = AutoFetchHttp.GetAsync(assetUrl, cts.Token).ConfigureAwait(false).GetAwaiter().GetResult())
+        {
+            response.EnsureSuccessStatusCode();
+            File.WriteAllBytes(archivePath,
+                response.Content.ReadAsByteArrayAsync().ConfigureAwait(false).GetAwaiter().GetResult());
+        }
+
+        // 3. 解包：随包 7zr.exe（7-Zip 独立版，LGPL）。缺失视为安装包不完整（重试无意义）。
+        var sevenZip = Path.Combine(AppContext.BaseDirectory, "7zr.exe");
+        if (!File.Exists(sevenZip))
+            throw new NoRetryException("缺少 7zr.exe 解包工具（请从官方发布包完整安装）");
+        var extractDir = Path.Combine(workDir, "x");
+        if (Directory.Exists(extractDir)) Directory.Delete(extractDir, true);   // 重试前清理上次残留
+        using (var proc = Process.Start(new ProcessStartInfo
+        {
+            FileName = sevenZip,
+            Arguments = $"x \"{archivePath}\" -o\"{extractDir}\" -y",
+            UseShellExecute = false,
+            CreateNoWindow = true
+        }))
+        {
+            if (proc is null || !proc.WaitForExit(60_000) || proc.ExitCode != 0)
+                throw new Exception($"官方包解包失败（exit={(proc?.HasExited == true ? proc.ExitCode : -1)}，可能下载不完整）");
+        }
+
+        // 4. 定位 dd63330.dll：官方包内含多个版本变体（1.simple 为免费标准版），优先取 simple。
+        var dll = Directory.EnumerateFiles(extractDir, "dd63330.dll", SearchOption.AllDirectories)
+            .OrderBy(path => path.IndexOf("simple", StringComparison.OrdinalIgnoreCase) >= 0 ? 0 : 1)
+            .ThenBy(path => path.Length)
+            .FirstOrDefault();
+        if (dll is null)
+            throw new NoRetryException("官方包内未找到 dd63330.dll（上游内容可能已变化）");
+
+        // 5. 安装到 %APPDATA% drivers（探测顺序中的既有位置；包内含 sys 时一并安装）。
+        Directory.CreateDirectory(AppDataDriversDir);
+        File.Copy(dll, Path.Combine(AppDataDriversDir, "dd63330.dll"), overwrite: true);
+        var sys = Directory.EnumerateFiles(extractDir, "dd63330.sys", SearchOption.AllDirectories)
+            .FirstOrDefault();
+        if (sys is not null)
+            File.Copy(sys, Path.Combine(AppDataDriversDir, "dd63330.sys"), overwrite: true);
+    }
+
+    /// <summary>重试无意义的硬性失败（缺随包工具 / 上游内容变化），重试循环收到后直接终止。</summary>
+    private sealed class NoRetryException : Exception
+    {
+        public NoRetryException(string message) : base(message) { }
     }
 
     /// <summary>
