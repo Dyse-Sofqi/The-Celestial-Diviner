@@ -1,8 +1,36 @@
 # 衍天高手（The Celestial Diviner）开发进度交接
 
-更新：2026-09-07 — **README 用户向重写 + DD 驱动出库（不入库 / 不入安装包）**
+更新：2026-09-07 — **DD 驱动自动获取（无感获取官方驱动）+ HIDDriver 调研结论**
 
-## 本次变更（README 同步 + DD 驱动分发合规）
+## 本次变更（DD 驱动自动获取）
+- 📋 用户需求：引入开源驱动替代 DD 免手动下载。调研结论：dengqizhou30/HIDDriver
+  （Apache-2.0）驱动为**测试证书签名**，需 bcdedit testsigning + nointegritychecks +
+  重启测试模式 + devcon 手动安装 + 自编译（仓库无预编译产物），对终端用户不可用；
+  kmclass（AGPL-3.0）同样要求测试模式；Interception（LGPL）驱动已签名但安装需改
+  键盘类过滤驱动 + 重启，HVCI 兼容性存疑。用户确认放弃开源驱动方案，
+  转向"DD 驱动自动获取"
+- ✅ DdDriverService.StartAutoFetch 后台单飞自动获取：DD 官方发布渠道
+  （github.com/ddxoft = 作者自己的发布页，程序只做下载器、不二次分发闭源驱动）
+  → GitHub API 查最新 Release 7z 资产（限流/失败退回内置直链）→ 下载（3 分钟超时）
+  → 随包 7zr.exe（7-Zip 独立版，LGPL，仅解 .7z，602KB）解包 → 优先取官方包
+  1.simple 变体 dd63330.dll → 安装到 %APPDATA%\TheCelestialDiviner\drivers
+  （既有探测位置，用户目录可写无需管理员）；临时目录 finally 清理；全程 Logger 留痕
+- ✅ VM 接入（冷启动 / 热切换两条路径）：DD 模式缺驱动时先回退普通模式（不影响使用）
+  + 后台自动获取；完成回调 AutoFetchCompleted 封送 UI 线程重试 EnsureReady 成功后
+  经 KeyboardMode 属性自动升回 DD 模式（同步模拟器 + 落盘 + 日志）；
+  用户中途手动切换模式即取消挂起（_ddAutoActivate 标志）
+- ✅ 细节：自动获取跳过条件只认可加载的 x64 版（exe / APPDATA 的 dd63330.dll），
+  Change Box 的 DD64.dll（32 位时间锁版，x64 必加载失败）不算"已有驱动"——
+  本机实测命中过该误判；首次 DD 初始化成功后把 DD 自释放到 %TEMP% 的 dd63330.sys
+  转存 APPDATA（KeepKernelDriverSys），后续启动预置内核服务不受 %TEMP% 清理影响；
+  ResolveDriverSysPath 增加 APPDATA 候选
+- ✅ csproj：7zr.exe（drivers/7zr.exe，入库，LGPL 允许再分发）随构建 / 发布包分发
+- ✅ 端到端实测（独立 harness 引用主程序集）：下载 3657KB → 解包 → 安装成功，
+  安装的 dd63330.dll SHA-256 与官方包内文件逐字节一致；临时目录清理确认
+- ✅ README / drivers\README 同步（DD 自动获取为主、手动下载为兜底；7-Zip LGPL 署名）；
+  构建 0 警告 0 错误
+
+## 上次变更（README 用户向重写 + DD 驱动出库（不入库 / 不入安装包））
 - ✅ README 全面重写为**用户向**：下载运行、注意事项（管理员权限 / 杀软误报 / DD 驱动
   自行下载 / 游戏过滤 / 配置不丢失 / 联网点 / 托盘驻留）、功能一览、使用说明与触发方式
   速查表、更新方法、二次开发；移除开发者向的项目结构 / 构建细节；标题去掉版本号

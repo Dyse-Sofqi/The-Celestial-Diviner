@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Threading;
 using TheCelestialDiviner.Helpers;
@@ -16,6 +18,11 @@ namespace TheCelestialDiviner.Services;
 /// 部署的 <c>DD64.dll</c>（32 位时间锁版，x64 进程无法加载，仅探测并给出提示）。
 /// 探测顺序：exe 目录 → %APPDATA%\TheCelestialDiviner\drivers → Change box 安装目录。
 /// 依赖文件随发布包提供（原生 DLL 无法内嵌单文件）。
+///
+/// 自动获取：驱动缺失时按需从 DD 官方发布渠道（github.com/ddxoft，作者自己的发布页）
+/// 下载官方压缩包，用随包的 7zr.exe（7-Zip 独立版，LGPL）解出 dd63330.dll 安装到
+/// %APPDATA% drivers 目录——本程序只做"下载器"，不二次分发闭源驱动；
+/// 全程后台执行，期间注入自动回退普通模式，就绪后自动升回 DD 模式（见 AutoFetchCompleted）。
 /// </summary>
 public static class DdDriverService
 {
@@ -196,6 +203,7 @@ public static class DdDriverService
             VkCodeCache.Clear();
             EchoGuard.Reset();
             Logger.Info($"DD 虚拟驱动初始化成功（{Path.GetFileName(_loadedPath)}）。");
+            KeepKernelDriverSys();
             return true;
         }
     }
@@ -313,15 +321,38 @@ public static class DdDriverService
         }
     }
 
-    /// <summary>定位随包分发的内核驱动文件：exe 目录 → %TEMP%（DD 自身释放位置）。</summary>
+    /// <summary>定位内核驱动文件（预置服务用）：exe 目录 → %APPDATA% drivers → %TEMP%（DD 自身释放位置）。</summary>
     private static string? ResolveDriverSysPath()
     {
         var candidates = new[]
         {
             Path.Combine(AppContext.BaseDirectory, "dd63330.sys"),
+            Path.Combine(AppDataDriversDir, "dd63330.sys"),
             Path.Combine(Path.GetTempPath(), "dd63330.sys")
         };
         return candidates.FirstOrDefault(File.Exists);
+    }
+
+    /// <summary>
+    /// 首次初始化成功后把 DD 自释放到 %TEMP% 的 dd63330.sys 转存到 %APPDATA% drivers
+    /// （尽力而为）：后续启动预置内核服务可走快速路径，不受 %TEMP% 清理影响。
+    /// </summary>
+    private static void KeepKernelDriverSys()
+    {
+        try
+        {
+            var target = Path.Combine(AppDataDriversDir, "dd63330.sys");
+            if (File.Exists(target)) return;
+            var temp = Path.Combine(Path.GetTempPath(), "dd63330.sys");
+            if (!File.Exists(temp)) return;
+            Directory.CreateDirectory(AppDataDriversDir);
+            File.Copy(temp, target, overwrite: true);
+            Logger.Info("已备份 DD 内核驱动到 %APPDATA%\\TheCelestialDiviner\\drivers（预置服务用）。");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"备份 DD 内核驱动失败（不影响使用）：{ex.Message}");
+        }
     }
 
     /// <summary>释放 DD 资源（退出时序调用；模式切换时保留已加载 DLL 以便快速回切）。</summary>
@@ -342,6 +373,172 @@ public static class DdDriverService
         if (_dllHandle != IntPtr.Zero) { FreeLibrary(_dllHandle); _dllHandle = IntPtr.Zero; }
         _loadedPath = null;
         _initialized = false;
+    }
+
+    // ---------- 驱动自动获取（官方发布包 → 解包 → 安装到 %APPDATA% drivers） ----------
+
+    private const string DdLatestApiUrl =
+        "https://api.github.com/repos/ddxoft/master/releases/latest";
+
+    /// <summary>API 不可达 / 配额耗尽时的兜底直链（DD 官方 2026 x64 免费版发布资产）。</summary>
+    private const string DdFallbackAssetUrl =
+        "https://github.com/ddxoft/master/releases/download/2026.DD.EV.HVCI.63xxx/2026.DD.EV.HVCI.63xxx.7z";
+
+    private static readonly HttpClient AutoFetchHttp = CreateAutoFetchClient();
+
+    private static HttpClient CreateAutoFetchClient()
+    {
+        var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        // GitHub API 强制要求 User-Agent，缺失直接 403。
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("TheCelestialDiviner");
+        return client;
+    }
+
+    private static int _autoFetchRunning;   // Interlocked 单飞标志（0 空闲 / 1 进行中）
+
+    /// <summary>驱动自动获取是否正在进行（供 UI / VM 判断，无需精确）。</summary>
+    public static bool IsAutoFetchRunning => Volatile.Read(ref _autoFetchRunning) == 1;
+
+    /// <summary>
+    /// 驱动自动获取完成并已安装到 %APPDATA% drivers（线程池线程触发，无订阅者安全）。
+    /// VM 订阅后在 UI 线程重试 EnsureReady 并自动升回 DD 模式。
+    /// </summary>
+    public static event Action? AutoFetchCompleted;
+
+    /// <summary>
+    /// 后台单飞启动"自动获取 DD 驱动"：探测 exe / APPDATA 目录无 dd63330.dll 时，
+    /// 从 DD 官方发布渠道（github.com/ddxoft，作者自己的发布页，下载器性质不做二次分发）
+    /// 下载官方 7z 包，用随包 7zr.exe 解出 dd63330.dll 安装到 %APPDATA% drivers。
+    /// 全程不抛异常，进度与结果经 Logger 留痕；完成（无论成败）触发 AutoFetchCompleted。
+    /// 重复调用安全（进行中直接忽略）。
+    /// </summary>
+    public static void StartAutoFetch()
+    {
+        if (Interlocked.CompareExchange(ref _autoFetchRunning, 1, 0) != 0) return;
+        Logger.Info("DD 驱动缺失：开始自动获取（官方发布渠道 github.com/ddxoft）...");
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                RunAutoFetch();
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("DD 驱动自动获取失败。", ex);
+            }
+            finally
+            {
+                Volatile.Write(ref _autoFetchRunning, 0);
+                AutoFetchCompleted?.Invoke();
+            }
+        });
+    }
+
+    /// <summary>自动获取主流程（后台线程调用；任何失败以日志收尾）。</summary>
+    private static void RunAutoFetch()
+    {
+        // 只认可加载的 x64 版 dd63330.dll（exe / APPDATA）；Change Box 的 DD64.dll 是
+        // 32 位时间锁版（x64 必加载失败），不算"已有驱动"，命中它反而正需要自动获取。
+        if (File.Exists(Path.Combine(AppContext.BaseDirectory, "dd63330.dll"))
+            || File.Exists(Path.Combine(AppDataDriversDir, "dd63330.dll")))
+        {
+            Logger.Info("DD 驱动自动获取：探测到已有 dd63330.dll，跳过下载。");
+            return;
+        }
+
+        var workDir = Path.Combine(AppDataDriversDir, "fetch-" + Environment.TickCount.ToString("x"));
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            // 1. 解析官方资产直链：优先 GitHub API 拿最新 Release，失败退回硬编码直链。
+            var assetUrl = ResolveLatestAssetUrl() ?? DdFallbackAssetUrl;
+
+            // 2. 下载官方 7z 包（约 3.7MB，3 分钟超时兜底）。
+            var archivePath = Path.Combine(workDir, "dd.7z");
+            using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3)))
+            using (var response = AutoFetchHttp.GetAsync(assetUrl, cts.Token).ConfigureAwait(false).GetAwaiter().GetResult())
+            {
+                response.EnsureSuccessStatusCode();
+                File.WriteAllBytes(archivePath,
+                    response.Content.ReadAsByteArrayAsync().ConfigureAwait(false).GetAwaiter().GetResult());
+            }
+            Logger.Info($"DD 驱动自动获取：官方包已下载（{new FileInfo(archivePath).Length / 1024}KB）。");
+
+            // 3. 解包：随包 7zr.exe（7-Zip 独立版，LGPL）。缺失视为安装包不完整。
+            var sevenZip = Path.Combine(AppContext.BaseDirectory, "7zr.exe");
+            if (!File.Exists(sevenZip))
+            {
+                Logger.Error("DD 驱动自动获取失败：缺少 7zr.exe 解包工具（请从官方发布包完整安装）。");
+                return;
+            }
+            var extractDir = Path.Combine(workDir, "x");
+            using (var proc = Process.Start(new ProcessStartInfo
+            {
+                FileName = sevenZip,
+                Arguments = $"x \"{archivePath}\" -o\"{extractDir}\" -y",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            }))
+            {
+                if (proc is null || !proc.WaitForExit(60_000) || proc.ExitCode != 0)
+                {
+                    Logger.Error($"DD 驱动自动获取失败：官方包解包失败（exit={(proc?.HasExited == true ? proc.ExitCode : -1)}）。");
+                    return;
+                }
+            }
+
+            // 4. 定位 dd63330.dll：官方包内含多个版本变体（1.simple 为免费标准版），优先取 simple。
+            var dll = Directory.EnumerateFiles(extractDir, "dd63330.dll", SearchOption.AllDirectories)
+                .OrderBy(path => path.IndexOf("simple", StringComparison.OrdinalIgnoreCase) >= 0 ? 0 : 1)
+                .ThenBy(path => path.Length)
+                .FirstOrDefault();
+            if (dll is null)
+            {
+                Logger.Error("DD 驱动自动获取失败：官方包内未找到 dd63330.dll（上游内容可能已变化）。");
+                return;
+            }
+
+            // 5. 安装到 %APPDATA% drivers（探测顺序中的既有位置；包内含 sys 时一并安装）。
+            Directory.CreateDirectory(AppDataDriversDir);
+            File.Copy(dll, Path.Combine(AppDataDriversDir, "dd63330.dll"), overwrite: true);
+            var sys = Directory.EnumerateFiles(extractDir, "dd63330.sys", SearchOption.AllDirectories)
+                .FirstOrDefault();
+            if (sys is not null)
+                File.Copy(sys, Path.Combine(AppDataDriversDir, "dd63330.sys"), overwrite: true);
+            Logger.Info("DD 驱动自动获取完成，已安装到 %APPDATA%\\TheCelestialDiviner\\drivers。");
+        }
+        finally
+        {
+            try { Directory.Delete(workDir, true); } catch { /* 临时目录清理失败不影响主流程 */ }
+        }
+    }
+
+    /// <summary>
+    /// 查询 DD 官方最新 Release 的 7z 资产直链（GitHub API 匿名限流 / 网络失败返回 null，
+    /// 调用方退回硬编码直链）。
+    /// </summary>
+    private static string? ResolveLatestAssetUrl()
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var response = AutoFetchHttp.GetAsync(DdLatestApiUrl, cts.Token).ConfigureAwait(false).GetAwaiter().GetResult();
+            if (!response.IsSuccessStatusCode) return null;
+            var json = response.Content.ReadAsStringAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            foreach (var asset in doc.RootElement.GetProperty("assets").EnumerateArray())
+            {
+                var name = asset.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                var url = asset.TryGetProperty("browser_download_url", out var u) ? u.GetString() ?? "" : "";
+                if (url.Length > 0 && name.EndsWith(".7z", StringComparison.OrdinalIgnoreCase)) return url;
+            }
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Logger.Info($"DD 官方最新版本查询失败（改用内置直链）：{ex.Message}");
+            return null;
+        }
     }
 
     // ---------- 注入接口（InputSimulatorService 调用） ----------
@@ -422,21 +619,17 @@ public static class DdDriverService
     /// <summary>
     /// 探测可用 DD DLL（返回绝对路径）：
     /// 1. exe 目录 dd63330.dll（官方 x64）
-    /// 2. %APPDATA%\TheCelestialDiviner\drivers\dd63330.dll
+    /// 2. %APPDATA%\TheCelestialDiviner\drivers\dd63330.dll（自动获取的安装位置）
     /// 3. Change box 目录 DD64.dll（32 位时间锁版 —— x64 进程加载必失败，仅列为探测目标，
     ///    加载失败时 LastError 会提示替换为 x64 版）
     /// </summary>
     private static string? ProbeDll()
     {
-        var candidates = new List<string>();
-
-        var exeDir = AppContext.BaseDirectory;
-        candidates.Add(Path.Combine(exeDir, "dd63330.dll"));
-
-        var appDataDrivers = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "TheCelestialDiviner", "drivers", "dd63330.dll");
-        candidates.Add(appDataDrivers);
+        var candidates = new List<string>
+        {
+            Path.Combine(AppContext.BaseDirectory, "dd63330.dll"),
+            Path.Combine(AppDataDriversDir, "dd63330.dll")
+        };
 
         var changeBox = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
@@ -446,4 +639,9 @@ public static class DdDriverService
 
         return candidates.FirstOrDefault(File.Exists);
     }
+
+    /// <summary>%APPDATA%\TheCelestialDiviner\drivers（自动获取驱动的安装位置；用户目录可写，无需管理员）。</summary>
+    private static string AppDataDriversDir => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        Constants.AppFolderName, "drivers");
 }

@@ -17,3 +17,8 @@ DD 虚拟鼠标键盘驱动（ddxoft）为**闭源第三方组件**，不随本�
   模态框并阻塞调用线程。程序在 DD_btn(0) 之前检测 `dd63330` 服务，
   缺失时用本文件自行创建/启动服务（见 DdDriverService.EnsureKernelService），
   使 DD_btn 走"服务已存在"的快速路径，规避其安装例程。
+
+- `7zr.exe` — [7-Zip](https://www.7-zip.org) 官方独立精简版（LGPL，仅解 .7z 格式）。
+  随发布包分发并入库（LGPL 允许再分发）：DD 驱动缺失时程序自动从 DD 官方发布渠道
+  （github.com/ddxoft）下载官方 7z 包，用本工具解出 dd63330.dll 安装到
+  %APPDATA%\TheCelestialDiviner\drivers（见 DdDriverService.StartAutoFetch）。

@@ -54,6 +54,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private double _soundVolume = Constants.DefaultSoundVolume;
     private bool _globalVisualEnabled = true;          // 键位可视化总开关（默认开启；关闭时仅禁用显示，各键开关状态保留）
     private int _keyboardMode; // 键盘注入模式：0 普通 / 1 扫描码 / 2 消息
+    private bool _ddAutoActivate;   // DD 缺驱动自动回退后挂起：自动获取完成时升回 DD 模式（用户手动切换即取消）
     private int _activeProfile;                        // 方案面板当前档位（0/1/2 ↔ ①②③）
     private bool _pickingActive;                       // 键位录入选择态
     private PickKind _pickingKind = PickKind.None;     // 键位录入选择态用途
@@ -225,16 +226,41 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         UpdateMasterKeyHighlight();
 
         // 键盘注入模式：默认 DD 驱动（物理级）；配置优先，越界回退默认。
-        // DD 需 dd63330.dll + 管理员权限，冷启动就绪检查失败时回退普通模式。
+        // DD 需 dd63330.dll + 管理员权限：缺失时先回退普通模式并后台自动获取
+        // （官方发布渠道下载，就绪后自动升回 DD 模式）。
         _keyboardMode = _config.KeyboardMode is >= 0 and <= 3
             ? _config.KeyboardMode
             : 3;
         if (_keyboardMode == 3 && !DdDriverService.EnsureReady())
         {
             _keyboardMode = 0;
-            Logger.Warn($"DD 驱动初始化失败，本次启动回退普通模式：{DdDriverService.LastError}");
+            _ddAutoActivate = true;
+            Logger.Warn($"DD 驱动未就绪，先以普通模式运行，正在自动获取 DD 驱动：{DdDriverService.LastError}");
+            DdDriverService.StartAutoFetch();
         }
         InputSimulatorService.KeyboardMode = _keyboardMode;
+        DdDriverService.AutoFetchCompleted += OnDdAutoFetchCompleted;
+    }
+
+    /// <summary>
+    /// DD 驱动自动获取完成回调（后台线程触发，封送 UI 线程）：
+    /// 仅在"配置期望 DD 但因缺驱动自动回退"的挂起态下激活——重试 EnsureReady
+    /// （内部含下载完成后首次在线授权的重试），成功则经 KeyboardMode 属性
+    /// 正常切换（同步模拟器 + 落盘 + 日志）。用户中途手动切换过模式则放弃。
+    /// </summary>
+    private void OnDdAutoFetchCompleted()
+    {
+        Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            if (!_ddAutoActivate) return;
+            _ddAutoActivate = false;
+            if (!DdDriverService.EnsureReady())
+            {
+                AddLog($"DD 驱动自动获取后初始化失败，可稍后在「选项」菜单重试 DD 模式：{DdDriverService.LastError}");
+                return;
+            }
+            KeyboardMode = 3;
+        });
     }
 
     // ---------- 集合 ----------
@@ -836,13 +862,17 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         set
         {
             if (value is < 0 or > 3) value = 0;
+            _ddAutoActivate = false;   // 用户手动切换：取消自动升回 DD 的挂起态
             if (!Set(ref _keyboardMode, value)) return;
-            // DD 模式：先确保虚拟驱动就绪（失败则回退普通模式并提示）。
+            // DD 模式：先确保虚拟驱动就绪；缺失则回退普通模式并后台自动获取
+            //（获取完成后经 AutoFetchCompleted 自动升回 DD 模式）。
             if (value == 3 && !DdDriverService.EnsureReady())
             {
-                AddLog($"DD 驱动模式不可用：{DdDriverService.LastError}。已回退普通模式。");
+                AddLog($"DD 驱动模式暂不可用（{DdDriverService.LastError}），已先回退普通模式，正在后台自动获取 DD 驱动…");
                 value = 0;
                 Set(ref _keyboardMode, 0);
+                _ddAutoActivate = true;
+                DdDriverService.StartAutoFetch();
             }
 
             // 同步到模拟器（连发线程每次注入时读取）。
