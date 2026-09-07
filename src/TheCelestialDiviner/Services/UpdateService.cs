@@ -32,7 +32,9 @@ public sealed class UpdateCheck
 /// 写自更新批处理并启动（等待主程序退出 → 覆盖安装目录 → 重启 → 清理临时目录），
 /// 随后由调用方走正常退出时序。脚本与更新包全部落在 %TEMP%，不污染安装目录。
 /// 发版要求：Gitee 上创建 Release 并上传与仓库 dist 相同布局的 zip
-/// （根级为与 zip 同名的包裹目录，内含 exe 与 dd63330.*；下方解包下钻逻辑同样兼容旧根级散文件布局）。
+/// （根级为与 zip 同名的包裹目录，内含 exe 与依赖 DLL；不含闭源 DD 驱动——
+/// 用户自行从 ddxoft 官网获取，覆盖安装不会删除已放置的驱动。
+/// 下方解包下钻逻辑同样兼容旧根级散文件布局）。
 /// </summary>
 public static class UpdateService
 {

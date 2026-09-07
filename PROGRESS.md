@@ -1,8 +1,22 @@
 # 衍天高手（The Celestial Diviner）开发进度交接
 
-更新：2026-09-07 — **切换方案热键触发反馈：切换语音 + 目标方案代号键帽**
+更新：2026-09-07 — **README 用户向重写 + DD 驱动出库（不入库 / 不入安装包）**
 
-## 本次变更（切换方案热键语音 + 目标方案代号键帽）
+## 本次变更（README 同步 + DD 驱动分发合规）
+- ✅ README 全面重写为**用户向**：下载运行、注意事项（管理员权限 / 杀软误报 / DD 驱动
+  自行下载 / 游戏过滤 / 配置不丢失 / 联网点 / 托盘驻留）、功能一览、使用说明与触发方式
+  速查表、更新方法、二次开发；移除开发者向的项目结构 / 构建细节；标题去掉版本号
+- ✅ DD 驱动出库（闭源第三方组件，不再随仓库 / 安装包分发）：
+  - git rm --cached drivers/dd63330.dll/.sys + .gitignore 忽略（本地保留供开发构建）
+  - drivers/README.md 改为"从 ddxoft 官网 http://www.ddxoft.com/ 获取，放入 drivers/ 目录"
+    的开发者指引（保留 sys 预置服务用途说明）
+  - UpdateService 发版要求注释同步：安装包不含 DD 驱动，覆盖安装不删除已放置的驱动
+  - v1.7.1 双端 Release 附件重打包替换（去除 dd63330.*，其余 11 个文件与布局不变），
+    GitHub Release 说明与 Gitee Release 正文同步补充"不含 DD 驱动"提示
+- ✅ 缺失驱动时程序行为不变：DD 模式自动回退普通注入并日志提示；已装用户升级后
+  驱动文件保留（xcopy 覆盖不删除）
+
+## 上次变更（切换方案热键语音 + 目标方案代号键帽）
 - ✅ 切换方案热键触发并实际切换档位时播放“切换”提示语音：
   新增内嵌资源 Resources/Sounds/CycleVoice.mp3（源件 PR/切换.mp3，csproj
   Sounds\*.mp3 通配自动覆盖）；SoundCueService 新增独立 _cyclePlayer + PlayCycle()

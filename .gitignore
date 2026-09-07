@@ -12,3 +12,7 @@ crashdumps/
 dist/
 
 crashdumps
+
+# DD 驱动为闭源第三方组件，不入库（请从 ddxoft 官网获取，见 drivers/README.md）
+drivers/dd63330.dll
+drivers/dd63330.sys
