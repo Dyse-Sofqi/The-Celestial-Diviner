@@ -222,6 +222,12 @@ public partial class MainWindow : Window
             MessageBox.Show(this, message, title, MessageBoxButton.OK);
         _vm.UpdateRestartRequested += () => _app.ExitForUpdateRestart();
 
+        // DD 驱动引导获取：确认框（用户发起官方渠道下载，程序只做下载器不分发闭源驱动）。
+        _vm.DdDriverFetchConfirmRequested += message =>
+            MessageBox.Show(this, message, "DD 驱动 — 衍天高手",
+                    MessageBoxButton.YesNo, MessageBoxImage.Question)
+            == MessageBoxResult.Yes;
+
         // 运行时初始化（定时器分辨率提升 + 钩子安装 + 权限状态回填）。
         _vm.InitializeRuntime(IsElevated());
     }

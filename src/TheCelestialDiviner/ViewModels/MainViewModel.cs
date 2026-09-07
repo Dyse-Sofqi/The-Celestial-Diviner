@@ -71,6 +71,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// <summary>键盘注入模式变更通知（导入配置后由 VM 触发，UI 回填下拉框）。</summary>
     public event Action<int>? KeyboardModeChanged;
 
+    /// <summary>
+    /// DD 驱动引导获取确认请求（View 弹 Yes/No 框）：返回用户是否同意自动下载安装。
+    /// 由用户发起官方渠道下载，程序仅做下载器，不分发闭源驱动。
+    /// </summary>
+    public event Func<string, bool>? DdDriverFetchConfirmRequested;
+
     /// <summary>方案档位数量（①②③④）。</summary>
     public const int ProfileCount = 4;
 
@@ -226,8 +232,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         UpdateMasterKeyHighlight();
 
         // 键盘注入模式：默认 DD 驱动（物理级）；配置优先，越界回退默认。
-        // DD 需 dd63330.dll + 管理员权限：缺失时先回退普通模式并后台自动获取
-        // （官方发布渠道下载，就绪后自动升回 DD 模式）。
+        // DD 需 dd63330.dll + 管理员权限：缺失时先回退普通模式，窗口就绪后引导用户
+        // 一键从官方渠道获取（DdDriverFetchConfirmRequested，用户发起下载），
+        // 完成后自动升回 DD 模式。
         _keyboardMode = _config.KeyboardMode is >= 0 and <= 3
             ? _config.KeyboardMode
             : 3;
@@ -235,11 +242,31 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         {
             _keyboardMode = 0;
             _ddAutoActivate = true;
-            Logger.Warn($"DD 驱动未就绪，先以普通模式运行，正在自动获取 DD 驱动：{DdDriverService.LastError}");
-            DdDriverService.StartAutoFetch();
+            Logger.Warn($"DD 驱动未就绪，先以普通模式运行，待引导获取：{DdDriverService.LastError}");
         }
         InputSimulatorService.KeyboardMode = _keyboardMode;
         DdDriverService.AutoFetchCompleted += OnDdAutoFetchCompleted;
+    }
+
+    /// <summary>
+    /// 引导获取 DD 驱动（UI 线程调用）：弹出确认框——由用户发起官方渠道下载，
+    /// 程序只做下载器（下载 → 解包 → 安装全程自动），不分发闭源驱动；
+    /// 拒绝则保持普通模式并日志提示手动途径。
+    /// </summary>
+    private void RequestDdDriverFetch()
+    {
+        var confirmed = DdDriverFetchConfirmRequested?.Invoke(
+            "未找到 DD 驱动（dd63330.dll），\"DD 驱动\"注入模式暂不可用。\n\n"
+            + "是否自动从 DD 官方发布渠道下载并安装（约 3.7MB，仅首次）？\n"
+            + "确认后自动完成下载安装，并启用 DD 驱动模式。") == true;
+        if (confirmed)
+        {
+            DdDriverService.StartAutoFetch();
+            return;
+        }
+        _ddAutoActivate = false;
+        AddLog("已保持普通模式。可从 ddxoft 官网（www.ddxoft.com）下载 dd63330.dll 放到程序目录后重启，"
+               + "或稍后在「选项」菜单重试 DD 模式。");
     }
 
     /// <summary>
@@ -511,6 +538,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
         // 公告更新检查：后台查询 Gitee，成功且内容有变化才覆盖注释区默认内容（失败保持旧内容）。
         _ = CheckNoticeUpdateAsync();
+
+        // DD 驱动缺失引导：窗口可见后弹出确认（用户发起官方渠道下载，程序仅做下载器）。
+        if (_ddAutoActivate && !DdDriverService.IsAutoFetchRunning)
+            RequestDdDriverFetch();
     }
 
     // ---------- 钩子事件接入（由 View 在安装成功后绑定） ----------
@@ -864,15 +895,15 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             if (value is < 0 or > 3) value = 0;
             _ddAutoActivate = false;   // 用户手动切换：取消自动升回 DD 的挂起态
             if (!Set(ref _keyboardMode, value)) return;
-            // DD 模式：先确保虚拟驱动就绪；缺失则回退普通模式并后台自动获取
-            //（获取完成后经 AutoFetchCompleted 自动升回 DD 模式）。
+            // DD 模式：先确保虚拟驱动就绪；缺失则回退普通模式，并引导用户一键获取
+            //（确认后后台下载安装，完成自动升回 DD 模式）。
             if (value == 3 && !DdDriverService.EnsureReady())
             {
-                AddLog($"DD 驱动模式暂不可用（{DdDriverService.LastError}），已先回退普通模式，正在后台自动获取 DD 驱动…");
+                AddLog($"DD 驱动模式暂不可用（{DdDriverService.LastError}），已先回退普通模式。");
                 value = 0;
                 Set(ref _keyboardMode, 0);
                 _ddAutoActivate = true;
-                DdDriverService.StartAutoFetch();
+                RequestDdDriverFetch();
             }
 
             // 同步到模拟器（连发线程每次注入时读取）。
