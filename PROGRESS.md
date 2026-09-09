@@ -1,8 +1,76 @@
 # 衍天高手（The Celestial Diviner）开发进度交接
 
-更新：2026-09-07 — **DD 驱动自动获取（无感获取官方驱动）+ HIDDriver 调研结论**
+更新：2026-09-09 — **语音设置（自定义提示音：开启 / 关闭 / 方案切换）**
 
-## 本次变更（DD 驱动自动获取）
+## 本次变更（语音设置模态框）
+- 📋 用户需求：底栏「成为衍天高手」后新增「语音设置」按钮，点击弹出模态框，
+  支持为全局开关开启 / 关闭、方案切换导入自定义音频，也可重置回默认音频
+- ✅ 底栏「语音设置」按钮（`OpenVoiceSettingsCommand`）→ `VoiceSettingsWindow` 模态框
+  （Owner = 主窗口 / CenterOwner / NoResize / SizeToContent=Height）：三行
+  （开启语音 / 关闭语音 / 方案切换语音），每行「当前音频名 + 导入 / 试听 / 重置」；
+  未设置自定义音频时重置按钮禁用
+- ✅ 导入：OpenFileDialog（mp3 / wav / m4a / aac / wma）→ 复制到
+  %APPDATA%\TheCelestialDiviner\sounds\（先复制后清理该用途旧文件，失败不破坏已有自定义音频）
+  → 热应用 → 落盘；失败弹窗提示原因
+- ✅ 重置：删除自定义文件 → 热应用 → 落盘；试听：不改配置直接播放
+- ✅ SoundCueService 重构：内嵌默认音频解包 URI 与自定义文件 URI 分离，`ApplyCustom` 统一装载
+  （文件缺失静默回退默认并留痕）；新增 `UnloadCue` 在导入 / 重置前释放 MediaPlayer 文件占用
+  （否则覆盖 / 删除自定义音频会失败）；`PlayStart` 自定义开启音优先于「衍天高手」变体；
+  `ImportCustom` 先复制后清理（复制失败旧音频原样保留）
+- ✅ 配置模型 v13：`AppConfig.CustomSounds`（Start / Stop / Cycle 文件名，空 = 内嵌默认音频）；
+  `Clone` 同步；导入配置后 `ApplyCustom` 还原（缺文件回退默认）
+- ✅ 底栏容纳新按钮：窗口 MinWidth 900 → 980（避免内容溢出重叠）
+- ✅ 构建 0 警告 0 错误
+- ✅ 发版 v1.7.4（csproj Version/FileVersion 1.7.4.0；窗口标题仅主次版本仍为 v1.7）：
+  Notice.md 新增 1.7.4 升级告示并同步 Gitee（远端公告源 raw/main/Notice.md）；
+  发布包 dist/TheCelestialDiviner-1.7.4-win64.zip（12 文件，不含闭源 DD 驱动）；
+  双端（GitHub / Gitee）创建 v1.7.4 Release 并上传同一附件
+
+## 上次变更（底栏键帽透明度滑块）
+- 📋 用户需求：底栏新增可视化键帽透明度设置按钮，图标用 lucide keyboard，
+  点击像音量按钮一样弹出滑块调节
+- ✅ 底栏「键帽透明度」按钮（`OpacityButton`，lucide keyboard 线稿图标，15×15）：
+  点击向上弹出滑块弹层（`OpacityPopup`，与音量按钮同款 Placement=Top / StaysOpen=False，
+  点弹层外自动关闭）；滑块 0~100 + 百分比数值，拖动实时生效
+- ✅ 悬浮层透明度：`KeycapOverlayWindow.SetOpacity(percent)` 设置窗口整体 Opacity
+  （只作用于窗口，键帽自身的淡出动画不受影响）；`KeyVisualizerService.SetOpacity`
+  沿用 SetPosition 的启动时序暂存机制（VM 构造早于窗口创建，AttachOverlay 后应用）
+- ✅ 配置模型 v12：`AppConfig.VisualizerOpacity`（0~100，默认 100 = 完全不透明）；
+  Load / 导入均钳位；`Clone` 同步；VM 属性实时作用 + 防抖落盘（拖动不刷日志 / 不反复写盘）；
+  导入配置随 `OnPropertyChanged` 还原滑块与悬浮窗
+- ✅ 细节：透明度归零时按钮图标暗淡 0.4（对齐音量 0 的 volume-x 暗淡提示）
+- ✅ 构建 0 警告 0 错误
+
+## 上次变更（置顶 / 热键自动重复 / UI 阻塞修复）
+- ❌ 现象（用户实测）：启动后有时键帽不浮在最上层，得切一下应用才出现；随后按总开关键
+  （F9）没反应或有延迟
+- 🔍 根因一（热键无按下沿判定）：低级钩子对键盘自动重复照单全收（InputHookService 每次
+  KEYDOWN 都派发），而 MainViewModel.HandleHookDown 的总开关 / 切换方案热键分支没有像调度器
+  `_downSources` 那样的去重——按住 F9 即反复翻转。本机日志实证：2026-09-04 20:23 连续 50+ 次
+  「全局启用/停用」、后半段稳定 31~32ms 一次（正好是 Windows 自动重复最快档）；2026-09-09
+  18:08:22 有 63ms 内 12 次、18:29:42 有 11ms 内 3 次的爆发。人手动点不可能这个节奏
+- 🔍 根因二（翻转开销全在 UI 线程）：每次翻转都同步 `SaveConfig()`（写临时文件 + 覆盖拷贝 +
+  删除，持静态锁）且关总开关时 `StopAllCore()` 最多自旋 500ms 等在途点击收尾——钩子排队的
+  事件与悬浮层重绘被压后一次性倾泻，体感「没反应 / 有延迟」
+- 🔍 根因三（悬浮层置顶未重声明）：HWND 懒创建（AttachOverlay 只 new 对象，首次 Show 发生在
+  第一次按键、游戏已在前台时），且无键帽即 Hide、按键再 Show；WPF 只在窗口首次创建时应用
+  Topmost，重新显示后可能掉到其他置顶窗口之下，切应用强制重排 Z 序才恢复
+- ✅ 修复一：总开关 / 切换方案热键加按下沿标记（`_masterKeyHeld` / `_cycleKeyHeld`，抬起复位），
+  按住自动重复只响应第一次；去掉热键路径多余的 `Dispatcher.BeginInvoke`（HandleHookDown 已在
+  UI 线程，直接调用）
+- ✅ 修复二：`SaveConfigDeferred()` 防抖落盘（500ms 合并写盘，退出时序仍同步落盘兜底）；
+  `StopAllCore(waitForInFlight)` 新增参数，运行期总开关停用传 false 不再阻塞 UI（任务循环内
+  的 Click 自身会按下→抬起释放按键；退出时序 StopAll 仍等待）
+- ✅ 修复三：NativeMethods 新增 SetWindowPos / HWND_TOPMOST / SWP_*；悬浮层 `PreloadHandle()`
+  启动即 EnsureHandle 预创建 HWND（不显示，置顶 / 穿透样式在本程序仍前台时建立）；
+  所有显示路径统一走 `ShowOverlay()`（Show 后 SetWindowPos 重新声明置顶，SWP_NOACTIVATE
+  不抢焦点）；ApplyClickThrough 改样式后补 SWP_FRAMECHANGED；调整模式窗口同样显式置顶；
+  SnapIntoWorkArea 增加布局未就绪保护（预创建句柄后首次定位 ActualWidth 可能为 0/NaN）
+- ✅ 构建 0 警告 0 错误；未改版本号（等验证通过再发版）
+- ⚠️ 待用户实测确认：若游戏为独占全屏（或开启 Windows「全屏优化」），外部进程的置顶窗口
+  仍无法覆盖，需把游戏设为窗口 / 无边框，或对游戏 exe 关闭全屏优化
+
+## 上次变更（DD 驱动自动获取）
 - 📋 用户需求：引入开源驱动替代 DD 免手动下载。调研结论：dengqizhou30/HIDDriver
   （Apache-2.0）驱动为**测试证书签名**，需 bcdedit testsigning + nointegritychecks +
   重启测试模式 + devcon 手动安装 + 自编译（仓库无预编译产物），对终端用户不可用；

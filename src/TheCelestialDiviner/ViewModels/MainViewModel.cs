@@ -64,6 +64,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private InputSource? _dualFirstPick;               // 双宏两步录入：已选的第 1 键
     private string _pickingPromptText = "请选择按键";  // 选择态提示条文字
     private int _lastPickingExitTick;                  // 最近一次退出选择态的时刻（Environment.TickCount，退出冷却防陈旧点击重进）
+    private bool _masterKeyHeld;                       // 总开关键按下沿标记（按住自动重复只响应第一次，抬起复位）
+    private bool _cycleKeyHeld;                        // 切换方案热键按下沿标记（同上）
 
     /// <summary>全局总开关提示语音服务（开启 = “启动”，关闭 = “关闭”）。</summary>
     private readonly SoundCueService _soundCue = new();
@@ -153,6 +155,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         Views.KeycapOverlayWindow.ApplyScheme(KeycapSchemes.Resolve(_config.KeycapScheme));
         if (_config.VisualizerLeft is { } l && _config.VisualizerTop is { } t)
             _visualizer.SetPosition(l, t);
+        _visualizer.SetOpacity(_config.VisualizerOpacity);   // 键帽透明度（窗口未创建时暂存，AttachOverlay 后应用）
         // 调度器字段默认为启用，须与配置中的总开关状态同步，
         // 否则冷启动时横幅显示"已关闭"而方案实际处于待触发状态。
         _scheduler.SetMasterEnabled(_globallyEnabled);
@@ -164,6 +167,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             : "未设置";
         _soundVolume = Compat.Clamp(_config.SoundVolume, 0, 100);
         _soundCue.Volume = _soundVolume / 100.0;
+        _soundCue.ApplyCustom(_config.CustomSounds);   // 自定义提示音（缺省 = 内嵌默认音频）
 
         // 调度器日志 → UI 日志面板（钩子线程触发，封送到 UI 线程）。
         _scheduler.Log += msg =>
@@ -184,6 +188,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         ToggleGlobalVisualCommand = RelayCommand.Create(() => GlobalVisualEnabled = !GlobalVisualEnabled);
         ToggleStatusReminderCommand = RelayCommand.Create(() => StatusReminderEnabled = !StatusReminderEnabled);
         ToggleDivinerVoiceCommand = RelayCommand.Create(() => DivinerVoiceEnabled = !DivinerVoiceEnabled);
+        OpenVoiceSettingsCommand = RelayCommand.Create(() => VoiceSettingsRequested?.Invoke());
         CheckUpdateCommand = RelayCommand.Create(() => _ = RunCheckUpdateAsync());
         // 底栏设置菜单（键盘注入 / 键帽配色 / 键帽可视化）：参数沿用原下拉框语义，
         // 点击选项即热生效 + 落盘。
@@ -215,6 +220,13 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         {
             _volumeSaveTimer.Stop();
             _config.SoundVolume = _soundVolume;
+            SaveConfig();
+        };
+
+        // 配置落盘防抖：总开关 / 热键等高频状态变更合并写盘，避免每次翻转同步写三次文件卡 UI。
+        _configSaveTimer.Tick += (_, _) =>
+        {
+            _configSaveTimer.Stop();
             SaveConfig();
         };
 
@@ -558,18 +570,26 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     {
         if (GlobalSwitchSource is { } gk && gk.Equals(source))
         {
+            // 按下沿判定：按住时 OS 会持续投递 KEYDOWN（自动重复，最快约 31ms 一次），
+            // 若每次都翻转，一次长按会把总开关来回拨几十次、最终状态随机，体感“按了没反应”。
+            // 只响应第一次按下，抬起（HandleHookUp）复位。
+            if (_masterKeyHeld) return;
+            _masterKeyHeld = true;
             // 键位录入选择态 / 录制期间不响应（避免把总开关键录为方案源或热键时误切总开关）。
             if (!KeyRecorder.IsAnyRecording && !_pickingActive)
-                Application.Current?.Dispatcher.BeginInvoke(ToggleGlobalEnabled);
+                ToggleGlobalEnabled();   // 本方法已在 UI 线程（View 已封送），无需再绕一次 Dispatcher
             return;
         }
 
         if (ProfileCycleSource is { } ck && ck.Equals(source))
         {
+            // 同总开关键：按住自动重复只切换一次档位。
+            if (_cycleKeyHeld) return;
+            _cycleKeyHeld = true;
             // 切换方案热键：按下按顺序切换非空方案档位。录入选择态 / 录制期间不响应
             // （该键已被占用，不能录为方案源；也避免录入切换方案热键时误触切换）。
             if (!KeyRecorder.IsAnyRecording && !_pickingActive)
-                Application.Current?.Dispatcher.BeginInvoke(CycleToNextProfile);
+                CycleToNextProfile();
             return;
         }
 
@@ -595,8 +615,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _scheduler.HandleSourceDown(source);
     }
 
-    /// <summary>输入源释放（钩子线程调用）。</summary>
-    public void HandleHookUp(InputSource source) => _scheduler.HandleSourceUp(source);
+    /// <summary>输入源释放（UI 线程调用，View 已封送）：复位热键按下沿标记并转交调度器。</summary>
+    public void HandleHookUp(InputSource source)
+    {
+        // 热键按下沿标记随抬起复位（低级钩子全局投递，抬起事件不会丢）。
+        if (GlobalSwitchSource is { } gk && gk.Equals(source)) _masterKeyHeld = false;
+        if (ProfileCycleSource is { } ck && ck.Equals(source)) _cycleKeyHeld = false;
+        _scheduler.HandleSourceUp(source);
+    }
 
     // ---------- 全局总开关 ----------
     /// <summary>
@@ -609,7 +635,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _config.GlobalSwitch.Enabled = GloballyEnabled;
         _scheduler.SetMasterEnabled(GloballyEnabled);
         if (GloballyEnabled) _soundCue.PlayStart(DivinerVoiceEnabled); else _soundCue.PlayStop();
-        SaveConfig();
+        SaveConfigDeferred();   // 防抖落盘：热键长按 / 快速连按时不反复同步写文件
         AddLog(GloballyEnabled ? "总开关已开启（启动）。" : "总开关已关闭，所有连发已停止。");
     }
 
@@ -849,6 +875,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         Interval = TimeSpan.FromMilliseconds(500)
     };
 
+    /// <summary>配置落盘防抖定时器（高频状态变更合并写盘，避免每次翻转都同步写三次文件卡 UI）。</summary>
+    private readonly System.Windows.Threading.DispatcherTimer _configSaveTimer = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(500)
+    };
+
     /// <summary>追加一条 UI 日志（最新在最上，最多保留 200 条）。</summary>
     public void AddLog(string message)
     {
@@ -858,6 +890,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
     /// <summary>保存配置到 %APPDATA%（任何变更触发）。</summary>
     public void SaveConfig() => _configService.Save(_config);
+
+    /// <summary>防抖保存配置：500ms 内多次状态变更合并为一次写盘（总开关热键快速切换场景）。
+    /// 退出时序仍由 App.ExitApp 直接落盘兜底，不会丢状态。</summary>
+    public void SaveConfigDeferred()
+    {
+        _configSaveTimer.Stop();
+        _configSaveTimer.Start();
+    }
 
     /// <summary>夜间模式（true = 夜间深色，false = 白天浅色；实时生效并落盘，覆盖系统跟随）。</summary>
     public bool NightMode
@@ -1026,6 +1066,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// <summary>“成为衍天高手”开关联动命令（底栏按钮）。</summary>
     public ICommand ToggleDivinerVoiceCommand { get; }
 
+    /// <summary>语音设置（底栏按钮）：弹出模态框为开启 / 关闭 / 方案切换语音导入自定义音频。</summary>
+    public ICommand OpenVoiceSettingsCommand { get; }
+
+    /// <summary>语音设置对话框请求（View 接线后订阅；打开模态框）。</summary>
+    public event Action? VoiceSettingsRequested;
+
     /// <summary>检查更新命令（Gitee Release：检查 → 确认 → 下载安装并自动重启）。</summary>
     public ICommand CheckUpdateCommand { get; }
 
@@ -1078,6 +1124,84 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    // ---------- 语音设置（自定义提示音：开启 / 关闭 / 方案切换） ----------
+
+    /// <summary>语音用途显示名（对话框标题 / 日志）。</summary>
+    public static string VoiceCueName(SoundCue cue) => cue switch
+    {
+        SoundCue.Start => "开启",
+        SoundCue.Stop => "关闭",
+        _ => "方案切换",
+    };
+
+    /// <summary>某用途语音的当前显示名（“默认音频”或自定义文件名）。</summary>
+    public string VoiceCueDisplayName(SoundCue cue)
+    {
+        var name = GetCustomSound(cue);
+        // net48 参考程序集里 string.IsNullOrEmpty 无 NotNullWhen 注解，用模式匹配让编译器确认非空
+        return name is { Length: > 0 } ? name : "默认音频";
+    }
+
+    /// <summary>某用途是否已设置自定义语音。</summary>
+    public bool HasCustomVoice(SoundCue cue) => !string.IsNullOrEmpty(GetCustomSound(cue));
+
+    private string? GetCustomSound(SoundCue cue) => cue switch
+    {
+        SoundCue.Start => _config.CustomSounds.Start,
+        SoundCue.Stop => _config.CustomSounds.Stop,
+        _ => _config.CustomSounds.Cycle,
+    };
+
+    private void SetCustomSound(SoundCue cue, string? storedName)
+    {
+        switch (cue)
+        {
+            case SoundCue.Start: _config.CustomSounds.Start = storedName; break;
+            case SoundCue.Stop: _config.CustomSounds.Stop = storedName; break;
+            default: _config.CustomSounds.Cycle = storedName; break;
+        }
+    }
+
+    /// <summary>
+    /// 导入自定义语音（复制到语音目录 → 热应用 → 落盘）。返回 null = 成功，否则为失败原因。
+    /// 文件被占用 / 无权限等异常由 View 提示；失败后恢复原有装载。
+    /// </summary>
+    public string? ImportVoiceCue(SoundCue cue, string sourcePath)
+    {
+        try
+        {
+            _soundCue.UnloadCue(cue);   // 释放旧文件占用，否则同名音频文件无法覆盖
+            var stored = SoundCueService.ImportCustom(cue, sourcePath);
+            SetCustomSound(cue, stored);
+            _soundCue.ApplyCustom(_config.CustomSounds);
+            SaveConfig();
+            AddLog($"{VoiceCueName(cue)}语音已设置为 [{Path.GetFileName(sourcePath)}]。");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("导入自定义语音失败。", ex);
+            _soundCue.ApplyCustom(_config.CustomSounds);   // 失败后恢复原装载
+            return ex.Message;
+        }
+    }
+
+    /// <summary>重置某用途语音为默认（删除自定义文件 → 热应用 → 落盘）。</summary>
+    public void ResetVoiceCue(SoundCue cue)
+    {
+        var old = GetCustomSound(cue);
+        if (string.IsNullOrEmpty(old)) return;
+        SetCustomSound(cue, null);
+        _soundCue.UnloadCue(cue);
+        SoundCueService.DeleteCustom(old);
+        _soundCue.ApplyCustom(_config.CustomSounds);
+        SaveConfig();
+        AddLog($"{VoiceCueName(cue)}语音已重置为默认。");
+    }
+
+    /// <summary>试听某用途语音（不改配置；开启语音试听“启动”音，非衍天高手变体）。</summary>
+    public void PreviewVoiceCue(SoundCue cue) => _soundCue.PreviewCue(cue);
+
     /// <summary>键帽配色方案名（KeycapSchemes.All 之一，默认 Silver；切换实时落盘并立即生效）。</summary>
     public string KeycapSchemeName
     {
@@ -1115,6 +1239,24 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             SaveConfig();
             AddLog($"键帽可视化方案：{VisualizerModeNames[v]}。");
             OnPropertyChanged(nameof(VisualizerModeIndex));   // 设置菜单 ● 选中标记随切换刷新
+        }
+    }
+
+    /// <summary>
+    /// 键帽透明度（0~100，默认 100 = 完全不透明；底栏滑块调节）。
+    /// 拖动实时作用于悬浮窗，落盘防抖（拖动过程不反复写文件）；导入配置后同步还原。
+    /// </summary>
+    public double VisualizerOpacity
+    {
+        get => Compat.Clamp(_config.VisualizerOpacity, 0, 100);
+        set
+        {
+            var v = Compat.Clamp(value, 0, 100);
+            if (Math.Abs(_config.VisualizerOpacity - v) < 0.001) return;
+            _config.VisualizerOpacity = v;
+            _visualizer.SetOpacity(v);
+            SaveConfigDeferred();   // 拖动中高频变更合并落盘（不做日志，避免刷屏）
+            OnPropertyChanged(nameof(VisualizerOpacity));
         }
     }
 

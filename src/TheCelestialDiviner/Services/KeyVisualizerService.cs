@@ -86,6 +86,9 @@ public sealed class KeyVisualizerService
     /// <summary>悬浮窗创建前的暂存位置（AttachOverlay 时应用；修复启动时序：VM 构造早于窗口创建）。</summary>
     private (double Left, double Top)? _pendingPosition;
 
+    /// <summary>悬浮窗创建前的暂存透明度（0~100 百分比；同 SetPosition 的启动时序处理）。</summary>
+    private double? _pendingOpacity;
+
     public KeyVisualizerService(InputHookService hooks)
     {
         _hooks = hooks;
@@ -99,9 +102,14 @@ public sealed class KeyVisualizerService
         if (_overlay is not null) return;
         _dispatcher = Application.Current?.Dispatcher;
         _overlay = new KeycapOverlayWindow();
+        // 启动即预创建 HWND（不显示）：置顶 / 穿透样式在本程序仍是前台时建立，
+        // 避免第一次按键时才在游戏前台创建分层窗口（首键卡顿 + 置顶序错位）。
+        _overlay.PreloadHandle();
         // 启动时序：VM 构造时窗口尚未存在，SetPosition 只能暂存；窗口创建后在此应用。
         if (_pendingPosition is { } pos)
             _overlay.SetSavedPosition(pos.Left, pos.Top);
+        if (_pendingOpacity is { } opacity)
+            _overlay.SetOpacity(opacity);
 
         // 幽灵按住项看门狗：EchoGuard 吞掉物理释放时的兜底回收（见 PurgeGhostHeld）。
         _ghostTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
@@ -124,6 +132,16 @@ public sealed class KeyVisualizerService
             overlay.SetSavedPosition(l, t);
         else
             _pendingPosition = (l, t);
+    }
+
+    /// <summary>设置键帽透明度（0~100 百分比；实时生效）。窗口未创建时暂存，创建后自动应用。</summary>
+    public void SetOpacity(double percent)
+    {
+        var v = Compat.Clamp(percent, 0, 100);
+        if (_overlay is { } overlay)
+            overlay.SetOpacity(v);
+        else
+            _pendingOpacity = v;
     }
 
     /// <summary>订阅调度器连发脉冲（目标键每发射一次 → 键帽脉冲 + 连击角标）；

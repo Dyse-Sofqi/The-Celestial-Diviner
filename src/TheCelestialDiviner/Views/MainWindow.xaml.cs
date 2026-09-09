@@ -149,6 +149,8 @@ public partial class MainWindow : Window
         SoundVolumeSlider.Value = _vm.SoundVolume;
         // 音量按钮 → 向上弹出滑块弹层；点击弹层外自动关闭（StaysOpen=False）。
         VolumeButton.Click += (_, _) => VolumePopup.IsOpen = !VolumePopup.IsOpen;
+        // 键帽透明度按钮 → 向上弹出滑块弹层（同音量交互；点击弹层外自动关闭）。
+        OpacityButton.Click += (_, _) => OpacityPopup.IsOpen = !OpacityPopup.IsOpen;
 
         // 夜间模式按钮：切换白天 / 夜间主题（VM 落盘并重注主题资源）。
         NightModeButton.Click += (_, _) => _vm.NightMode = !_vm.NightMode;
@@ -183,6 +185,8 @@ public partial class MainWindow : Window
         // 位置调整模式：底栏按钮 → 悬浮窗虚拟键帽拖拽 → 确认回调保存落盘。
         _vm.AdjustVisualizerRequested += onConfirm =>
             _vm.Visualizer.BeginAdjust(onConfirm);
+        // 语音设置：底栏按钮 → 模态框（导入自定义提示音 / 试听 / 重置回默认）。
+        _vm.VoiceSettingsRequested += ShowVoiceSettings;
 
         // 钩子事件 → UI 封送（调度器本身线程安全，但日志与 UI 属性需封送）。
         _app.Hooks.SourceDown += src =>
@@ -611,6 +615,13 @@ public partial class MainWindow : Window
             MessageBox.Show(this, $"写入文件失败：{ex.Message}", "衍天高手",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    /// <summary>打开语音设置模态框（自定义总开关开启 / 关闭与方案切换的提示音）。</summary>
+    private void ShowVoiceSettings()
+    {
+        var dlg = new VoiceSettingsWindow(_vm) { Owner = this };
+        dlg.ShowDialog();
     }
 
     // ---------- 交互 ----------

@@ -124,7 +124,7 @@ public sealed partial class KeycapOverlayWindow : Window
             _caps.Add(cap);
             _host.Children.Add(cap);   // 末位：窗口右对齐，右缘位置稳定不跳动
             PositionToSaved();
-            Show();
+            ShowOverlay();
             return;
         }
 
@@ -153,6 +153,13 @@ public sealed partial class KeycapOverlayWindow : Window
     public void SetSavedPosition(double left, double top)
     {
         PositionOverride = new Point(left, top);
+    }
+
+    /// <summary>设置键帽悬浮层整体透明度（0~100 百分比；0 = 完全透明，100 = 完全不透明）。
+    /// 只作用于窗口整体，键帽自身的淡出动画（KeycapControl.Opacity）不受影响。</summary>
+    public void SetOpacity(double percent)
+    {
+        Opacity = Compat.Clamp(percent, 0, 100) / 100.0;
     }
 
     public KeycapOverlayWindow()
@@ -313,6 +320,7 @@ public sealed partial class KeycapOverlayWindow : Window
 
         _adjustWindow = win;
         win.Show();
+        AssertTopmost(win);   // 调整窗口同样显式置顶，避免被游戏窗口盖住导致拖拽无从下手
         SnapIntoWorkArea(win, magnet: 0);   // 陈旧保存位置 / 显示器变更防御：打开时钳回工作区
     }
 
@@ -351,6 +359,9 @@ public sealed partial class KeycapOverlayWindow : Window
     {
         var source = PresentationSource.FromVisual(win);
         if (source?.CompositionTarget is null) return;
+        // 预创建句柄（EnsureHandle）后首次定位可能早于布局完成：ActualWidth/Height 还是 0 / NaN，
+        // 此时钳位会算出 NaN 抛异常。布局未就绪直接跳过，显示后的首次定位会再次校正。
+        if (!(win.ActualWidth > 0) || !(win.ActualHeight > 0)) return;
         var scale = source.CompositionTarget.TransformToDevice.M11;
         if (scale <= 0) scale = 1;
         var work = System.Windows.Forms.Screen.FromHandle(
@@ -380,6 +391,40 @@ public sealed partial class KeycapOverlayWindow : Window
         var ex = NativeMethods.GetWindowLong(hwnd, NativeMethods.GWL_EXSTYLE);
         _ = NativeMethods.SetWindowLong(hwnd, NativeMethods.GWL_EXSTYLE,
             ex | NativeMethods.WS_EX_TRANSPARENT | NativeMethods.WS_EX_NOACTIVATE | NativeMethods.WS_EX_TOOLWINDOW);
+        // SetWindowLong 只改样式位，不重算窗口框架缓存；补一次 SWP_FRAMECHANGED 让穿透 / 不抢焦点立即生效。
+        NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER
+            | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_FRAMECHANGED);
+    }
+
+    /// <summary>
+    /// 启动时预创建 HWND（不显示）：让置顶 / 穿透样式在游戏抢前台之前就建立，
+    /// 同时避免“第一次按键才创建分层窗口”带来的首键卡顿。句柄已存在时安全。
+    /// </summary>
+    public void PreloadHandle()
+    {
+        _ = new System.Windows.Interop.WindowInteropHelper(this).EnsureHandle();
+    }
+
+    /// <summary>
+    /// 重新声明置顶。WPF 只在窗口首次创建时应用 Topmost；悬浮层无键帽时频繁 Hide、按键时再 Show，
+    /// 重新显示后可能掉到其他置顶窗口之下（现象：键帽不浮在最上层，切一下应用才出现）。
+    /// SWP_NOACTIVATE 保证不抢焦点，SWP_SHOWWINDOW 兼顾首次显示。
+    /// </summary>
+    private static void AssertTopmost(Window win)
+    {
+        var hwnd = new System.Windows.Interop.WindowInteropHelper(win).Handle;
+        if (hwnd == IntPtr.Zero) return;
+        NativeMethods.SetWindowPos(hwnd, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0,
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE
+            | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+    }
+
+    /// <summary>显示悬浮层并重新声明置顶（所有显示路径统一走这里）。</summary>
+    private void ShowOverlay()
+    {
+        Show();
+        AssertTopmost(this);
     }
 
     /// <summary>
@@ -439,7 +484,7 @@ public sealed partial class KeycapOverlayWindow : Window
                 cap.BumpPressCount();
 
         PositionToSaved();
-        Show();
+        ShowOverlay();
     }
 
     /// <summary>
@@ -464,7 +509,7 @@ public sealed partial class KeycapOverlayWindow : Window
             cap.BumpPressCount();
 
         PositionToSaved();
-        Show();
+        ShowOverlay();
     }
 
     /// <summary>锚定屏幕右下角（主屏工作区，边距 24px）。</summary>

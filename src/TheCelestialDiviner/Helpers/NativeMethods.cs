@@ -237,5 +237,23 @@ public static class NativeMethods
     /// <summary>取指定虚拟键状态（高位 1 = 按下；用于可视化层组合键检测）。</summary>
     [DllImport("user32.dll")]
     public static extern short GetAsyncKeyState(int vKey);
+
+    // ---------- 窗口 Z 序 / 样式刷新（键帽悬浮层重新置顶用） ----------
+
+    /// <summary>置顶 Z 序标记（hWndInsertAfter = HWND_TOPMOST）。</summary>
+    public static readonly IntPtr HWND_TOPMOST = new(-1);
+
+    public const uint SWP_NOSIZE = 0x0001;
+    public const uint SWP_NOMOVE = 0x0002;
+    public const uint SWP_NOZORDER = 0x0004;
+    public const uint SWP_NOACTIVATE = 0x0010;
+    public const uint SWP_FRAMECHANGED = 0x0020;   // 改扩展样式后强制系统重算窗口框架
+    public const uint SWP_SHOWWINDOW = 0x0040;
+
+    /// <summary>设置窗口位置 / Z 序（悬浮层重新声明置顶、改样式后刷新框架用）。</summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
+        int X, int Y, int cx, int cy, uint uFlags);
 }
 #pragma warning restore CA1707

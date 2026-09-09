@@ -243,6 +243,30 @@ public sealed class ProfileCycleConfig
     };
 }
 
+/// <summary>
+/// 自定义提示音配置（语音设置对话框导入；值为语音目录下的文件名，空 = 使用内嵌默认音频）。
+/// 导入的音频会复制到 %APPDATA%\TheCelestialDiviner\sounds，因此原文件删除后仍可用。
+/// </summary>
+public sealed class CustomSoundConfig
+{
+    /// <summary>总开关开启语音文件名（空 = 默认启动音）。</summary>
+    public string? Start { get; set; }
+
+    /// <summary>总开关关闭语音文件名（空 = 默认关闭音）。</summary>
+    public string? Stop { get; set; }
+
+    /// <summary>切换方案语音文件名（空 = 默认切换音）。</summary>
+    public string? Cycle { get; set; }
+
+    /// <summary>创建当前实例的副本。</summary>
+    public CustomSoundConfig Clone() => new()
+    {
+        Start = Start,
+        Stop = Stop,
+        Cycle = Cycle
+    };
+}
+
 /// <summary>应用配置根对象（持久化到 %APPDATA%\TheCelestialDiviner\config.json）。</summary>
 public sealed class AppConfig
 {
@@ -252,8 +276,8 @@ public sealed class AppConfig
     /// <summary>配置文件当前版本（v2：总开关默认关闭 + 默认键 F9 + 提示语音音量；v3：开关模式分区；
     /// v4：方案三档位 ①②③ + 当前档位；v5：键位可视化开关表；v6：连发时序增加按压时长；
     /// v7：状态提醒开关；v8：状态提醒默认激活；v9：切换方案热键；v10：成为衍天高手语音按钮；
-    /// v11：注释区公告内容缓存）。</summary>
-    public const int CurrentVersion = 11;
+    /// v11：注释区公告内容缓存；v12：键帽透明度；v13：自定义提示音）。</summary>
+    public const int CurrentVersion = 13;
 
     /// <summary>配置文件版本号（预留迁移能力）。</summary>
     public int Version { get; set; } = CurrentVersion;
@@ -313,6 +337,9 @@ public sealed class AppConfig
     /// </summary>
     public int VisualizerMode { get; set; }
 
+    /// <summary>键帽透明度（0~100，默认 100 = 完全不透明；底栏滑块调节，实时生效并落盘）。</summary>
+    public double VisualizerOpacity { get; set; } = 100;
+
     /// <summary>所有输入源方案（键为输入源标识字符串；镜像当前档位 Profiles[ActiveProfile]）。</summary>
     public Dictionary<string, KeyScheme> Schemes { get; set; } = new(StringComparer.Ordinal);
 
@@ -321,6 +348,9 @@ public sealed class AppConfig
 
     /// <summary>切换方案热键配置（按下按顺序切换非空方案档位；与全局开关键、连发方案互斥）。</summary>
     public ProfileCycleConfig ProfileCycle { get; set; } = new();
+
+    /// <summary>自定义提示音（全局开关开启 / 关闭 / 方案切换；缺省 = 内嵌默认音频）。</summary>
+    public CustomSoundConfig CustomSounds { get; set; } = new();
 
     /// <summary>全局开关提示语音音量（0~100，默认 70）。</summary>
     public double SoundVolume { get; set; } = Constants.DefaultSoundVolume;
@@ -363,10 +393,12 @@ public sealed class AppConfig
         VisualizerLeft = VisualizerLeft,
         VisualizerTop = VisualizerTop,
         VisualizerMode = VisualizerMode,
+        VisualizerOpacity = VisualizerOpacity,
         VisualKeys = new Dictionary<string, bool>(VisualKeys, StringComparer.Ordinal),
         Schemes = Schemes.ToDictionary(p => p.Key, p => p.Value.Clone(), StringComparer.Ordinal),
         GlobalSwitch = GlobalSwitch.Clone(),
         ProfileCycle = ProfileCycle.Clone(),
+        CustomSounds = CustomSounds.Clone(),
         SoundVolume = SoundVolume,
         UseScanCodes = UseScanCodes,
         KeyboardMode = KeyboardMode,

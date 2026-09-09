@@ -878,6 +878,10 @@ public sealed partial class MainViewModel
             Views.KeycapOverlayWindow.ApplyScheme(KeycapSchemes.Resolve(imported.KeycapScheme));
             OnPropertyChanged(nameof(KeycapSchemeName));
             _visualizer.SetPosition(imported.VisualizerLeft, imported.VisualizerTop);
+            // 键帽透明度随导入配置还原（钳位后应用，滑块与悬浮窗同步）。
+            imported.VisualizerOpacity = Compat.Clamp(imported.VisualizerOpacity, 0, 100);
+            _visualizer.SetOpacity(imported.VisualizerOpacity);
+            OnPropertyChanged(nameof(VisualizerOpacity));
             // 主题随导入配置还原（夜间模式 / 白天模式）。
             ApplyTheme();
             MasterKeyText = imported.GlobalSwitch.HasKey
@@ -889,6 +893,8 @@ public sealed partial class MainViewModel
                 : "未设置";
             OnPropertyChanged(nameof(ProfileCycleSource));
             SoundVolume = Compat.Clamp(imported.SoundVolume, 0, 100);
+            // 自定义提示音随导入配置还原（文件缺失自动回退默认并留痕）。
+            _soundCue.ApplyCustom(imported.CustomSounds);
             // 键盘注入模式随配置同步（导入 / 导出；旧配置回退 UseScanCodes 语义）。
             var mode = imported.KeyboardMode is >= 0 and <= 3
                 ? imported.KeyboardMode

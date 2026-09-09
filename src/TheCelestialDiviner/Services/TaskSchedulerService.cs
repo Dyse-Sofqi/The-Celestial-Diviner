@@ -146,7 +146,9 @@ public sealed class TaskSchedulerService
             _masterEnabled = enabled;
             if (!enabled)
             {
-                StopAllCore();
+                // 运行期停用不等在途点击收尾：任务循环内的 Click 自身按下→抬起会释放按键，
+                // 等待只会把 UI 线程（热键路径）最多阻塞 500ms。退出时序（StopAll）仍会等待。
+                StopAllCore(waitForInFlight: false);
                 OnLog("全局停用：所有连发任务已停止。");
             }
             else
@@ -258,11 +260,13 @@ public sealed class TaskSchedulerService
 
     /// <summary>核心停止逻辑（须在锁内调用）：解除全部激活状态，并等待在途点击完成
     /// （点击含按压 Sleep，不等待会在退出 / 重建时把目标键留在"按住"状态；
-    /// 上限 500ms 覆盖最大按压 200ms + 抖动，超时放弃属可接受的极端情况）。</summary>
-    private void StopAllCore()
+    /// 上限 500ms 覆盖最大按压 200ms + 抖动，超时放弃属可接受的极端情况）。
+    /// waitForInFlight = false 时只清触发信号立即返回（运行期总开关停用，避免阻塞 UI 线程）。</summary>
+    private void StopAllCore(bool waitForInFlight = true)
     {
         foreach (var task in _tasks) Deactivate(task);
         _downSources.Clear();
+        if (!waitForInFlight) return;
 
         var deadline = Environment.TickCount + 500;
         foreach (var task in _tasks)

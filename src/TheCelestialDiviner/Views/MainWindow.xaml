@@ -4,7 +4,7 @@
         xmlns:sys="clr-namespace:System;assembly=mscorlib"
         xmlns:conv="clr-namespace:TheCelestialDiviner.Helpers"
         Title="衍天高手 The Celestial Diviner v1.7"
-        Width="1000" Height="620" MinWidth="900" MinHeight="580"
+        Width="1000" Height="620" MinWidth="980" MinHeight="580"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource ThemeBg}"
         Closing="OnClosing">
@@ -32,6 +32,9 @@
         <Geometry x:Key="MessageSquareDotIconPath">M12.7,3 L4,3 A2,2 0 0,0 2,5 L2,21.286 A0.71,0.71 0 0,0 3.212,21.788 L5.414,19.586 A2,2 0 0,1 6.828,19 L20,19 A2,2 0 0,0 22,17 L22,12.3 M19,3 A3,3 0 1,1 19,9 A3,3 0 1,1 19,3 Z</Geometry>
         <!-- lucide menu（ISC 许可，lucide-static v0.544；三条横线）。设置菜单键图标 -->
         <Geometry x:Key="MenuIconPath">M4,5 L20,5 M4,12 L20,12 M4,19 L20,19</Geometry>
+        <!-- lucide keyboard（ISC 许可，lucide-static v0.544；按键圆点用零长线段 + 圆头描边渲染）。
+             底栏键帽透明度按钮图标 -->
+        <Geometry x:Key="KeyboardIconPath">M4,4 L20,4 A2,2 0 0,1 22,6 L22,18 A2,2 0 0,1 20,20 L4,20 A2,2 0 0,1 2,18 L2,6 A2,2 0 0,1 4,4 Z M6,8 L6.01,8 M10,8 L10.01,8 M14,8 L14.01,8 M18,8 L18.01,8 M8,12 L8.01,12 M12,12 L12.01,12 M16,12 L16.01,12 M7,16 L17,16</Geometry>
 
         <!-- 输入源控件模板：图标 + 名称 + 目标键小字；占位空白透明 -->
         <DataTemplate x:Key="SourceButtonTemplate">
@@ -487,8 +490,8 @@
         <Border DockPanel.Dock="Bottom" Height="36" Margin="10,0,10,6"
                 Background="{DynamicResource ThemePanel}" CornerRadius="4">
             <DockPanel Margin="10,0">
-                <!-- 最右：提示语音音量（点击弹出滑块；0 时显示 volume-x 暗淡态）。
-                     键位可视化总开关已迁至方案列表表头（eye 列）。 -->
+                <!-- 最右：键帽透明度 + 提示语音音量（点击弹出滑块；音量 0 时显示 volume-x 暗淡态，
+                     透明度 0 时键盘图标暗淡）。键位可视化总开关已迁至方案列表表头（eye 列）。 -->
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                     <!-- 状态提醒按钮（lucide message-square-dot）：开启后总开关开启时常驻应用图标键帽，
                          任一方案连发时自动隐藏，全部停止 2.5s 后恢复；不受键位可视化总开关约束。
@@ -542,6 +545,52 @@
                                     </Style>
                                 </Path.Style>
                             </Path>
+                        </Grid>
+                    </Button>
+                    <!-- 键帽透明度按钮（lucide keyboard）：点击向上弹出滑块，调节悬浮层键帽整体透明度
+                         （0 = 完全透明，100 = 完全不透明；拖动实时生效，落盘防抖）。 -->
+                    <Button x:Name="OpacityButton" Width="26" Height="26" Padding="0"
+                            Style="{StaticResource IconButtonStyle}"
+                            ToolTip="键帽透明度（0 = 完全透明）"
+                            Margin="0,0,6,0">
+                        <Grid Background="Transparent">
+                            <Path Stroke="{DynamicResource ThemeFg}"
+                                  StrokeThickness="1.8" Fill="Transparent"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round"
+                                  Width="15" Height="15" Stretch="Uniform">
+                                <Path.Style>
+                                    <Style TargetType="Path">
+                                        <Setter Property="Data" Value="{StaticResource KeyboardIconPath}"/>
+                                        <Style.Triggers>
+                                            <!-- 透明度归零 = 键帽完全不可见：图标暗淡提示当前状态 -->
+                                            <DataTrigger Binding="{Binding VisualizerOpacity}" Value="0">
+                                                <Setter Property="Opacity" Value="0.4"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Path.Style>
+                            </Path>
+                            <Popup x:Name="OpacityPopup" PlacementTarget="{Binding ElementName=OpacityButton}"
+                                   Placement="Top" StaysOpen="False" AllowsTransparency="True"
+                                   VerticalOffset="4">
+                                <Border Background="{DynamicResource ThemePanel}"
+                                        BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1"
+                                        CornerRadius="4" Padding="10,8" Margin="4">
+                                    <StackPanel Orientation="Vertical">
+                                        <TextBlock Text="键帽透明度" FontSize="10" Opacity="0.7"
+                                                   HorizontalAlignment="Center" Margin="0,0,0,4"
+                                                   Foreground="{DynamicResource ThemeFg}"/>
+                                        <Slider x:Name="VisualizerOpacitySlider" Width="130"
+                                                Minimum="0" Maximum="100" Value="{Binding VisualizerOpacity}"
+                                                TickFrequency="10" TickPlacement="None" IsSnapToTickEnabled="False"/>
+                                        <TextBlock Text="{Binding VisualizerOpacity, StringFormat={}{0:0}%}"
+                                                   HorizontalAlignment="Center" FontSize="10" Opacity="0.8"
+                                                   Margin="0,4,0,0"
+                                                   Foreground="{DynamicResource ThemeFg}"/>
+                                    </StackPanel>
+                                </Border>
+                            </Popup>
                         </Grid>
                     </Button>
                     <Button x:Name="VolumeButton" Width="26" Height="26" Padding="0"
@@ -748,6 +797,11 @@
                             </Style>
                         </Button.Style>
                     </Button>
+                    <!-- 语音设置：弹出模态框，为总开关开启 / 关闭与方案切换导入自定义提示音（可试听 / 重置回默认） -->
+                    <Button Content="语音设置" Style="{StaticResource IconButtonStyle}"
+                            Height="26" Padding="8,0" Margin="8,0,0,0"
+                            Command="{Binding OpenVoiceSettingsCommand}"
+                            ToolTip="语音设置：为总开关开启 / 关闭与方案切换设置自定义提示音"/>
                 </StackPanel>
             </DockPanel>
         </Border>
