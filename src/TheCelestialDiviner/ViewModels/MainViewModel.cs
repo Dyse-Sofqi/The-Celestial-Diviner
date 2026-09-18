@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -1273,13 +1273,19 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     public event Action<Action<double, double>>? AdjustVisualizerRequested;
     /// <summary>
     /// 同步键位可视化注册表（当前档位全部方案键位，含每键显示开关；键位集合变化后调用：
-    /// 启动 / 导入 / 删除 / 总开关键迁移）。
+    /// 启动 / 导入 / 删除 / 总开关键迁移）。双宏方案额外登记辅键源（次键 eye → 该键显示）。
     /// </summary>
     private void SyncVisualizerRegistry()
     {
         var entries = new List<KeyValuePair<string, bool>>(_config.Schemes.Count);
-        foreach (var key in _config.Schemes.Keys)
+        foreach (var (key, scheme) in _config.Schemes)
+        {
             entries.Add(new(key, GetVisualEnabled(key)));
+            // 双宏辅键：辅键键帽（连发脉冲 / 物理按下）按次键的 VisualEnabled 独立开关。
+            if (scheme.Section != ToggleSection.Dual || scheme.Targets.Count < 2) continue;
+            if (TargetToSource(scheme.Targets[1]) is { } partner)
+                entries.Add(new(TaskSchedulerService.BuildSourceKey(partner), scheme.Targets[1].VisualEnabled));
+        }
         _visualizer.ReplaceRegistry(entries);
     }
 
@@ -1298,6 +1304,19 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         SaveConfig();
         var source = TaskSchedulerService.ParseSourceKey(key);
         AddLog($"键位可视化 [{(source is null ? key : InputNameMapper.GetSourceName(source))}] 已{(visible ? "开启" : "关闭")}。");
+    }
+
+    /// <summary>设置方案内指定目标键的可视化开关（双宏辅键行 eye；实时生效 + 落盘）。</summary>
+    private void SetTargetVisualEnabled(string key, int targetIndex, bool visible)
+    {
+        if (!_config.Schemes.TryGetValue(key, out var scheme) ||
+            scheme.Targets.Count <= targetIndex) return;
+        var target = scheme.Targets[targetIndex];
+        if (target.VisualEnabled == visible) return;
+        target.VisualEnabled = visible;
+        SyncVisualizerRegistry();   // 辅键源注册表项随开关刷新（开关立即作用于键帽 / 脉冲）
+        SaveConfig();
+        AddLog($"键位可视化 [{InputNameMapper.GetTargetName(target)}] 已{(visible ? "开启" : "关闭")}。");
     }
 
     /// <summary>INotifyPropertyChanged。</summary>

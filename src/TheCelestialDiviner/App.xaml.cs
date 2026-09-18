@@ -149,7 +149,7 @@ public partial class App : Application
 
         _trayIcon = new Forms.NotifyIcon
         {
-            Text = "衍天高手 v1.7",
+            Text = $"衍天高手 v{UpdateService.DisplayVersion}",
             Visible = true
         };
         try
@@ -163,7 +163,7 @@ public partial class App : Application
             _trayIconOff = (Icon)baseIcon.Clone();
             _trayIconOn = ComposeTrayIcon(baseIcon, enabled: true);
             _trayIcon.Icon = _vm.GloballyEnabled ? _trayIconOn : _trayIconOff;
-            _trayIcon.Text = _vm.GloballyEnabled ? "衍天高手 v1.7 — 已开启" : "衍天高手 v1.7";
+            _trayIcon.Text = _vm.GloballyEnabled ? $"衍天高手 v{UpdateService.DisplayVersion} — 已开启" : $"衍天高手 v{UpdateService.DisplayVersion}";
         }
         catch
         {
@@ -175,7 +175,7 @@ public partial class App : Application
         {
             if (_trayIcon is null) return;
             _trayIcon.Icon = enabled ? _trayIconOn : _trayIconOff;
-            _trayIcon.Text = enabled ? "衍天高手 v1.7 — 已开启" : "衍天高手 v1.7";
+            _trayIcon.Text = enabled ? $"衍天高手 v{UpdateService.DisplayVersion} — 已开启" : $"衍天高手 v{UpdateService.DisplayVersion}";
         };
 
         var menu = new Forms.ContextMenuStrip();

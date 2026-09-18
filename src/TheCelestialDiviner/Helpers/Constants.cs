@@ -38,17 +38,23 @@ public static class Constants
     /// <summary>连发间隔下限（毫秒）。</summary>
     public const int MinIntervalMs = 10;
 
-    /// <summary>连发间隔上限（毫秒）。</summary>
-    public const int MaxIntervalMs = 100;
+    /// <summary>连发间隔上限（毫秒）：90000 = 一分半（90 秒），覆盖慢速 / 定时触发场景
+    /// （如定时补 buff）。注入节奏本身无上限约束，仅受线程 1ms 轮询精度影响。</summary>
+    public const int MaxIntervalMs = 90000;
 
     /// <summary>按压时长下限（毫秒）。</summary>
     public const int MinHoldMs = 10;
 
     /// <summary>按压时长上限（毫秒）。</summary>
-    public const int MaxHoldMs = 200;
+    public const int MaxHoldMs = 100;
 
     /// <summary>连发时序抖动幅度（±20%，按压与间隔各自独立取随机值）。</summary>
     public const int TimingJitterPercent = 20;
+
+    /// <summary>取消抖动的最小间隔（毫秒）：间隔大于该值进入"精确模式"——
+    /// 场景不局限于按键辅助（如定时触发 / 慢速连发），按压与间隔均取消随机抖动、
+    /// 触发时刻精确；抖动仅保留给高频连发段（≤100ms）以规避固定节奏指纹。</summary>
+    public const int TimingJitterCutoffMs = 100;
 
     /// <summary>录制目标键的超时（毫秒）。</summary>
     public const int RecordTimeoutMs = 5000;

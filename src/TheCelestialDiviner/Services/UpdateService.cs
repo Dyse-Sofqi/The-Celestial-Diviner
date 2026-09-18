@@ -56,6 +56,9 @@ public static class UpdateService
     public static Version CurrentVersion { get; } =
         Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0, 0);
 
+    /// <summary>当前程序版本短显示（前 3 段，如 1.7.5；标题栏 / 托盘 / 更新提示共用）。</summary>
+    public static string DisplayVersion => CurrentVersion.ToString(3);
+
     /// <summary>
     /// 查询 Gitee 最新 Release（匿名 API；无 Release / 附件缺失 / 版本号无法解析 → null）。
     /// </summary>

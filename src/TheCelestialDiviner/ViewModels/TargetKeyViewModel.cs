@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using TheCelestialDiviner.Helpers;
 using TheCelestialDiviner.Models;
@@ -118,7 +118,7 @@ public sealed class TargetKeyViewModel : INotifyPropertyChanged
         private set => Set(ref _modeName, value);
     }
 
-    /// <summary>连发间隔（毫秒，1~100）。</summary>
+    /// <summary>连发间隔（毫秒，10~90000）。</summary>
     public int IntervalMs
     {
         get => _intervalMs;

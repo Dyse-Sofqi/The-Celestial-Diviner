@@ -135,13 +135,13 @@ public sealed class TargetKeyConfig
     public TriggerMode Mode { get; set; } = TriggerMode.Toggle;
 
     /// <summary>
-    /// 按压时长（毫秒，10~200，默认 26）：按下到弹起的持续时间。
+    /// 按压时长（毫秒，10~100，默认 26）：按下到弹起的持续时间。
     /// 逐帧轮询输入的游戏每帧采样一次，按压须 ≥ 帧窗口（40fps ≈ 25ms）才能保证
     /// 按下状态必被采样到；实际注入时逐发独立抖动 ±20%。
     /// </summary>
     public int HoldMs { get; set; } = Constants.DefaultHoldMs;
 
-    /// <summary>连发间隔（毫秒，10~100，默认 26）：弹起到下一次按下的间隔；
+    /// <summary>连发间隔（毫秒，10~90000，默认 26）：弹起到下一次按下的间隔；
     /// 连发周期 = 按压时长 + 间隔，实际注入时逐发独立抖动 ±20%。</summary>
     public int IntervalMs { get; set; } = Constants.DefaultIntervalMs;
 
@@ -156,6 +156,11 @@ public sealed class TargetKeyConfig
 
     /// <summary>该目标键是否启用（停用后不参与触发）。</summary>
     public bool Enabled { get; set; } = true;
+
+    /// <summary>键位可视化显示开关（该目标键的键帽是否显示，默认开启）。
+    /// 双宏方案两键各有一个 eye 开关：首键沿用方案级 VisualKeys，
+    /// 次键用此字段（方案行第二行的 eye 切换；连发脉冲按此过滤）。</summary>
+    public bool VisualEnabled { get; set; } = true;
 
     /// <summary>创建当前实例的副本。</summary>
     public TargetKeyConfig Clone() => new()
@@ -172,7 +177,8 @@ public sealed class TargetKeyConfig
         ModCtrl = ModCtrl,
         ModShift = ModShift,
         ModAlt = ModAlt,
-        Enabled = Enabled
+        Enabled = Enabled,
+        VisualEnabled = VisualEnabled
     };
 }
 
@@ -367,10 +373,10 @@ public sealed class AppConfig
     /// </summary>
     public int KeyboardMode { get; set; } = DefaultKeyboardMode;
 
-    /// <summary>方案面板默认连发间隔（毫秒，添加连发键时录入该值），10~100。</summary>
+    /// <summary>方案面板默认连发间隔（毫秒，添加连发键时录入该值），10~90000。</summary>
     public int DefaultIntervalMs { get; set; } = Constants.DefaultIntervalMs;
 
-    /// <summary>方案面板默认按压时长（毫秒，添加连发键时录入该值），10~200。</summary>
+    /// <summary>方案面板默认按压时长（毫秒，添加连发键时录入该值），10~100。</summary>
     public int DefaultHoldMs { get; set; } = Constants.DefaultHoldMs;
 
     /// <summary>连发时序档位：0 = 常规（26/26，40~100 帧零丢失）、1 = 极限（11/11，帧率 ≥90

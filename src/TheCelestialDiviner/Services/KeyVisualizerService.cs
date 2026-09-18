@@ -43,9 +43,6 @@ public sealed class KeyVisualizerService
     /// </summary>
     private readonly List<(InputSource Source, string Label)> _held = new();
 
-    /// <summary>最近一次目标键脉冲时刻（Environment.TickCount）。发射中目标键键态在抖动，不做幽灵判定。</summary>
-    private int _lastFireTick;
-
     /// <summary>幽灵按住项看门狗（UI 线程周期回收，见 PurgeGhostHeld）。</summary>
     private DispatcherTimer? _ghostTimer;
 
@@ -152,15 +149,18 @@ public sealed class KeyVisualizerService
         scheduler.FiringChanged += OnFiringChanged;
     }
 
-    /// <summary>连发目标键脉冲（任务线程触发，封送 UI 线程；不占用物理按住快照）。</summary>
+    /// <summary>连发目标键脉冲（任务线程触发，封送 UI 线程；不占用物理按住快照）。
+    /// 目标键可视化开关为关时不渲染脉冲键帽（与物理按键路径同语义）。</summary>
     private void OnTargetFired(TargetKeyConfig target)
     {
-        bool global;
         lock (_gate)
-            global = _globalEnabled;
-        if (!global) return;
-
-        System.Threading.Volatile.Write(ref _lastFireTick, Environment.TickCount);
+        {
+            if (!_globalEnabled) return;
+            // 双宏两键各有开关：首键 = 方案级注册项（VisualKeys），辅键 = 目标级注册项。
+            // 常规方案目标 = 触发键自身，其开关即该方案的 eye。
+            if (TargetToSource(target) is { } source &&
+                _registry.TryGetValue(source, out var state) && !state.Visible) return;
+        }
 
         var label = KeycapTargetName(target);
         var holdMs = target.HoldMs;
@@ -169,19 +169,34 @@ public sealed class KeyVisualizerService
         dispatcher?.BeginInvoke(() => overlay?.HoldPulse(label, holdMs, repeat: 1));
     }
 
+    /// <summary>目标键配置 → 输入源（可视化注册表查询用；滚轮映射为鼠标滚轮源）。</summary>
+    private static InputSource? TargetToSource(TargetKeyConfig t) => t.Kind switch
+    {
+        TargetKind.Keyboard => new InputSource
+        {
+            Kind = InputKind.Keyboard,
+            VirtualKey = t.VirtualKey,
+            Extended = t.Extended
+        },
+        TargetKind.Mouse => new InputSource { Kind = InputKind.Mouse, Mouse = t.Mouse },
+        TargetKind.Wheel => new InputSource { Kind = InputKind.Mouse, Mouse = t.Wheel },
+        _ => null
+    };
+
     /// <summary>
     /// 幽灵按住项回收（UI 线程看门狗周期调用）。DD 注入与物理输入在系统层不可区分，
     /// EchoGuard 消注入回波时可能误吞物理释放（停止连发的抬起被吞 → 按住项残留 →
     /// 快照恒非空 → 键帽永久卡在按下态）。对每个按住项探测实时键态：
     /// 系统层已弹起却仍留存的即幽灵，移除并刷新快照让悬浮层弹起收尾。
-    /// 连发发射中目标键键态本身在抖动，1 秒内不做判定（停发后下一轮再回收）。
+    /// 连发任务激活期间目标键键态本身在抖动（间隔上限 90000ms，固定时间窗已覆盖不了
+    /// 整个发射周期），一律停发后再回收，避免脉冲间隙把物理按住项误判为幽灵。
     /// </summary>
     private void PurgeGhostHeld()
     {
         lock (_gate)
         {
             if (_held.Count == 0 || !_globalEnabled) return;
-            if (Environment.TickCount - System.Threading.Volatile.Read(ref _lastFireTick) < 1000) return;
+            if (_firing) return;
 
             var purged = false;
             for (var i = _held.Count - 1; i >= 0; i--)

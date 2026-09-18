@@ -195,13 +195,15 @@ public sealed class TaskSchedulerService
                     // 点击含按压时长 Sleep（毫秒级），不得阻塞钩子线程 → 投递线程池；
                     // 以配置实例为锁串行化，保证同方案连续滚动格的 down/up 严格成对不交错。
                     var cfg = task.Configs[0];
+                    // 精确模式（间隔 > 100ms）：取消按压抖动，触发时刻精确（见 JitterMs）。
+                    var precise = cfg.IntervalMs > Constants.TimingJitterCutoffMs;
                     task.BeginClick();   // 入队前计数：防止"已入队未启动"的点击躲过退出等待
                     ThreadPool.QueueUserWorkItem(_ =>
                     {
                         try
                         {
                             lock (cfg)
-                                InputSimulatorService.Click(cfg, JitterMs(cfg.HoldMs, Constants.MinHoldMs, Constants.MaxHoldMs));
+                                InputSimulatorService.Click(cfg, JitterMs(cfg.HoldMs, Constants.MinHoldMs, Constants.MaxHoldMs, precise));
                         }
                         catch (Exception ex)
                         {
@@ -260,7 +262,7 @@ public sealed class TaskSchedulerService
 
     /// <summary>核心停止逻辑（须在锁内调用）：解除全部激活状态，并等待在途点击完成
     /// （点击含按压 Sleep，不等待会在退出 / 重建时把目标键留在"按住"状态；
-    /// 上限 500ms 覆盖最大按压 200ms + 抖动，超时放弃属可接受的极端情况）。
+    /// 上限 500ms 覆盖最大按压 100ms + 抖动，超时放弃属可接受的极端情况）。
     /// waitForInFlight = false 时只清触发信号立即返回（运行期总开关停用，避免阻塞 UI 线程）。</summary>
     private void StopAllCore(bool waitForInFlight = true)
     {
@@ -336,8 +338,9 @@ public sealed class TaskSchedulerService
         FiringChanged?.Invoke(any);
     }
 
-    /// <summary>任务主循环：Stopwatch + Sleep(1)（配合 timeBeginPeriod(1)）控制间隔；异常自动恢复。
-    /// 每轮按压时长与间隔各自独立抖动 ±20%（消除恒定周期的机器指纹）。
+    /// <summary>任务主循环：Stopwatch + 分块 Sleep（配合 timeBeginPeriod(1)）控制间隔；异常自动恢复。
+    /// 每轮按压时长与间隔各自独立抖动 ±20%（消除恒定周期的机器指纹；
+    /// 间隔 > <see cref="Constants.TimingJitterCutoffMs"/> 的方案进入精确模式，取消抖动）。
     /// 多目标任务（双宏开关）按索引轮流触发，未触发时相位归零（重新激活从第 1 键开始）。</summary>
     private void TaskLoop(RunningTask task)
     {
@@ -364,10 +367,13 @@ public sealed class TaskSchedulerService
 
                 // 发射一次完整输入（按住 HoldMs → 抬起）；多目标依次轮换。
                 var cfg = task.Configs[phase];
+                // 精确模式（间隔 > 100ms）：场景不局限于按键辅助（如定时触发），
+                // 按压与间隔均取消随机抖动，触发时刻精确；抖动仅保留给高频连发段。
+                var precise = cfg.IntervalMs > Constants.TimingJitterCutoffMs;
                 task.BeginClick();
                 try
                 {
-                    InputSimulatorService.Click(cfg, JitterMs(cfg.HoldMs, Constants.MinHoldMs, Constants.MaxHoldMs));
+                    InputSimulatorService.Click(cfg, JitterMs(cfg.HoldMs, Constants.MinHoldMs, Constants.MaxHoldMs, precise));
                 }
                 finally
                 {
@@ -377,13 +383,15 @@ public sealed class TaskSchedulerService
                 phase = (phase + 1) % task.Configs.Count;
                 sw.Restart();
 
-                // 间隔等待（弹起 → 下次按下，独立抖动）：保持响应停止信号，每毫秒轮询一次。
-                var gapMs = JitterMs(cfg.IntervalMs, Constants.MinIntervalMs, Constants.MaxIntervalMs);
+                // 间隔等待（弹起 → 下次按下；精确模式不抖动）：按剩余时长分块休眠保持响应停止信号——
+                // 间隔上限 90000ms（一分半），长间隔不再逐毫秒空转（1ms 级精度仅短间隔需要）。
+                var gapMs = JitterMs(cfg.IntervalMs, Constants.MinIntervalMs, Constants.MaxIntervalMs, precise);
                 while (!task.StopRequested && task.Active &&
                        (!isToggle || Interlocked.CompareExchange(ref _activeHoldCount, 0, 0) == 0) &&
                        sw.ElapsedMilliseconds < gapMs)
                 {
-                    Thread.Sleep(1);
+                    var remaining = gapMs - sw.ElapsedMilliseconds;
+                    Thread.Sleep(remaining > 10 ? 10 : 1);
                 }
             }
             catch (Exception ex)
@@ -399,9 +407,13 @@ public sealed class TaskSchedulerService
     /// <summary>
     /// 时序抖动：baseMs × (1 ± 20%) 均匀取整后钳位到 [min, max]。
     /// 按压与间隔各自独立调用（不共享随机量），避免固定比例形成可识别节奏。
+    /// precise（精确模式）：直接返回 baseMs 原值，不做任何抖动——间隔大于
+    /// <see cref="Constants.TimingJitterCutoffMs"/> 时场景不局限于按键辅助（如定时触发），
+    /// 触发时刻要求精确，抖动仅在 ≤100ms 的高频连发段有意义。
     /// </summary>
-    private static int JitterMs(int baseMs, int min, int max)
+    private static int JitterMs(int baseMs, int min, int max, bool precise = false)
     {
+        if (precise) return baseMs;
         lock (RandGate)
         {
             // 百分比在 80~120 含端点均匀取值，整数运算：26ms → 20~31ms。

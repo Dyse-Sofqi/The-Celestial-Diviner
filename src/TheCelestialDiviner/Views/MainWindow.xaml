@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:sys="clr-namespace:System;assembly=mscorlib"
         xmlns:conv="clr-namespace:TheCelestialDiviner.Helpers"
-        Title="衍天高手 The Celestial Diviner v1.7"
+        Title="衍天高手"
         Width="1000" Height="620" MinWidth="980" MinHeight="580"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource ThemeBg}"
@@ -1187,7 +1187,7 @@
                                     </Grid.ColumnDefinitions>
                                     <CheckBox IsChecked="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}"
                                               Style="{StaticResource RoundCheckStyle}"
-                                              ToolTip="启用 / 停用该连发键（双宏为整体启停）"/>
+                                              MouseEnter="OnSchemeCheckCommentEnter" MouseLeave="OnCommentMouseLeave"/>
                                     <TextBlock Grid.Column="1" Text="{Binding KeyName}"
                                                VerticalAlignment="Center" Margin="6,0,0,0"
                                                FontSize="12" FontWeight="SemiBold"
@@ -1213,7 +1213,7 @@
                                              KeyDown="OnHoldBoxKeyDown"
                                              LostFocus="OnHoldBoxLostFocus"
                                              GotMouseCapture="OnTimingBoxGotMouseCapture"
-                                             ToolTip="按压时长（毫秒，10~200）：按下到弹起的持续时间。周期 = 按压 + 间隔，两者各自随机抖动 ±20%；悬停时数值变虚，点击即清空直接键入，点击别处自动生效，非法值退回原值">
+                                             MouseEnter="OnHoldTimingCommentEnter" MouseLeave="OnCommentMouseLeave">
                                         <TextBox.Style>
                                             <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
                                                 <Style.Triggers>
@@ -1227,8 +1227,7 @@
                                     </TextBox>
                                     <TextBlock Grid.Column="3" Text="+" VerticalAlignment="Center"
                                                Margin="0,0,2,0" FontSize="11" Opacity="0.45"
-                                               Foreground="{DynamicResource ThemeFg}"
-                                               ToolTip="连发周期 = 按压时长 + 间隔"/>
+                                               Foreground="{DynamicResource ThemeFg}"/>
                                     <!-- 连发间隔框（虚影水印与编辑框同格叠加）：弹起 → 下次按下 -->
                                     <TextBlock Grid.Column="4" Width="40" Margin="0,0,2,0" TextAlignment="Center"
                                                VerticalAlignment="Center" FontSize="11" Opacity="0.35"
@@ -1245,12 +1244,12 @@
                                              VerticalContentAlignment="Center" HorizontalContentAlignment="Center"
                                              Padding="-2,0"
                                              BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
-                                             FontSize="11" MaxLength="3"
+                                             FontSize="11" MaxLength="5"
                                              Text="{Binding IntervalEdit, UpdateSourceTrigger=PropertyChanged}"
                                              KeyDown="OnIntervalBoxKeyDown"
                                              LostFocus="OnIntervalBoxLostFocus"
                                              GotMouseCapture="OnTimingBoxGotMouseCapture"
-                                             ToolTip="连发间隔（毫秒，10~100）：弹起到下次按下的间隔。周期 = 按压 + 间隔，两者各自随机抖动 ±20%；悬停时数值变虚，点击即清空直接键入，点击别处自动生效，非法值退回原值">
+                                             MouseEnter="OnIntervalTimingCommentEnter" MouseLeave="OnCommentMouseLeave">
                                         <TextBox.Style>
                                             <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
                                                 <Style.Triggers>
@@ -1313,13 +1312,122 @@
                                     <CheckBox Grid.Row="1" IsChecked="{Binding FirstKeyFiring, UpdateSourceTrigger=PropertyChanged}"
                                               Style="{StaticResource RoundCheckStyle}"
                                               Visibility="{Binding IsDual, Converter={StaticResource BoolToVis}}"
-                                              ToolTip="首键位是否参与连发：勾选 = 首键与次键交替连发（1-2-1-2）；取消 = 首键仅作启停开关，按一次启动 / 再按一次停止次键单独连发"/>
+                                              MouseEnter="OnDualFirstKeyCommentEnter" MouseLeave="OnCommentMouseLeave"/>
                                     <TextBlock Grid.Row="1" Grid.Column="1" Margin="6,0,0,0" FontSize="12"
                                                VerticalAlignment="Center"
                                                Visibility="{Binding IsDual, Converter={StaticResource BoolToVis}}"
                                                Foreground="{DynamicResource ThemeFg}" Opacity="0.75">
                                         <Run Text="⇄ " FontWeight="SemiBold"/><Run Text="{Binding SecondKeyName, Mode=OneWay}"/>
                                     </TextBlock>
+                                    <!-- 双宏第二行：辅键的按压时长 / 连发间隔编辑框 + 可视化开关（与首行完全对称，仅 IsDual 显示） -->
+                                    <TextBlock Grid.Row="1" Grid.Column="2" Width="40" Margin="0,0,2,0" TextAlignment="Center"
+                                               VerticalAlignment="Center" FontSize="11" Opacity="0.35"
+                                               IsHitTestVisible="False"
+                                               Visibility="{Binding IsDual, Converter={StaticResource BoolToVis}}"
+                                               Foreground="{DynamicResource ThemeFg}">
+                                        <TextBlock.Text>
+                                            <MultiBinding Converter="{StaticResource IntervalWatermark}">
+                                                <Binding Path="SecondHoldEdit"/>
+                                                <Binding Path="SecondHoldMs" Mode="OneWay"/>
+                                            </MultiBinding>
+                                        </TextBlock.Text>
+                                    </TextBlock>
+                                    <TextBox Grid.Row="1" Grid.Column="2" Width="40" Margin="0,0,2,0" Background="Transparent"
+                                             VerticalContentAlignment="Center" HorizontalContentAlignment="Center"
+                                             Padding="-2,0"
+                                             BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
+                                             FontSize="11" MaxLength="3"
+                                             Visibility="{Binding IsDual, Converter={StaticResource BoolToVis}}"
+                                             Text="{Binding SecondHoldEdit, UpdateSourceTrigger=PropertyChanged}"
+                                             KeyDown="OnSecondHoldBoxKeyDown"
+                                             LostFocus="OnSecondHoldBoxLostFocus"
+                                             GotMouseCapture="OnTimingBoxGotMouseCapture"
+                                             MouseEnter="OnHoldTimingCommentEnter" MouseLeave="OnCommentMouseLeave">
+                                        <TextBox.Style>
+                                            <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+                                                <Style.Triggers>
+                                                    <!-- 悬停时数值由实变虚：提示点击即清空 -->
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter Property="Opacity" Value="0.35"/>
+                                                    </Trigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBox.Style>
+                                    </TextBox>
+                                    <TextBlock Grid.Row="1" Grid.Column="3" Text="+" VerticalAlignment="Center"
+                                               Margin="0,0,2,0" FontSize="11" Opacity="0.45"
+                                               Visibility="{Binding IsDual, Converter={StaticResource BoolToVis}}"
+                                               Foreground="{DynamicResource ThemeFg}"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="4" Width="40" Margin="0,0,2,0" TextAlignment="Center"
+                                               VerticalAlignment="Center" FontSize="11" Opacity="0.35"
+                                               IsHitTestVisible="False"
+                                               Visibility="{Binding IsDual, Converter={StaticResource BoolToVis}}"
+                                               Foreground="{DynamicResource ThemeFg}">
+                                        <TextBlock.Text>
+                                            <MultiBinding Converter="{StaticResource IntervalWatermark}">
+                                                <Binding Path="SecondIntervalEdit"/>
+                                                <Binding Path="SecondIntervalMs" Mode="OneWay"/>
+                                            </MultiBinding>
+                                        </TextBlock.Text>
+                                    </TextBlock>
+                                    <TextBox Grid.Row="1" Grid.Column="4" Width="40" Margin="0,0,2,0" Background="Transparent"
+                                             VerticalContentAlignment="Center" HorizontalContentAlignment="Center"
+                                             Padding="-2,0"
+                                             BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}"
+                                             FontSize="11" MaxLength="5"
+                                             Visibility="{Binding IsDual, Converter={StaticResource BoolToVis}}"
+                                             Text="{Binding SecondIntervalEdit, UpdateSourceTrigger=PropertyChanged}"
+                                             KeyDown="OnSecondIntervalBoxKeyDown"
+                                             LostFocus="OnSecondIntervalBoxLostFocus"
+                                             GotMouseCapture="OnTimingBoxGotMouseCapture"
+                                             MouseEnter="OnIntervalTimingCommentEnter" MouseLeave="OnCommentMouseLeave">
+                                        <TextBox.Style>
+                                            <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+                                                <Style.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter Property="Opacity" Value="0.35"/>
+                                                    </Trigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBox.Style>
+                                    </TextBox>
+                                    <TextBlock Grid.Row="1" Grid.Column="5" Text="ms" VerticalAlignment="Center"
+                                               Margin="0,0,4,0" FontSize="11" Opacity="0.7"
+                                               Visibility="{Binding IsDual, Converter={StaticResource BoolToVis}}"
+                                               Foreground="{DynamicResource ThemeFg}"/>
+                                    <!-- 辅键键位可视化开关（与首行 eye 同款；绑定 SecondVisualEnabled / ToggleSecondVisualCommand） -->
+                                    <Button Grid.Row="1" Grid.Column="6" Width="22" Height="20" Padding="0"
+                                            Margin="0,0,4,0"
+                                            Command="{Binding ToggleSecondVisualCommand}"
+                                            Style="{StaticResource IconButtonStyle}"
+                                            Visibility="{Binding IsDual, Converter={StaticResource BoolToVis}}"
+                                            IsEnabled="{Binding DataContext.GlobalVisualEnabled, RelativeSource={RelativeSource AncestorType=Window}}"
+                                            ToolTip="辅键键位可视化开关：该键连发时是否在屏幕右下角显示键帽">
+                                        <Grid Cursor="Hand" Background="Transparent">
+                                            <Path Stroke="{DynamicResource ThemeFg}"
+                                                  StrokeThickness="1.8" Fill="Transparent"
+                                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                  Width="15" Height="15" Stretch="Uniform">
+                                                <!-- Data / Opacity 全部走 Style Setter：本地值会压过 DataTrigger -->
+                                                <Path.Style>
+                                                    <Style TargetType="Path">
+                                                        <Setter Property="Data" Value="{StaticResource EyeIconPath}"/>
+                                                        <Setter Property="Opacity" Value="0.75"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding SecondVisualEnabled}" Value="False">
+                                                                <Setter Property="Data" Value="{StaticResource EyeOffIconPath}"/>
+                                                                <Setter Property="Opacity" Value="0.45"/>
+                                                            </DataTrigger>
+                                                            <!-- 全局可视化关闭：统一暗淡（不改各键开关状态，恢复后延续） -->
+                                                            <DataTrigger Binding="{Binding DataContext.GlobalVisualEnabled, RelativeSource={RelativeSource AncestorType=Window}}" Value="False">
+                                                                <Setter Property="Opacity" Value="0.25"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Path.Style>
+                                            </Path>
+                                        </Grid>
+                                    </Button>
                                 </Grid>
                             </DataTemplate>
                         </ListBox.ItemTemplate>

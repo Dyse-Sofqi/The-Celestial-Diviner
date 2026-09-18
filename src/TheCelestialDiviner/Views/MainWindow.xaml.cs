@@ -26,6 +26,8 @@ public partial class MainWindow : Window
         _vm = vm;
         _app = app;
         DataContext = _vm;
+        // 标题栏不再展示英文名，版本号显示到三位（如 v1.7.5；随 csproj Version 自动跟随）。
+        Title = $"衍天高手 v{UpdateService.DisplayVersion}";
 
         // 点击编辑框之外任意区域时自动提交时序编辑（按压时长 / 连发间隔）：
         // 仅当焦点确实处于方案行的时序编辑框时才介入（同步提交并移出焦点），
@@ -38,6 +40,8 @@ public partial class MainWindow : Window
             if (tb.IsMouseOver) return; // 点击编辑框自身：正常编辑，不触发提交
             row.CommitHoldEdit();
             row.CommitIntervalEdit();
+            row.CommitSecondHoldEdit();   // 双宏辅键的时序编辑框同样随外部点击提交
+            row.CommitSecondIntervalEdit();
             Keyboard.ClearFocus();      // 非可聚焦目标也能退出编辑态；可聚焦目标随后自行接管焦点
         };
 
@@ -120,6 +124,100 @@ public partial class MainWindow : Window
         if (tb.DataContext is SchemeRowViewModel row)
             row.CommitIntervalEdit();
     }
+
+    // ---------- 双宏辅键（第二行）时序编辑框：提交逻辑与首行完全对称 ----------
+
+    /// <summary>辅键按压时长框：回车提交（提交绑定并清除焦点）。</summary>
+    private void OnSecondHoldBoxKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        if (sender is TextBox tb)
+        {
+            CommitSecondHoldBox(tb);
+            Keyboard.ClearFocus();
+        }
+        e.Handled = true;
+    }
+
+    /// <summary>辅键间隔框：回车提交（提交绑定并清除焦点）。</summary>
+    private void OnSecondIntervalBoxKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        if (sender is TextBox tb)
+        {
+            CommitSecondIntervalBox(tb);
+            Keyboard.ClearFocus();
+        }
+        e.Handled = true;
+    }
+
+    /// <summary>辅键按压时长框失焦：提交编辑（非法 / 空值回退上次有效值 = 虚影值）。</summary>
+    private void OnSecondHoldBoxLostFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox tb)
+            CommitSecondHoldBox(tb);
+    }
+
+    /// <summary>辅键间隔框失焦：提交编辑（非法 / 空值回退上次有效值 = 虚影值）。</summary>
+    private void OnSecondIntervalBoxLostFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox tb)
+            CommitSecondIntervalBox(tb);
+    }
+
+    /// <summary>把辅键按压时长框的编辑文本提交给行 VM（VM 负责回退逻辑并刷新虚影）。</summary>
+    private static void CommitSecondHoldBox(TextBox tb)
+    {
+        if (tb.DataContext is SchemeRowViewModel row)
+            row.CommitSecondHoldEdit();
+    }
+
+    /// <summary>把辅键间隔框的编辑文本提交给行 VM（VM 负责回退逻辑并刷新虚影）。</summary>
+    private static void CommitSecondIntervalBox(TextBox tb)
+    {
+        if (tb.DataContext is SchemeRowViewModel row)
+            row.CommitSecondIntervalEdit();
+    }
+
+    // ---------- 方案行勾选框 → 注释区联动（悬停说明替代 Tooltip） ----------
+
+    /// <summary>方案行首勾选框说明（启用 / 停用该连发键）。</summary>
+    private const string SchemeEnabledComment =
+        "启用 / 停用该连发键（双宏为整体启停：首键与辅键一起生效）。停用后该键位不再响应连发触发。";
+
+    /// <summary>双宏第二勾选框说明（首键位是否参与连发）。</summary>
+    private const string DualFirstKeyComment =
+        "首键位是否参与连发：勾选 = 首键与辅键交替连发（1-2-1-2）；取消 = 首键仅作启停开关，"
+        + "按一次启动 / 再按一次停止辅键单独连发（等效于用首键位启停辅键位的连发方案）。";
+
+    /// <summary>悬停方案行首勾选框：注释区显示启用 / 停用说明。</summary>
+    private void OnSchemeCheckCommentEnter(object sender, System.Windows.Input.MouseEventArgs e)
+        => ShowComment(SchemeEnabledComment);
+
+    /// <summary>悬停双宏第二勾选框：注释区显示首键参与连发说明。</summary>
+    private void OnDualFirstKeyCommentEnter(object sender, System.Windows.Input.MouseEventArgs e)
+        => ShowComment(DualFirstKeyComment);
+
+    // ---------- 方案行时序编辑框 → 注释区联动（悬停说明替代 Tooltip，在左下注释区展示） ----------
+    /// <summary>按压时长框悬停说明（范围 10~100）。</summary>
+    private const string HoldTimingComment =
+        "按压时长（毫秒，10~100）：按下到弹起的持续时间。连发周期 = 按压时长 + 连发间隔；" +
+        "间隔 ≤100ms 时两者各自随机抖动 ±20%，间隔 >100ms 进入精确模式（取消抖动，触发时刻精确）。" +
+        "悬停时数值变虚，点击即清空直接键入，点击别处自动生效，非法值退回原值。";
+
+    /// <summary>连发间隔框悬停说明（范围 10~90000，最长一分半）。</summary>
+    private const string IntervalTimingComment =
+        "连发间隔（毫秒，10~90000，最长一分半 / 90 秒）：弹起到下次按下的间隔，数值越大连发越慢（支持慢速 / 定时触发）。" +
+        "间隔 ≤100ms 时按压与间隔各自随机抖动 ±20%，间隔 >100ms 自动进入精确模式（取消抖动，触发时刻精确）。" +
+        "悬停时数值变虚，点击即清空直接键入，点击别处自动生效，非法值退回原值。";
+
+    /// <summary>悬停按压时长框：注释区显示按压时长说明。</summary>
+    private void OnHoldTimingCommentEnter(object sender, System.Windows.Input.MouseEventArgs e)
+        => ShowComment(HoldTimingComment);
+
+    /// <summary>悬停连发间隔框：注释区显示连发间隔说明。</summary>
+    private void OnIntervalTimingCommentEnter(object sender, System.Windows.Input.MouseEventArgs e)
+        => ShowComment(IntervalTimingComment);
 
     // ---------- 初始化 ----------
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -243,7 +341,7 @@ public partial class MainWindow : Window
     {
         ["常规开关"] = "按一下开启该键位的自动连发，再按一下则停止。",
         ["轮转开关"] = "支持两个或多个轮转开关模式键位之间一键切换。",
-        ["双宏开关"] = "首键位一键启停两个开关模式键位的轮流连发。取消勾选第二个勾选框，则首键位一键启停第二个开关模式键位的连发，不再轮转。",
+        ["双宏开关"] = "首键位①一键启停两个开关模式键位的轮流连发。\n取消勾选第二个勾选框，则首键位①一键启停第二个开关模式键位②的连发，不再轮转。\n注意：第一行连发间隔是①-②的间隔，第二行连发间隔是①②-①②的间隔",
         ["开关模式"] = "按一下开启该键位的自动连发，再按一下则停止。",
         ["按压模式"] = "按住该键位则自动连发，松开自动停止。",
         ["常规档 26ms"] = "40~100 帧全区间零丢失，约 19 发/秒（推荐默认）。",

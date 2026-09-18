@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using TheCelestialDiviner.Helpers;
 using TheCelestialDiviner.Models;
 using TheCelestialDiviner.Services;
@@ -318,14 +318,20 @@ public sealed partial class MainViewModel
                         scheme.Enabled,
                         onEnabledChanged: enabled => SetSchemeEnabled(captured, enabled),
                         onDelete: () => DeleteScheme(captured),
-                        onIntervalChanged: ms => UpdateSchemeInterval(captured, ms),
-                        onHoldChanged: ms => UpdateSchemeHold(captured, ms),
+                        onIntervalChanged: ms => UpdateSchemeInterval(captured, ms, 0),
+                        onHoldChanged: ms => UpdateSchemeHold(captured, ms, 0),
                         isDual: true,
                         secondKeyName: InputNameMapper.GetTargetName(scheme.Targets[1]),
                         visualEnabled: GetVisualEnabled(captured),
                         onVisualChanged: visible => SetVisualEnabled(captured, visible),
                         firstKeyFiring: scheme.Targets[0].Enabled,
-                        onFirstKeyFiringChanged: firing => SetDualFirstKeyFiring(captured, firing))));
+                        onFirstKeyFiringChanged: firing => SetDualFirstKeyFiring(captured, firing),
+                        secondIntervalMs: scheme.Targets[1].IntervalMs,
+                        secondHoldMs: scheme.Targets[1].HoldMs,
+                        onSecondIntervalChanged: ms => UpdateSchemeInterval(captured, ms, 1),
+                        onSecondHoldChanged: ms => UpdateSchemeHold(captured, ms, 1),
+                        secondVisualEnabled: scheme.Targets[1].VisualEnabled,
+                        onSecondVisualChanged: visible => SetTargetVisualEnabled(captured, 1, visible))));
                 continue;
             }
 
@@ -727,13 +733,22 @@ public sealed partial class MainViewModel
         AddLog($"[{InputNameMapper.GetSourceName(source)}] 没有已注册的方案可取消。");
     }
 
-    /// <summary>方案行内编辑连发间隔：更新目标键配置 → 重建任务实时生效 → 落盘。</summary>
-    private void UpdateSchemeInterval(string key, int intervalMs)
+    /// <summary>取方案内待更新目标：targetIndex &lt; 0 = 全部目标（常规单目标方案）；否则仅该索引（越界返回空）。</summary>
+    private static IEnumerable<TargetKeyConfig> TargetsOf(KeyScheme scheme, int targetIndex) =>
+        targetIndex < 0
+            ? scheme.Targets
+            : scheme.Targets.Count > targetIndex
+                ? new[] { scheme.Targets[targetIndex] }
+                : Array.Empty<TargetKeyConfig>();
+
+    /// <summary>方案行内编辑连发间隔：更新目标键配置 → 重建任务实时生效 → 落盘。
+    /// targetIndex &lt; 0 = 全部目标；≥ 0 = 仅该目标（双宏两键各自独立编辑，互不影响）。</summary>
+    private void UpdateSchemeInterval(string key, int intervalMs, int targetIndex = -1)
     {
         if (!_config.Schemes.TryGetValue(key, out var scheme)) return;
         var clamped = Compat.Clamp(intervalMs, Constants.MinIntervalMs, Constants.MaxIntervalMs);
         var changed = false;
-        foreach (var t in scheme.Targets)
+        foreach (var t in TargetsOf(scheme, targetIndex))
         {
             if (t.IntervalMs == clamped) continue;
             t.IntervalMs = clamped;
@@ -745,13 +760,14 @@ public sealed partial class MainViewModel
         SaveConfig();
     }
 
-    /// <summary>方案行内编辑按压时长：更新目标键配置 → 重建任务实时生效 → 落盘。</summary>
-    private void UpdateSchemeHold(string key, int holdMs)
+    /// <summary>方案行内编辑按压时长：更新目标键配置 → 重建任务实时生效 → 落盘。
+    /// targetIndex &lt; 0 = 全部目标；≥ 0 = 仅该目标（双宏两键各自独立编辑，互不影响）。</summary>
+    private void UpdateSchemeHold(string key, int holdMs, int targetIndex = -1)
     {
         if (!_config.Schemes.TryGetValue(key, out var scheme)) return;
         var clamped = Compat.Clamp(holdMs, Constants.MinHoldMs, Constants.MaxHoldMs);
         var changed = false;
-        foreach (var t in scheme.Targets)
+        foreach (var t in TargetsOf(scheme, targetIndex))
         {
             if (t.HoldMs == clamped) continue;
             t.HoldMs = clamped;

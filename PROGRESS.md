@@ -1,8 +1,46 @@
 # 衍天高手（The Celestial Diviner）开发进度交接
 
-更新：2026-09-09 — **语音设置（自定义提示音：开启 / 关闭 / 方案切换）**
+更新：2026-09-18 — **连发间隔上限提升（100ms → 90000ms，一分半）；标题栏 / 托盘版本显示 v1.7.5；发版 v1.7.5**
 
-## 本次变更（语音设置模态框）
+## 本次变更（连发间隔上限 100ms → 90000ms，发版 v1.7.5）
+- 📋 用户需求：连发间隔时长上限从 100ms 提到 90000ms（一分半一发）
+- ✅ `Constants.MaxIntervalMs` 100 → 90000（唯一落点，行内录入 / 配置加载 / 导入的钳位全部走此常量）
+- ✅ 按压时长上限按用户规格修正：`MaxHoldMs` 200 → **100**（10~100），
+  模型注释 / 归一化注释 / 点击超时注释（500ms 仍覆盖 100ms + 抖动）同步更新
+- ✅ 间隔输入框 `MaxLength` 3 → 5（原 3 位装不下 90000），模型注释范围同步更新为 10~90000
+- ✅ 时序框 Tooltip 文案**转移到左下注释区**：按压时长 / 连发间隔框移除 ToolTip，
+  悬停时在注释区展示各自说明（范围 / 周期定义 / ±20% 抖动 / 编辑交互），移出后恢复默认公告（复用现有 ShowComment / RestoreComment 通道）
+- ✅ **精确模式（用户需求）**：间隔 > 100ms（`Constants.TimingJitterCutoffMs`）的方案**取消抖动**——
+  慢速连发场景不局限于按键辅助（如定时触发），按压与间隔均按设定值精确执行、触发时刻精确
+  （`JitterMs` 增加 precise 参数短路返回原值；`TaskLoop` 与滚轮脉冲路径两处调用点同步传参）
+- ✅ 注入节奏：`TaskLoop` 等待间隔按剩余时长**分块休眠**（长间隔 10ms 块、短间隔回落 1ms），
+  90000ms 级间隔不逐毫秒空转；精确模式下间隔即为设定值（无抖动钳位），≤100ms 高频段保持原抖动
+- ✅ 键帽可视化：脉冲保护窗口 600ms 语义为"覆盖单次脉冲按压（≤100ms）+ 抖动"（不再按最慢周期整周期保活）——长间隔下脉冲之间键帽正常走 1.2s 空闲宽限淡出，下次脉冲复用重建；杜绝 60s 间隔下键帽长期滞留屏幕
+- ✅ 双宏辅键独立时序 / 可视化（用户需求）：双宏第二行新增辅键**按压时长 / 连发间隔编辑框 + eye 开关**——
+  `SchemeRowViewModel` 新增 Second* 系列属性；`UpdateSchemeInterval/Hold` 支持按目标索引更新（双宏两键互不影响；
+  调度器本已按 `Configs[phase]` 独立执行各键时序与精确模式，此前仅缺编辑入口）
+- ✅ 双宏辅键可视化实现：`TargetKeyConfig.VisualEnabled`（目标级开关，随配置持久化，Clone 同步）；
+  `SyncVisualizerRegistry` 额外登记辅键源（次键 eye → 键帽 / 脉冲显示）；
+  `KeyVisualizerService.OnTargetFired` 按目标可视化开关过滤脉冲键帽（顺带修正一致性：
+  eye 关闭后连发脉冲也不再显示，与 eye ToolTip"按键触发时是否显示键帽"语义对齐）
+- ✅ 勾选框 Tooltip → 注释区（用户需求）：方案行首「启用 / 停用」与双宏「首键参与连发」
+  两勾选框移除 Tooltip，悬停时在左下注释区展示各自说明（复用 ShowComment / RestoreComment）
+- ✅ 标题栏 / 托盘（用户需求）：标题栏不再展示英文名 "The Celestial Diviner"，
+  版本号显示到三位 v1.7.5（标题、托盘、更新提示共用新增 `UpdateService.DisplayVersion`，
+  随 csproj Version 自动跟随，不再硬编码）
+- ✅ 幽灵按住项回收：原"1 秒内不做判定"时间窗 → **连发任务激活态判定**（`_firing`，停发后回收），
+  间隔放宽后脉冲间隙不再误判 / 漏判（移除 `_lastFireTick` 字段）
+- ✅ 构建 0 警告 0 错误（Release）
+- ✅ 发版 v1.7.5（本地已就绪）：csproj `Version` 1.7.5 / `FileVersion` 1.7.5.0
+  （exe 版本戳已核对 = 1.7.5.0；窗口标题 / 托盘仅主次版本仍为 v1.7）；
+  `Notice.md` 顶部新增 1.7.5 升级告示（内嵌资源随构建更新，已核验 exe 内嵌内容）；
+  发布包 `dist/TheCelestialDiviner-1.7.5-win64.zip`（12 文件，结构对齐 1.7.4，不含闭源 DD 驱动）；
+  发布说明 `dist/v1.7.5-release-notes.md`
+- ⏳ 待推送（需令牌 / 登录）：git 提交 + `v1.7.5` 标签 → 双端推送（GitHub origin / Gitee）；
+  双端创建 Release 并上传同一附件（Gitee 用 `dist/publish-gitee-release.sh`）；
+  `Notice.md` 同步 Gitee（远端公告源 raw/main/Notice.md）
+
+## 上次变更（语音设置模态框）
 - 📋 用户需求：底栏「成为衍天高手」后新增「语音设置」按钮，点击弹出模态框，
   支持为全局开关开启 / 关闭、方案切换导入自定义音频，也可重置回默认音频
 - ✅ 底栏「语音设置」按钮（`OpenVoiceSettingsCommand`）→ `VoiceSettingsWindow` 模态框
