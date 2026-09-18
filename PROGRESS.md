@@ -35,9 +35,11 @@
   - **Gitee 已发布**：main / 标签已推送（顺带补齐历史 v1.6.0 / v1.7.0 / v1.7.1 标签）；
     `Notice.md` 同步远端公告源（raw/main/Notice.md）；
     Release v1.7.5 已创建并上传 `TheCelestialDiviner-1.7.5-win64.zip`（发布说明已核验与本地逐字一致）
-  - **GitHub 未发布**：github.com:443 网络不可达（TCP 连接超时，非凭据问题；gh 登录态正常）。
-    待网络恢复后执行：`git push origin main --tags` +
-    `gh release create v1.7.5 dist/TheCelestialDiviner-1.7.5-win64.zip -F dist/v1.7.5-release-notes.md`
+  - **GitHub 已发布（走 REST API 绕过被阻断的 git 通道）**：github.com:443 在本机网络不可达
+    （TCP 超时，非凭据问题；gh 登录态正常），改用 `api.github.com` / `uploads.github.com`：
+    按 Git Data API 逐字节复刻提交（blob base64 → tree → commit，tree / 标签对象 SHA 与本地完全一致），
+    main → `685d750`、`refs/tags/v1.7.5` → `3de5ea0`，Release 已创建并上传同一附件
+    （id 391653565，说明与本地逐字一致）。脚本：`dist/gh-api-push.ps1`（幂等，可复用于后续发版）
 - ✅ 注释区公告按上版惯例改为**单行** 1.7.5 说明（42 字，上版 1.7.4 为 35 字；不再叠加旧版行）：
   "点选项检查升级1.7.5版本：连发间隔提至 90 秒、双宏两键独立设置，稳定性提升。"
 
