@@ -31,14 +31,15 @@
 - ✅ 幽灵按住项回收：原"1 秒内不做判定"时间窗 → **连发任务激活态判定**（`_firing`，停发后回收），
   间隔放宽后脉冲间隙不再误判 / 漏判（移除 `_lastFireTick` 字段）
 - ✅ 构建 0 警告 0 错误（Release）
-- ✅ 发版 v1.7.5（本地已就绪）：csproj `Version` 1.7.5 / `FileVersion` 1.7.5.0
-  （exe 版本戳已核对 = 1.7.5.0；窗口标题 / 托盘仅主次版本仍为 v1.7）；
-  `Notice.md` 顶部新增 1.7.5 升级告示（内嵌资源随构建更新，已核验 exe 内嵌内容）；
-  发布包 `dist/TheCelestialDiviner-1.7.5-win64.zip`（12 文件，结构对齐 1.7.4，不含闭源 DD 驱动）；
-  发布说明 `dist/v1.7.5-release-notes.md`
-- ⏳ 待推送（需令牌 / 登录）：git 提交 + `v1.7.5` 标签 → 双端推送（GitHub origin / Gitee）；
-  双端创建 Release 并上传同一附件（Gitee 用 `dist/publish-gitee-release.sh`）；
-  `Notice.md` 同步 Gitee（远端公告源 raw/main/Notice.md）
+- ✅ 发版 v1.7.5（2026-09-18）：提交 `f805061` + 标签 `v1.7.5`（3de5ea0）
+  - **Gitee 已发布**：main / 标签已推送（顺带补齐历史 v1.6.0 / v1.7.0 / v1.7.1 标签）；
+    `Notice.md` 同步远端公告源（raw/main/Notice.md）；
+    Release v1.7.5 已创建并上传 `TheCelestialDiviner-1.7.5-win64.zip`（发布说明已核验与本地逐字一致）
+  - **GitHub 未发布**：github.com:443 网络不可达（TCP 连接超时，非凭据问题；gh 登录态正常）。
+    待网络恢复后执行：`git push origin main --tags` +
+    `gh release create v1.7.5 dist/TheCelestialDiviner-1.7.5-win64.zip -F dist/v1.7.5-release-notes.md`
+- ✅ 注释区公告按上版惯例改为**单行** 1.7.5 说明（42 字，上版 1.7.4 为 35 字；不再叠加旧版行）：
+  "点选项检查升级1.7.5版本：连发间隔提至 90 秒、双宏两键独立设置，稳定性提升。"
 
 ## 上次变更（语音设置模态框）
 - 📋 用户需求：底栏「成为衍天高手」后新增「语音设置」按钮，点击弹出模态框，
