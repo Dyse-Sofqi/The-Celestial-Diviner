@@ -16,3 +16,7 @@ crashdumps
 # DD 驱动为闭源第三方组件，不入库（请从 ddxoft 官网获取，见 drivers/README.md）
 drivers/dd63330.dll
 drivers/dd63330.sys
+
+# 候选提示音：散装音频文件不入库（不集成进程序；见 audio/README.md）
+audio/*
+!audio/README.md

@@ -80,7 +80,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     public event Func<string, bool>? DdDriverFetchConfirmRequested;
 
     /// <summary>方案档位数量（①②③④）。</summary>
-    public const int ProfileCount = 4;
+    public const int ProfileCount = AppConfig.ProfileCount;
 
     /// <summary>当前选中的方案档位（0~3 ↔ ①②③④，默认①）。切换时同步方案字典与调度器并实时落盘。</summary>
     public int ActiveProfile
@@ -99,7 +99,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             ApplyConfigToScheduler();
             SyncVisualizerRegistry();
             SaveConfig();
-            AddLog($"已切换到方案{ProfileLabel(index)}。");
+            ApplyAppearance();   // 档位外观随切换：配色 / 图标 / 应用名 / 键帽配色 / 注释区公告
+            AddLog($"已切换到方案{ProfileDisplayName(index)}。");
         }
     }
 
@@ -111,6 +112,53 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         2 => "③",
         _ => "④"
     };
+
+    /// <summary>四个方案档位的自定义名称快照（空串 = 未命名，用默认序号）。</summary>
+    public IReadOnlyList<string> ProfileNames => _config.ProfileNames;
+
+    /// <summary>档位自定义名（未命名 / 越界返回空串）。</summary>
+    public string ProfileName(int index) =>
+        index >= 0 && index < _config.ProfileNames.Count ? _config.ProfileNames[index] : "";
+
+    /// <summary>档位显示名：自定义名优先，未命名回退默认序号 ①②③④
+    /// （切换方案热键的提示键帽、日志与冲突提示统一用它）。</summary>
+    public string ProfileDisplayName(int index)
+    {
+        var name = ProfileName(index);
+        return string.IsNullOrWhiteSpace(name) ? ProfileLabel(index) : name;
+    }
+
+    /// <summary>档位标签文本：未命名 = "方案①"（原样式），已命名 = 自定义名。</summary>
+    public string ProfileTabText(int index)
+    {
+        var name = ProfileName(index);
+        return string.IsNullOrWhiteSpace(name) ? $"方案{ProfileLabel(index)}" : name;
+    }
+
+    /// <summary>
+    /// 应用四个档位的方案定制（「选项」→「方案定制」对话框确定时调用）：
+    /// 档位名称 + 各档位外观（主题预设 / 默认主题下的图标、应用名、键帽配色、三色），
+    /// 统一归一化（去空白、限长、校验图标键 / 配色名 / 色值）后落盘，并立即按当前档位换肤。
+    /// </summary>
+    public void SetProfileCustomization(IReadOnlyList<string> names, IReadOnlyList<ProfileAppearance> appearances)
+    {
+        var appliedNames = new List<string>(ProfileCount);
+        var appliedLooks = new List<ProfileAppearance>(ProfileCount);
+        for (var i = 0; i < ProfileCount; i++)
+        {
+            appliedNames.Add(i < names.Count ? names[i] ?? "" : "");
+            appliedLooks.Add(i < appearances.Count && appearances[i] is { } a ? a.Clone() : new ProfileAppearance());
+        }
+        _config.ProfileNames = appliedNames;
+        _config.ProfileAppearances = appliedLooks;
+        _config.NormalizeProfileNames();
+        _config.NormalizeProfileAppearances();
+        SaveConfig();
+        OnPropertyChanged(nameof(ProfileNames));   // 档位标签文本 / 悬停说明刷新
+        ApplyAppearance();                          // 当前档位整套外观（含键帽配色 / 图标 / 标题 / 公告）
+        AddLog("方案定制已更新：" + string.Join(" / ", Enumerable.Range(0, ProfileCount)
+            .Select(i => $"{ProfileTabText(i)} → {SectThemes.ByIndex(_config.ProfileAppearances[i].Theme).DisplayName}")));
+    }
 
     /// <summary>
     /// 运行期档位对齐：把 Schemes 指向 Profiles[ActiveProfile] 同一实例（方案编辑直接落在活动档位）。
@@ -138,9 +186,13 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
         _config = _configService.Load();
         SyncProfileRuntime();
-        // 主题：手动切换过夜间/白天则固定，否则跟随系统深浅。
+        // 主题：手动切换过夜间/白天则固定，否则跟随系统深浅；强调色随当前档位的方案定制外观。
         var themeDark = _config.NightMode || (_config.ThemeFollowSystem && ThemeHelper.IsDarkMode());
-        (App.Current as App)?.ApplyTheme(themeDark);
+        (App.Current as App)?.ApplyTheme(themeDark, CurrentLook);
+        // 当前档位外观的应用图标 / 键帽配色 / 公告源：悬浮层创建前先登记静态量，创建后即生效。
+        _visualizer.SetSectIcon(CurrentLook.AppIconUri);
+        _config.KeycapScheme = KeycapSchemes.IsKnown(CurrentLook.KeycapScheme) ? CurrentLook.KeycapScheme : "Pansy";
+        _appliedNoticeResource = CurrentLook.NoticeResourceName;
         // 需求：软件打开时无论上次退出时全局开关状态如何，一律重置为关闭。
         // 不读 _config.GlobalSwitch.Enabled；把配置对象里的旧值也覆盖回 false，
         // 保证之后任何时点的 SaveConfig 都不会把“启动即关闭”这一事实覆盖丢失。
@@ -189,6 +241,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         ToggleStatusReminderCommand = RelayCommand.Create(() => StatusReminderEnabled = !StatusReminderEnabled);
         ToggleDivinerVoiceCommand = RelayCommand.Create(() => DivinerVoiceEnabled = !DivinerVoiceEnabled);
         OpenVoiceSettingsCommand = RelayCommand.Create(() => VoiceSettingsRequested?.Invoke());
+        CustomizeProfilesCommand = RelayCommand.Create(() => ProfileCustomizeRequested?.Invoke());
         CheckUpdateCommand = RelayCommand.Create(() => _ = RunCheckUpdateAsync());
         // 底栏设置菜单（键盘注入 / 键帽配色 / 键帽可视化）：参数沿用原下拉框语义，
         // 点击选项即热生效 + 落盘。
@@ -204,6 +257,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         {
             if (int.TryParse(o?.ToString(), out var mode)) VisualizerModeIndex = mode;
         });
+        // 方案定制（「选项」首项）：四个档位的名称 + 外观（主题绑定 / 默认主题自定义）。
+        CustomizeProfilesCommand = RelayCommand.Create(() => ProfileCustomizeRequested?.Invoke());
         DeleteCheckedSchemesCommand = RelayCommand.Create(RequestDeleteCheckedSchemes);
         AdjustVisualizerCommand = RelayCommand.Create(() =>
             AdjustVisualizerRequested?.Invoke((l, t) =>
@@ -714,7 +769,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         for (var i = 0; i < ProfileCount; i++)
         {
             if (!_config.Profiles[i].ContainsKey(keyStr)) continue;
-            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被方案{ProfileLabel(i)}的连发键占用。");
+            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被方案{ProfileDisplayName(i)}的连发键占用。");
             return false;
         }
 
@@ -741,7 +796,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             if (_config.Profiles[index].Count == 0) continue;
             ActiveProfile = index;
             _soundCue.PlayCycle();
-            _visualizer.ShowCycleKeycap(ProfileLabel(index));
+            _visualizer.ShowCycleKeycap(ProfileDisplayName(index));   // 提示键帽用档位自定义名（未命名回退序号）
             return;
         }
         AddLog("切换方案热键：其他方案档位均为空，未切换。");
@@ -764,26 +819,46 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// <summary>退出前静音提示语音（避免退出时序还播报语音）。</summary>
     public void SoundCueMuteForExit() => _soundCue.Volume = 0;
 
-    // ---------- 注释区公告（Notice.md：内嵌兜底 + Gitee 远端更新） ----------
-    /// <summary>注释区默认公告内容：优先显示已同步的远端更新缓存，未同步过时用内嵌 Notice.md。</summary>
-    public string NoticeContent => string.IsNullOrEmpty(_config.NoticeContent)
-        ? NoticeService.EmbeddedNotice
-        : _config.NoticeContent;
+    // ---------- 注释区公告（Notice.md / Notice2.md：内嵌兜底 + Gitee 远端更新，按主题各一份） ----------
+    /// <summary>注释区默认公告内容：按当前档位主题取该主题的远端缓存，未同步过时用该主题的内嵌公告。</summary>
+    public string NoticeContent
+    {
+        get
+        {
+            var look = CurrentLook;
+            var cached = CachedNotice(look);
+            return string.IsNullOrEmpty(cached) ? NoticeService.EmbeddedNotice(look.Theme) : cached;
+        }
+    }
+
+    /// <summary>主题各自的公告缓存（默认 / 衍天 → NoticeContent，莫问 → MoWenNoticeContent）。</summary>
+    private string CachedNotice(ResolvedAppearance look) =>
+        look.UsesMoWenNotice ? _config.MoWenNoticeContent : _config.NoticeContent;
+
+    /// <summary>写入主题的公告缓存。</summary>
+    private void SetCachedNotice(ResolvedAppearance look, string content)
+    {
+        if (look.UsesMoWenNotice) _config.MoWenNoticeContent = content;
+        else _config.NoticeContent = content;
+    }
 
     /// <summary>
-    /// 启动时查询公告更新（Gitee raw，后台执行不阻塞启动）：拉取成功且内容与当前不同，
-    /// 覆盖缓存并落盘 + 刷新注释区；没更新 / 失败静默保持旧默认内容。
+    /// 查询当前主题的公告更新（Gitee raw，后台执行不阻塞启动）：拉取成功且内容与当前不同，
+    /// 覆盖该主题缓存并落盘 + 刷新注释区；没更新 / 失败静默保持旧默认内容。
+    /// 切换档位（主题变化）时同样调用（期间主题再变则丢弃本次结果）。
     /// </summary>
     public async Task CheckNoticeUpdateAsync()
     {
         try
         {
-            var remote = await NoticeService.FetchLatestAsync();
-            if (remote is null || remote == NoticeContent) return;
-            _config.NoticeContent = remote;
+            var look = CurrentLook;
+            var remote = await NoticeService.FetchLatestAsync(look.NoticeRemoteUrl);
+            if (remote is null || !ReferenceEquals(look.Theme, CurrentLook.Theme)) return;   // 主题已变 → 丢弃
+            if (remote == NoticeContent) return;
+            SetCachedNotice(look, remote);
             SaveConfig();
             OnPropertyChanged(nameof(NoticeContent));   // View 订阅刷新注释区默认内容
-            AddLog("注释区公告已同步远端更新。");
+            AddLog($"注释区公告已同步远端更新（{look.Theme.DisplayName}）。");
         }
         catch (Exception ex)
         {
@@ -915,16 +990,61 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    /// <summary>按当前配置应用主题资源：手动切换过夜间/白天后固定，否则跟随系统。</summary>
+    /// <summary>按当前档位解析外观应用主题资源：手动切换过夜间/白天后固定，否则跟随系统；
+    /// 强调色取自当前档位的方案定制（主题预设 + 默认主题自定义覆盖）。</summary>
     private void ApplyTheme()
     {
         var isDark = _config.NightMode || (_config.ThemeFollowSystem && ThemeHelper.IsDarkMode());
-        (App.Current as App)?.ApplyTheme(isDark);
+        (App.Current as App)?.ApplyTheme(isDark, CurrentLook);
         // 已创建的键位图块实例刷子随主题刷新（UpdateTheme 只重建静态刷子）。
         foreach (var b in MouseButtons) b.RefreshTheme();
         foreach (var row in KeyboardRows)
             foreach (var b in row) b.RefreshTheme();
         foreach (var b in NumpadKeys) b.RefreshTheme();
+    }
+
+    /// <summary>当前档位（活动方案）的外观定制。</summary>
+    public ProfileAppearance CurrentAppearance => _config.ProfileAppearances[_activeProfile];
+
+    /// <summary>四个档位的外观定制快照（方案定制对话框读取）。</summary>
+    public IReadOnlyList<ProfileAppearance> ProfileAppearances => _config.ProfileAppearances;
+
+    /// <summary>当前档位解析后的最终外观（主题预设 + 默认主题自定义覆盖）：界面换肤的唯一依据。</summary>
+    public ResolvedAppearance CurrentLook => CurrentAppearance.Resolve();
+
+    /// <summary>档位外观变更（App 重建托盘图标与提示文字；View 换标题栏名称与图标）。</summary>
+    public event Action<ResolvedAppearance>? AppearanceChanged;
+
+    /// <summary>已应用的公告资源名（切换档位时仅当公告源真的变了才重新同步远端）。</summary>
+    private string _appliedNoticeResource = "";
+
+    /// <summary>
+    /// 按当前档位的解析外观应用整套换肤：
+    /// 强调色（主题资源 + 键位图块刷子）、键帽配色、应用图标（窗口 / 任务栏 / 托盘 / 键帽）、
+    /// 应用名（窗口标题由 View 消费 AppearanceChanged）、注释区默认公告（随主题 Notice.md ↔ Notice2.md）。
+    /// 启动 / 切换方案档位 / 方案定制确定 / 导入配置各调用一次。
+    /// </summary>
+    private void ApplyAppearance()
+    {
+        var look = CurrentLook;
+        var noticeChanged = !string.Equals(_appliedNoticeResource, look.NoticeResourceName, StringComparison.Ordinal);
+        _appliedNoticeResource = look.NoticeResourceName;
+
+        ApplyTheme();
+        // 键帽配色：解析值（默认主题 = 自定义或主题预设；预设主题 = 主题配色）
+        var scheme = KeycapSchemes.IsKnown(look.KeycapScheme) ? look.KeycapScheme : "Pansy";
+        if (!string.Equals(_config.KeycapScheme, scheme, StringComparison.OrdinalIgnoreCase))
+        {
+            _config.KeycapScheme = scheme;
+            OnPropertyChanged(nameof(KeycapSchemeName));   // 设置菜单 ● 选中标记
+        }
+        Views.KeycapOverlayWindow.ApplyScheme(KeycapSchemes.Resolve(scheme));
+        _visualizer.SetSectIcon(look.AppIconUri);          // 状态提醒 / 调整模式键帽图标
+        AppearanceChanged?.Invoke(look);                   // 窗口标题与图标、托盘图标与提示
+        OnPropertyChanged(nameof(CurrentAppearance));
+        if (!noticeChanged) return;
+        OnPropertyChanged(nameof(NoticeContent));          // 注释区默认公告随主题切换
+        _ = CheckNoticeUpdateAsync();                      // 该主题公告远端同步（后台，失败保持内嵌内容）
     }
 
     /// <summary>
@@ -1072,6 +1192,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// <summary>语音设置对话框请求（View 接线后订阅；打开模态框）。</summary>
     public event Action? VoiceSettingsRequested;
 
+    /// <summary>方案定制（「选项」菜单首项）：弹出模态框为四个方案档位命名并绑定主题 / 定制外观。</summary>
+    public ICommand CustomizeProfilesCommand { get; }
+
+    /// <summary>方案定制对话框请求（View 接线后订阅；打开模态框）。</summary>
+    public event Action? ProfileCustomizeRequested;
+
     /// <summary>检查更新命令（Gitee Release：检查 → 确认 → 下载安装并自动重启）。</summary>
     public ICommand CheckUpdateCommand { get; }
 
@@ -1202,7 +1328,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// <summary>试听某用途语音（不改配置；开启语音试听“启动”音，非衍天高手变体）。</summary>
     public void PreviewVoiceCue(SoundCue cue) => _soundCue.PreviewCue(cue);
 
-    /// <summary>键帽配色方案名（KeycapSchemes.All 之一，默认 Silver；切换实时落盘并立即生效）。</summary>
+    /// <summary>
+    /// 键帽配色方案名（KeycapSchemes.All 之一）：设置菜单「键帽配色」与方案定制共用。
+    /// 当前档位绑定「默认主题」（可定制）时同步写入该档位外观，随档位持久化；
+    /// 绑定预设主题（衍天 / 莫问）时仅为临时应用 —— 下次应用该档位外观会回到主题预设配色。
+    /// </summary>
     public string KeycapSchemeName
     {
         get => _config.KeycapScheme;
@@ -1210,6 +1340,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         {
             if (_config.KeycapScheme == value) return;
             _config.KeycapScheme = value;
+            if (CurrentLook.Theme.Customizable) CurrentAppearance.KeycapScheme = value;
             Views.KeycapOverlayWindow.ApplyScheme(KeycapSchemes.Resolve(value));
             SaveConfig();
             AddLog($"键帽配色已切换为 {value}。");

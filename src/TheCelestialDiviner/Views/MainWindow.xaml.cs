@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using TheCelestialDiviner.Helpers;
 using TheCelestialDiviner.Models;
@@ -26,8 +27,9 @@ public partial class MainWindow : Window
         _vm = vm;
         _app = app;
         DataContext = _vm;
-        // 标题栏不再展示英文名，版本号显示到三位（如 v1.7.5；随 csproj Version 自动跟随）。
-        Title = $"衍天高手 v{UpdateService.DisplayVersion}";
+        // 标题栏：名称与图标随当前档位的方案定制（默认主题可自定义应用名 / 图标；预设主题用其名称与图标），
+        // 版本号显示到三位（如 v1.7.5；随 csproj Version 自动跟随）；任务栏按钮图标同源。
+        ApplySectChrome(_vm.CurrentLook);
 
         // 点击编辑框之外任意区域时自动提交时序编辑（按压时长 / 连发间隔）：
         // 仅当焦点确实处于方案行的时序编辑框时才介入（同步提交并移出焦点），
@@ -264,10 +266,13 @@ public partial class MainWindow : Window
         // 设置菜单选中标记：键盘注入 / 键帽配色 / 键帽可视化 随 VM 状态同步
         //（菜单点击 / 导入配置 / DD 就绪检查回退）。
         SyncProfileButtons(_vm.ActiveProfile);
+        ApplyProfileNames();   // 档位标签文本随自定义名称（初渲染）
         _vm.PropertyChanged += (_, args) =>
         {
             if (args.PropertyName == nameof(MainViewModel.ActiveProfile))
                 Dispatcher.BeginInvoke(() => SyncProfileButtons(_vm.ActiveProfile));
+            else if (args.PropertyName == nameof(MainViewModel.ProfileNames))
+                Dispatcher.BeginInvoke(ApplyProfileNames);   // 方案定制 / 导入配置 → 档位标签刷新
             else if (args.PropertyName == nameof(MainViewModel.PickingKind))
                 Dispatcher.BeginInvoke(UpdateCycleKeyPickingComment);   // 进入/退出切换方案热键录入 → 注释区联动
             else if (args.PropertyName == nameof(MainViewModel.NoticeContent))
@@ -278,6 +283,9 @@ public partial class MainWindow : Window
                 SyncSettingsMenu();
         };
 
+        // 档位外观变更（切换方案 / 方案定制确定 / 导入配置）：标题栏名称与图标随档位同步。
+        _vm.AppearanceChanged += look => Dispatcher.BeginInvoke(() => ApplySectChrome(look));
+
         // 键位可视化悬浮层（钩子事件 → 悬浮层；UI 线程窗口创建后接线）。
         _vm.Visualizer.AttachOverlay();
         // 位置调整模式：底栏按钮 → 悬浮窗虚拟键帽拖拽 → 确认回调保存落盘。
@@ -285,6 +293,8 @@ public partial class MainWindow : Window
             _vm.Visualizer.BeginAdjust(onConfirm);
         // 语音设置：底栏按钮 → 模态框（导入自定义提示音 / 试听 / 重置回默认）。
         _vm.VoiceSettingsRequested += ShowVoiceSettings;
+        // 方案定制：「选项」菜单首项 → 模态框（四个档位命名 + 主题绑定 + 默认主题外观定制）。
+        _vm.ProfileCustomizeRequested += ShowProfileCustomize;
 
         // 钩子事件 → UI 封送（调度器本身线程安全，但日志与 UI 属性需封送）。
         _app.Hooks.SourceDown += src =>
@@ -414,9 +424,12 @@ public partial class MainWindow : Window
     /// <summary>菜单分组悬停说明（键 = 分组标题；替代悬浮 Tooltip，与分区标签注释共用展示位）。</summary>
     private static readonly Dictionary<string, string> MenuComments = new()
     {
+        ["方案定制"] = "方案定制：给四个方案档位命名，并为每个档位绑定主题（默认主题 / 衍天高手 / 莫问高手）；绑定「默认主题」时还可定制应用图标、应用名（窗口名，版本号不变）、键帽配色与开关 / 按压 / 双宏三种配色。切换档位即整套换肤。",
         ["键盘注入"] = "游戏内键盘连发不生效时逐个尝试：扫描码模式 → 消息模式 → DD 驱动模式。消息模式仅游戏在前台时有效；DD 驱动模式为物理级注入（需 dd63330.dll + 管理员权限）。",
         ["键帽配色"] = "可视化键帽配色方案（复刻自 keyviz 预设），切换实时生效并落盘。",
         ["键帽可视化"] = "键帽可视化方案：全部 = 所有键位；修饰键和自定义键 = 修饰键与方案内键位；自定义键 = 仅方案内键位（均受单键开关约束）。",
+        ["导入配置"] = "从 JSON 文件导入配置：整份配置（方案档位 + 热键 + 各项设置）被覆盖并立即生效，用于恢复备份或使用他人分享的方案。",
+        ["导出配置"] = "把当前整份配置（方案档位 + 热键 + 各项设置）导出为 JSON 文件，用于备份或分享。",
         ["检查更新"] = "查询 Gitee 上的最新 Release：发现新版本时经确认自动下载安装并重启；没有更新或网络不可用会以普通消息提示。",
     };
 
@@ -436,15 +449,19 @@ public partial class MainWindow : Window
         => OnSectionTabMouseLeave(sender, e);
 
     // ---------- 底栏元素 → 注释区联动 ----------
-    /// <summary>底栏元素悬停说明（键 = 元素 x:Name；替代悬浮 Tooltip，与菜单注释共用展示位）。</summary>
+    /// <summary>底栏元素悬停说明（键 = 元素 x:Name；统一替代悬浮 Tooltip，与菜单注释共用展示位）。
+    /// 底栏按钮的说明一律走这里，不再用 ToolTip —— 悬浮提示文案与注释区同源，避免两套文案不一致。</summary>
     private static readonly Dictionary<string, string> BottomBarComments = new()
     {
         ["StatusReminderButton"] = "状态提醒：总开关开启时在键帽悬浮区常驻应用图标键帽；任一方案连发时自动隐藏，全部连发停止 2.5 秒后恢复（不受键位可视化总开关约束）。",
         ["MasterKeySettingPanel"] = "全局开关热键：点击按钮进入录入，左键点击左侧键位或直接按键即完成录入（默认 F9）。",
         ["AdjustVisualizerButton"] = "调整键帽显示位置：拖动应用图标键帽到目标处，虚线框为键帽可显示区域，点击确定保存。",
+        ["DivinerVoiceButton"] = "成为衍天高手：激活后总开关启动的语音播报改为「衍天高手启动」（关闭播报不变）。",
+        ["VoiceSettingsButton"] = "语音设置：为总开关开启 / 关闭与方案切换导入自定义提示音（可试听 / 重置回默认）。",
     };
 
-    /// <summary>悬停底栏元素（状态提醒 / 全局开关热键设置 / 调整可视化位置）：注释区显示对应说明。</summary>
+    /// <summary>悬停底栏元素（状态提醒 / 全局开关热键设置 / 调整可视化位置 / 成为衍天高手 / 语音设置）：
+    /// 注释区显示对应说明。</summary>
     private void OnBottomBarCommentEnter(object sender, System.Windows.Input.MouseEventArgs e)
     {
         if (sender is FrameworkElement { Name: { Length: > 0 } name } &&
@@ -633,6 +650,22 @@ public partial class MainWindow : Window
     /// <summary>设置菜单任一级展开：子项容器此时已生成，补同步 ● 选中标记。</summary>
     private void OnSettingsMenuSubmenuOpened(object sender, RoutedEventArgs e) => SyncSettingsMenu();
 
+    /// <summary>档位外观：窗口标题（应用名 + 版本号）与标题栏 / 任务栏图标一并切换。</summary>
+    private void ApplySectChrome(ResolvedAppearance look)
+    {
+        Title = $"{look.AppName} v{UpdateService.DisplayVersion}";
+        try
+        {
+            var decoder = BitmapDecoder.Create(new Uri(look.AppIconUri),
+                BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+            Icon = decoder.Frames.OrderByDescending(f => f.PixelWidth).First();
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"档位外观图标加载失败（{look.AppIconUri}），沿用当前窗口图标：{ex.Message}");
+        }
+    }
+
     /// <summary>
     /// 管理模式中的鼠标按下（钩子路径）：光标落在键鼠图块上 → 右键取消该键方案（双宏整对取消）/
     /// 其余鼠标键录入该键（双宏按成对录入处理）；落在键鼠区外（含本窗口其余区域与其他窗口）→
@@ -720,6 +753,31 @@ public partial class MainWindow : Window
     {
         var dlg = new VoiceSettingsWindow(_vm) { Owner = this };
         dlg.ShowDialog();
+    }
+
+    /// <summary>打开方案定制模态框（「选项」首项：四档位命名 + 主题绑定 + 默认主题外观定制，确定后落盘）。</summary>
+    private void ShowProfileCustomize()
+    {
+        var dlg = new ProfileCustomizeWindow(_vm) { Owner = this };
+        dlg.ShowDialog();
+    }
+
+    /// <summary>
+    /// 按当前档位名称刷新四个档位标签文本与悬停说明：未命名 = 「方案①」（原样式），
+    /// 已命名 = 自定义名（切换提示键帽与日志同源，见 MainViewModel.ProfileDisplayName）。
+    /// </summary>
+    private void ApplyProfileNames()
+    {
+        var buttons = ProfileButtons;
+        for (var i = 0; i < buttons.Length; i++)
+        {
+            var display = _vm.ProfileTabText(i);
+            buttons[i].Content = display;
+            var named = !string.IsNullOrWhiteSpace(_vm.ProfileName(i));
+            buttons[i].ToolTip = named
+                ? $"{display}（自定义名称，档位 {MainViewModel.ProfileLabel(i)}）"
+                : i == 0 ? $"{display}（默认）" : display;
+        }
     }
 
     // ---------- 交互 ----------

@@ -61,8 +61,10 @@ public partial class App : Application
     /// <summary>主题字典（首次创建后复用同一实例，避免反复切换时堆积字典）。</summary>
     private ResourceDictionary? _themeDict;
 
-    /// <summary>按深浅模式写入主题资源字典（键名与 App.xaml / 控件样式约定）。</summary>
-    public void ApplyTheme(bool isDark)
+    /// <summary>按深浅模式写入主题资源字典（键名与 App.xaml / 控件样式约定）。
+    /// 三个强调色槽位取自当前档位的方案定制外观（主题预设 + 默认主题自定义覆盖），
+    /// 界面各处的 {DynamicResource AccentPrimary / AccentGold} 随之整体换肤。</summary>
+    public void ApplyTheme(bool isDark, ResolvedAppearance look)
     {
         var fg = isDark ? "#E6E6E6" : "#1F1F1F";
         var bg = isDark ? "#202020" : "#FAFAFA";
@@ -83,12 +85,12 @@ public partial class App : Application
         dict["ThemeBorder"] = ToBrush(border);
         dict["ThemeButtonBg"] = ToBrush(buttonBg);
 
-        // 强调色（全局统一：紫 = 主题主色，金 = 警示色，浅/深主题同值；
-        // 色值唯一落点在 Helpers/Constants.cs，调色只改常量）。
-        dict["AccentPrimary"] = ToBrush(Constants.AccentPrimaryHex);
-        dict["AccentGold"] = ToBrush(Constants.AccentGoldHex);
-        // 方案列表圆形勾选框底色（日间 = 主题紫，夜间 = 主题金，勾选符号恒白）。
-        dict["ThemeRoundCheckFill"] = ToBrush(isDark ? Constants.AccentGoldHex : Constants.AccentPrimaryHex);
+        // 强调色（全局统一：主色 = 开关模式，警示色 = 按压模式；浅/深主题同值；
+        // 色值唯一落点在 Helpers/Constants.cs，主题槽位与自定义覆盖在 Models/ProfileAppearance.cs）。
+        dict["AccentPrimary"] = ToBrush(look.AccentPrimaryHex);
+        dict["AccentGold"] = ToBrush(look.AccentGoldHex);
+        // 方案列表圆形勾选框底色（日间 = 主色，夜间 = 警示色，勾选符号恒白）。
+        dict["ThemeRoundCheckFill"] = ToBrush(isDark ? look.AccentGoldHex : look.AccentPrimaryHex);
         // 热键按钮 / 总开关键图块底色（近黑但不过分扎眼；浅/深主题分别取值）。
         dict["HotkeyBg"] = ToBrush(isDark ? "#303030" : "#1F1F1F");
         // 全局热键设置按钮（底栏）：夜间沿用近黑底白字；日间复用普通按钮风格
@@ -103,7 +105,7 @@ public partial class App : Application
         dict["SegmentTrackBg"] = ToBrush(isDark ? "#383838" : "#FFFFFF");
 
         // 键源控件主题（静态刷子 + 实例刷新）。
-        KeySourceViewModel.UpdateTheme(isDark);
+        KeySourceViewModel.UpdateTheme(isDark, look);
         // 键帽悬浮层主题（调整模式提示条配色）。
         KeycapOverlayWindow.SetThemeDark(isDark);
     }
@@ -149,33 +151,20 @@ public partial class App : Application
 
         _trayIcon = new Forms.NotifyIcon
         {
-            Text = $"衍天高手 v{UpdateService.DisplayVersion}",
+            Text = TrayText(_vm.CurrentLook, enabled: false),
             Visible = true
         };
-        try
-        {
-            // 从内嵌资源加载 32x32 图标；16x16 由系统自动缩放。
-            var sfi = GetResourceStream(new Uri("pack://application:,,,/Resources/app.ico"));
-            using var stream = sfi.Stream;
-            using var baseIcon = new Icon(stream);
-
-            // 双状态图标各合成一次缓存；初值随配置（启动时全局开关可能已开启）。
-            _trayIconOff = (Icon)baseIcon.Clone();
-            _trayIconOn = ComposeTrayIcon(baseIcon, enabled: true);
-            _trayIcon.Icon = _vm.GloballyEnabled ? _trayIconOn : _trayIconOff;
-            _trayIcon.Text = _vm.GloballyEnabled ? $"衍天高手 v{UpdateService.DisplayVersion} — 已开启" : $"衍天高手 v{UpdateService.DisplayVersion}";
-        }
-        catch
-        {
-            // 图标缺失时使用系统默认（不阻塞启动）。
-        }
+        BuildTrayIcons(_vm.CurrentLook);
+        RefreshTrayIcon();
 
         // 全局开关状态 → 托盘图标绿点 / 提示文字联动（VM 事件在 UI 线程触发，直接订阅）。
-        _vm.GlobalStateChanged += enabled =>
+        _vm.GlobalStateChanged += _ => RefreshTrayIcon();
+
+        // 档位外观变更（切换方案 / 方案定制 / 导入配置）→ 托盘图标与提示文字随档位重建。
+        _vm.AppearanceChanged += look =>
         {
-            if (_trayIcon is null) return;
-            _trayIcon.Icon = enabled ? _trayIconOn : _trayIconOff;
-            _trayIcon.Text = enabled ? $"衍天高手 v{UpdateService.DisplayVersion} — 已开启" : $"衍天高手 v{UpdateService.DisplayVersion}";
+            BuildTrayIcons(look);
+            RefreshTrayIcon();
         };
 
         var menu = new Forms.ContextMenuStrip();
@@ -186,6 +175,44 @@ public partial class App : Application
 
         _trayIcon.ContextMenuStrip = menu;
         _trayIcon.DoubleClick += (_, _) => window.ShowFromTray();
+    }
+
+    /// <summary>托盘提示文字（"{应用名} v{版本}"，开启态追加"已开启"；应用名随档位方案定制）。</summary>
+    private string TrayText(ResolvedAppearance look, bool enabled) =>
+        enabled
+            ? $"{look.AppName} v{UpdateService.DisplayVersion} — 已开启"
+            : $"{look.AppName} v{UpdateService.DisplayVersion}";
+
+    /// <summary>按当前档位外观合成双状态托盘图标（启动时 / 切换档位或方案定制时各一次；
+    /// 旧图标先释放，避免反复切换堆积 GDI 句柄）。</summary>
+    private void BuildTrayIcons(ResolvedAppearance look)
+    {
+        try
+        {
+            // 从内嵌资源加载 32x32 图标；16x16 由系统自动缩放。
+            var sfi = GetResourceStream(new Uri(look.AppIconUri));
+            using var stream = sfi.Stream;
+            using var baseIcon = new Icon(stream);
+
+            var off = (Icon)baseIcon.Clone();
+            var on = ComposeTrayIcon(baseIcon, enabled: true);
+            _trayIconOff?.Dispose();
+            _trayIconOn?.Dispose();
+            _trayIconOff = off;
+            _trayIconOn = on;
+        }
+        catch
+        {
+            // 图标缺失时使用系统默认（不阻塞启动）。
+        }
+    }
+
+    /// <summary>按当前总开关状态刷新托盘图标与提示文字。</summary>
+    private void RefreshTrayIcon()
+    {
+        if (_trayIcon is null) return;
+        _trayIcon.Icon = _vm.GloballyEnabled ? _trayIconOn : _trayIconOff;
+        _trayIcon.Text = TrayText(_vm.CurrentLook, _vm.GloballyEnabled);
     }
 
     /// <summary>关闭窗口 → 隐藏到托盘（不退出），首次给出提示日志。</summary>

@@ -1,0 +1,124 @@
+<Window x:Class="TheCelestialDiviner.Views.ProfileCustomizeWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="方案定制" Width="560" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        ShowInTaskbar="False" Background="{DynamicResource ThemeBg}"
+        Foreground="{DynamicResource ThemeFg}" FontSize="12"
+        UseLayoutRounding="True">
+    <!-- 方案定制：四个方案档位各自「名称 + 主题预设绑定」；绑定「默认主题」的档位可继续定制
+         应用图标 / 应用名 / 键帽配色 / 三色（预设主题下定制区不展示）。
+         切换档位即按该档位的定制整套换肤（配色 / 图标 / 窗口名 / 注释区公告 / 键帽配色）。 -->
+    <Window.Resources>
+        <!-- 档位页签（对话框内自用；与主界面档位按钮观感一致：选中 = 主题强调色底白字） -->
+        <Style x:Key="DialogTabStyle" TargetType="RadioButton">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeFg}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="Bg" Background="{DynamicResource ThemeButtonBg}"
+                                BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1"
+                                CornerRadius="4" Padding="12,4" Margin="0,0,6,0">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource TabIdleBg}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource AccentPrimary}"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border Padding="18,16,18,14">
+        <DockPanel>
+            <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Opacity="0.75" Margin="0,0,0,12"
+                       Text="为四个方案档位命名并绑定主题；绑定「默认主题」的档位可定制外观（应用图标 / 应用名 / 键帽配色 / 三种配色）。切换档位即整套换肤。"/>
+            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right"
+                        Margin="0,16,0,0">
+                <Button Content="恢复默认" Width="88" Height="28" Style="{StaticResource IconButtonStyle}"
+                        Margin="0,0,8,0" Click="OnResetClick"
+                        ToolTip="把当前档位恢复为：默认主题 + 无自定义 + 无名称"/>
+                <Button Content="取消" Width="78" Height="28" Style="{StaticResource IconButtonStyle}"
+                        Margin="0,0,8,0" Click="OnCancelClick"/>
+                <Button Content="确定" Width="78" Height="28" Style="{StaticResource IconButtonStyle}"
+                        Click="OnConfirmClick"/>
+            </StackPanel>
+
+            <StackPanel>
+                <!-- 档位页签：① ② ③ ④（已命名的显示自定义名） -->
+                <StackPanel x:Name="TabPanel" Orientation="Horizontal"/>
+
+                <Grid Margin="0,14,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="方案名称" VerticalAlignment="Center"
+                               Margin="0,0,10,8"/>
+                    <TextBox x:Name="NameBox" Grid.Row="0" Grid.Column="1" Height="26" MaxLength="12"
+                             VerticalContentAlignment="Center" Margin="0,0,10,8"/>
+                    <TextBlock x:Name="NameHint" Grid.Row="0" Grid.Column="2" Text="留空 = 默认序号"
+                               VerticalAlignment="Center" Opacity="0.6" Margin="0,0,0,8"/>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="主题预设" VerticalAlignment="Center"
+                               Margin="0,0,10,0"/>
+                    <ComboBox x:Name="ThemeBox" Grid.Row="1" Grid.Column="1" Height="26"
+                              Style="{StaticResource RoundedComboStyle}" Margin="0,0,10,0"
+                              SelectionChanged="OnThemeChanged"/>
+                    <TextBlock x:Name="ThemeHint" Grid.Row="1" Grid.Column="2" Text=""
+                               VerticalAlignment="Center" Opacity="0.6"/>
+                </Grid>
+
+                <!-- 定制区（仅「默认主题」展示） -->
+                <Border x:Name="CustomPanel" Margin="0,14,0,0" Padding="12,10" CornerRadius="4"
+                        BorderThickness="1" BorderBrush="{DynamicResource ThemeBorder}">
+                    <StackPanel>
+                        <TextBlock Text="默认主题定制" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                        <TextBlock Text="应用图标" Margin="0,0,0,6"/>
+                        <!-- 高度上限：图标数量增长时画廊内部滚动，对话框高度不超出屏幕 -->
+                        <ScrollViewer MaxHeight="190" VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled" Margin="0,0,0,12">
+                            <WrapPanel x:Name="IconGallery"/>
+                        </ScrollViewer>
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="应用名" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBox x:Name="AppNameBox" Grid.Column="1" Height="26" MaxLength="16"
+                                     VerticalContentAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock x:Name="AppNameHint" Grid.Column="2" Text="留空 = 衍天高手"
+                                       VerticalAlignment="Center" Opacity="0.6"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="键帽配色" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <ComboBox x:Name="SchemeBox" Grid.Column="1" Height="26"
+                                      Style="{StaticResource RoundedComboStyle}" MaxWidth="200"
+                                      HorizontalAlignment="Left" MinWidth="160"/>
+                        </Grid>
+                        <StackPanel x:Name="ColorRowsPanel"/>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </DockPanel>
+    </Border>
+</Window>

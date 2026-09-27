@@ -141,6 +141,15 @@ public sealed class KeyVisualizerService
             _pendingOpacity = v;
     }
 
+    /// <summary>档位外观的应用图标（状态提醒常驻键帽 / 调整模式虚拟键帽）：
+    /// 先登记静态资源名（悬浮层尚未创建时也生效），窗口已存在则重建常驻键帽换图标。</summary>
+    public void SetSectIcon(string iconUri)
+    {
+        KeycapOverlayWindow.SetAppIconUri(iconUri);
+        if (_overlay is { } overlay && _dispatcher is { } dispatcher)
+            dispatcher.BeginInvoke(overlay.RefreshAppIcon);
+    }
+
     /// <summary>订阅调度器连发脉冲（目标键每发射一次 → 键帽脉冲 + 连击角标）；
     /// 同时订阅连发激活状态（状态提醒键帽的显隐驱动）。</summary>
     public void AttachScheduler(TaskSchedulerService scheduler)
@@ -356,8 +365,8 @@ public sealed class KeyVisualizerService
     private const int CycleKeycapHoldMs = 80;
 
     /// <summary>
-    /// 切换方案热键触发键帽：显示目标方案代号（①②③④）。重复触发复用同帽递增连击角标；
-    /// 停止触发 1.2s 后随活动巡检独立淡出移除。UI 线程外可安全调用（内部封送）。
+    /// 切换方案热键触发键帽：显示目标方案名称（自定义名；未命名回退默认序号 ①②③④）。
+    /// 重复触发复用同帽递增连击角标；停止触发 1.2s 后随活动巡检独立淡出移除。UI 线程外可安全调用（内部封送）。
     /// </summary>
     public void ShowCycleKeycap(string label)
     {

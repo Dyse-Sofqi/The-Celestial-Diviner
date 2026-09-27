@@ -64,6 +64,43 @@ public sealed class SoundCueService
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         Constants.AppFolderName, "sounds");
 
+    /// <summary>程序目录（exe 同级）：候选提示音的放置位置（不集成进程序，散装文件即可识别）。</summary>
+    public static string AppDir => AppDomain.CurrentDomain.BaseDirectory;
+
+    /// <summary>可识别为提示音的扩展名（与「导入…」过滤器一致）。</summary>
+    private static readonly string[] AudioExtensions = [".mp3", ".wav", ".m4a", ".aac", ".wma"];
+
+    /// <summary>
+    /// 扫描程序目录里的候选提示音（exe 同目录 + 可选 audio 子目录，按文件名排序）。
+    /// 这些文件**不内嵌进程序**：用户把音频放进程序目录即可在「语音设置」下拉列表里选择，
+    /// 选中后与手动「导入…」同效（复制到语音目录 + 落盘）。
+    /// </summary>
+    public static List<string> ScanCandidates()
+    {
+        var found = new List<string>();
+        foreach (var dir in new[] { AppDir, Path.Combine(AppDir, "audio") })
+        {
+            try
+            {
+                if (!Directory.Exists(dir)) continue;
+                foreach (var path in Directory.EnumerateFiles(dir))
+                {
+                    if (Array.Exists(AudioExtensions,
+                            ext => string.Equals(ext, Path.GetExtension(path), StringComparison.OrdinalIgnoreCase)))
+                        found.Add(path);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"候选提示音扫描失败（{dir}）：{ex.Message}");
+            }
+        }
+        return found
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     public SoundCueService()
     {
         _startPlayer.MediaFailed += (_, e) =>
@@ -275,6 +312,28 @@ public sealed class SoundCueService
         SoundCue.Stop => "stop",
         _ => "cycle",
     };
+
+    /// <summary>
+    /// 存储文件名（"{用途前缀}_{原文件名}"）→ 原始文件名（界面显示用）。
+    /// 只按本用途的前缀剥离，避免把文件名里本来就有的下划线误当分隔符。
+    /// </summary>
+    public static string OriginalFileName(SoundCue cue, string? storedName)
+    {
+        // net48 参考程序集里 string.IsNullOrEmpty 无 NotNullWhen 注解，用模式匹配让编译器确认非空
+        if (storedName is not { Length: > 0 }) return "";
+        var prefix = CuePrefix(cue) + "_";
+        return storedName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            ? storedName.Substring(prefix.Length)
+            : storedName;
+    }
+
+    /// <summary>精简展示名：去路径与扩展名（下拉列表显示用，不展示路径）。</summary>
+    public static string ShortDisplayName(string? pathOrFileName)
+    {
+        if (pathOrFileName is not { Length: > 0 }) return "";
+        var fileName = Path.GetFileName(pathOrFileName);
+        return Path.GetFileNameWithoutExtension(fileName);
+    }
 
     private void Play(MediaPlayer player)
     {

@@ -59,4 +59,9 @@ public static class KeycapSchemes
     public static KeycapScheme Resolve(string? name) =>
         All.FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase)) ??
         All.First(s => s.Name == "Pansy");
+
+    /// <summary>方案名是否合法（配置归一化用；空 / 未知 → false）。</summary>
+    public static bool IsKnown(string? name) =>
+        !string.IsNullOrWhiteSpace(name) &&
+        All.Any(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
 }

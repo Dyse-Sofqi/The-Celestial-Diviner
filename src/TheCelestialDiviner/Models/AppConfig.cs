@@ -279,11 +279,15 @@ public sealed class AppConfig
     /// <summary>键盘注入模式默认值：DD 驱动（物理级，无 LLKHF_INJECTED 标记）。</summary>
     public const int DefaultKeyboardMode = 3;
 
+    /// <summary>方案档位数量（固定 4 套：①②③④）。</summary>
+    public const int ProfileCount = 4;
+
     /// <summary>配置文件当前版本（v2：总开关默认关闭 + 默认键 F9 + 提示语音音量；v3：开关模式分区；
     /// v4：方案三档位 ①②③ + 当前档位；v5：键位可视化开关表；v6：连发时序增加按压时长；
     /// v7：状态提醒开关；v8：状态提醒默认激活；v9：切换方案热键；v10：成为衍天高手语音按钮；
-    /// v11：注释区公告内容缓存；v12：键帽透明度；v13：自定义提示音）。</summary>
-    public const int CurrentVersion = 13;
+    /// v11：注释区公告内容缓存；v12：键帽透明度；v13：自定义提示音；v14：门派主题 + 莫问公告缓存；
+    /// v15：方案档位自定义名称；v16：方案档位外观定制（主题绑定 + 默认主题自定义，取代全局门派主题））。</summary>
+    public const int CurrentVersion = 16;
 
     /// <summary>配置文件版本号（预留迁移能力）。</summary>
     public int Version { get; set; } = CurrentVersion;
@@ -305,6 +309,43 @@ public sealed class AppConfig
     /// <summary>当前选中的方案档位（0~3 ↔ ①②③④，默认①；切换时实时落盘）。</summary>
     public int ActiveProfile { get; set; }
 
+    /// <summary>
+    /// 四个方案档位的自定义名称（下标与档位一一对应；空串 = 用默认序号 ①②③④）。
+    /// 用于档位标签、切换方案时的提示键帽与日志（「选项」→ 方案定制 对话框编辑）。
+    /// </summary>
+    public List<string> ProfileNames { get; set; } = ["", "", "", ""];
+
+    /// <summary>
+    /// 四个方案档位的外观定制（下标与档位一一对应）：主题预设绑定（默认主题 / 衍天高手 / 莫问高手）
+    /// + 默认主题下的自定义项（应用图标 / 应用名 / 键帽配色 / 三色）。
+    /// 切换档位即按该档位的定制整套换肤（配色 / 图标 / 窗口名 / 注释区公告 / 键帽配色）。
+    /// </summary>
+    public List<ProfileAppearance> ProfileAppearances { get; set; } = [new(), new(), new(), new()];
+
+    /// <summary>方案名称归一化：补齐 / 截断到 4 项、去除首尾空白、空值落空串（加载与导入配置后调用）。</summary>
+    public void NormalizeProfileNames()
+    {
+        while (ProfileNames.Count < ProfileCount) ProfileNames.Add("");
+        if (ProfileNames.Count > ProfileCount)
+            ProfileNames.RemoveRange(ProfileCount, ProfileNames.Count - ProfileCount);
+        for (var i = 0; i < ProfileNames.Count; i++)
+        {
+            var name = (ProfileNames[i] ?? "").Trim();
+            ProfileNames[i] = name.Length > Constants.MaxProfileNameLength
+                ? name.Substring(0, Constants.MaxProfileNameLength)
+                : name;
+        }
+    }
+
+    /// <summary>方案外观归一化：补齐 / 截断到 4 项并逐项校验（主题下标 / 图标键 / 配色名 / 色值 / 应用名）。</summary>
+    public void NormalizeProfileAppearances()
+    {
+        while (ProfileAppearances.Count < ProfileCount) ProfileAppearances.Add(new ProfileAppearance());
+        if (ProfileAppearances.Count > ProfileCount)
+            ProfileAppearances.RemoveRange(ProfileCount, ProfileAppearances.Count - ProfileCount);
+        foreach (var appearance in ProfileAppearances) appearance.Normalize();
+    }
+
     /// <summary>键位可视化显示开关（键为输入源标识字符串；缺省视为开启可视化）。</summary>
     public Dictionary<string, bool> VisualKeys { get; set; } = new(StringComparer.Ordinal);
 
@@ -325,6 +366,9 @@ public sealed class AppConfig
     /// 启动时远端（Gitee）公告与当前内容不同则覆盖并落盘，此后离线启动仍显示上次同步到的内容。
     /// </summary>
     public string NoticeContent { get; set; } = "";
+
+    /// <summary>莫问高手的注释区公告缓存（空 = 内嵌 Notice2.md；与衍天的 NoticeContent 各自独立）。</summary>
+    public string MoWenNoticeContent { get; set; } = "";
 
     /// <summary>夜间模式：true 夜间深色 / false 白天浅色（底栏按钮切换）。</summary>
     public bool NightMode { get; set; }
@@ -389,11 +433,14 @@ public sealed class AppConfig
         Version = Version,
         Profiles = Profiles.Select(p => p.ToDictionary(kv => kv.Key, kv => kv.Value.Clone(), StringComparer.Ordinal)).ToList(),
         ActiveProfile = ActiveProfile,
+        ProfileNames = new List<string>(ProfileNames),
         GlobalVisualEnabled = GlobalVisualEnabled,
         StatusReminderEnabled = StatusReminderEnabled,
         DivinerVoiceEnabled = DivinerVoiceEnabled,
         KeycapScheme = KeycapScheme,
         NoticeContent = NoticeContent,
+        ProfileAppearances = ProfileAppearances.Select(a => a.Clone()).ToList(),
+        MoWenNoticeContent = MoWenNoticeContent,
         NightMode = NightMode,
         ThemeFollowSystem = ThemeFollowSystem,
         VisualizerLeft = VisualizerLeft,

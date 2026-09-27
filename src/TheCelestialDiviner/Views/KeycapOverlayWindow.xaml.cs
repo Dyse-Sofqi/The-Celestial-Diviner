@@ -65,8 +65,21 @@ public sealed partial class KeycapOverlayWindow : Window
     /// <summary>提醒键帽期望显示态（调整模式临时清场后据此恢复）。</summary>
     private bool _reminderDesired;
 
-    /// <summary>应用图标缓存（提醒键帽内容；懒加载，取 ico 中分辨率最大的帧）。</summary>
+    /// <summary>应用图标缓存（提醒键帽内容；懒加载，取 ico 中分辨率最大的帧）。
+    /// 档位外观（应用图标）切换时随 <see cref="SetAppIconUri"/> 失效重建。</summary>
     private static ImageSource? _appIcon;
+
+    /// <summary>当前档位外观的应用图标资源（默认 = 衍天 app.ico）。</summary>
+    private static string _appIconUri = "pack://application:,,,/Resources/app.ico";
+
+    /// <summary>设置应用图标资源（档位外观切换时由 KeyVisualizerService 调用）：
+    /// 资源名变化才清缓存，下次加载（含已存在键帽的重建）即用新图标。</summary>
+    public static void SetAppIconUri(string uri)
+    {
+        if (string.Equals(_appIconUri, uri, StringComparison.Ordinal)) return;
+        _appIconUri = uri;
+        _appIcon = null;
+    }
 
     // ---------- 鼠标键帽矢量图标（lucide mouse-left / mouse-right / mouse，ISC 许可；
     // mouse-left / mouse-right 为 0.573+ 新增图标） ----------
@@ -95,15 +108,27 @@ public sealed partial class KeycapOverlayWindow : Window
         try
         {
             var decoder = IconBitmapDecoder.Create(
-                new Uri("pack://application:,,,/Resources/app.ico"),
+                new Uri(_appIconUri),
                 BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
             _appIcon = decoder.Frames.OrderByDescending(f => f.PixelWidth).First();
         }
         catch (Exception ex)
         {
-            Logger.Warn($"应用图标加载失败，状态提醒键帽退化为文字显示：{ex.Message}");
+            Logger.Warn($"应用图标加载失败（{_appIconUri}），状态提醒键帽退化为文字显示：{ex.Message}");
         }
         return _appIcon;
+    }
+
+    /// <summary>
+    /// 档位外观切换后重建常驻键帽（应用图标已换）：移除再按期望态重建。
+    /// 调整模式中跳过（虚拟键帽已用旧图标，退出后按期望态恢复即用新图标）。
+    /// </summary>
+    public void RefreshAppIcon()
+    {
+        if (_adjustWindow is not null) return;
+        if (_reminderCap is null) return;
+        SetReminderVisible(false);
+        SetReminderVisible(true);
     }
 
     /// <summary>

@@ -38,19 +38,20 @@ public sealed class KeySourceViewModel : INotifyPropertyChanged
     private static bool s_isDark;
     private static Brush s_emptyBrush = MakeBrush("#F2F2F2");
     private static Brush s_emptyForeground = MakeBrush("#666666");
-    // 图块强调色（色值唯一落点 Helpers/Constants.cs；UpdateTheme 时重建，便于全局换色）。
-    private static Brush s_toggleBrush = MakeBrush(Constants.AccentPrimaryHex);   // 开关模式：主题紫
-    private static Brush s_holdBrush = MakeBrush(Constants.AccentGoldHex);        // 按压模式：金色
-    private static Brush s_dualBrush = MakeBrush(Constants.AccentDualHex);        // 双宏开关：主题紫深一档
+    // 图块强调色（色值唯一落点 Constants.cs / SectThemes.cs：按档位方案定制外观取三个槽位色；
+    // UpdateTheme 时重建，便于切换档位（含主题预设变化）/ 切换日夜时全局换色）。
+    private static Brush s_toggleBrush = MakeBrush(SectThemes.Default.AccentPrimaryHex);   // 开关模式
+    private static Brush s_holdBrush = MakeBrush(SectThemes.Default.AccentGoldHex);        // 按压模式
+    private static Brush s_dualBrush = MakeBrush(SectThemes.Default.AccentDualHex);        // 双宏开关
     private static readonly Brush s_registeredForeground = Brushes.White;
 
-    /// <summary>更新主题静态刷子（深色 / 浅色），随后需对每个实例调。?RefreshTheme。?。</summary>
-    public static void UpdateTheme(bool isDark)
+    /// <summary>更新主题静态刷子（深色 / 浅色 + 档位外观调色板），随后需对每个实例调 RefreshTheme。</summary>
+    public static void UpdateTheme(bool isDark, Models.ResolvedAppearance look)
     {
-        // 强调色与主题资源同源（Constants 唯一落点）；每次重建刷子，改常量后重跑即全局生效。
-        s_toggleBrush = MakeBrush(Constants.AccentPrimaryHex);
-        s_holdBrush = MakeBrush(Constants.AccentGoldHex);
-        s_dualBrush = MakeBrush(Constants.AccentDualHex);
+        // 强调色与主题资源同源（档位外观解析色）；每次重建刷子，切换档位后重跑即全局生效。
+        s_toggleBrush = MakeBrush(look.AccentPrimaryHex);
+        s_holdBrush = MakeBrush(look.AccentGoldHex);
+        s_dualBrush = MakeBrush(look.AccentDualHex);
 
         if (s_isDark == isDark) return;
         s_isDark = isDark;

@@ -45,6 +45,8 @@ public sealed class ConfigService
                 var config = JsonSerializer.Deserialize<AppConfig>(json, JsonOptions) ?? new AppConfig();
                 MigrateIfNeeded(config);
                 NormalizeTiming(config);
+                config.NormalizeProfileNames();
+                config.NormalizeProfileAppearances();
                 config.SoundVolume = Compat.Clamp(config.SoundVolume, 0, 100);
                 config.VisualizerOpacity = Compat.Clamp(config.VisualizerOpacity, 0, 100);
                 return config;
@@ -108,6 +110,11 @@ public sealed class ConfigService
         // v11：注释区公告缓存——字段有默认值（空 = 内嵌默认公告），无需迁移动作。
         // v12：键帽透明度——字段有默认值（100 = 完全不透明），无需迁移动作。
         // v13：自定义提示音——字段有默认值（空 = 内嵌默认音频），无需迁移动作。
+        // v14：门派主题 + 莫问公告缓存——字段有默认值（0 = 衍天高手 / 空 = 内嵌 Notice2.md），无需迁移动作。
+        // v15：方案档位自定义名称——字段有默认值（4 个空串 = 默认序号），无需迁移动作
+        //（长度 / 空值由 AppConfig.NormalizeProfileNames 归一化，加载与导入均调用）。
+        // v16：方案档位外观定制（主题绑定 + 默认主题自定义）——字段有默认值（4 套「默认主题」预设），
+        // 无需迁移动作；旧的全局 SectTheme 字段被 per-profile 外观取代（旧 JSON 里的该字段被忽略）。
 
         config.Version = AppConfig.CurrentVersion;
         Logger.Info($"配置 v{fromVersion} 已迁移到 v{AppConfig.CurrentVersion}（总开关默认关闭、默认键 F9、开关模式分区、方案四档位、键位可视化）。" );

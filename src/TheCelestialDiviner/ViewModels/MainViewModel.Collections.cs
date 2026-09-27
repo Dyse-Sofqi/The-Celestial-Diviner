@@ -874,6 +874,7 @@ public sealed partial class MainViewModel
             // 旧版本配置先迁移到当前版本语义，并归一化连发时序（间隔下限 / 按压时长缺失落默认）。
             ConfigService.MigrateIfNeeded(imported);
             ConfigService.NormalizeTiming(imported);
+            imported.NormalizeProfileNames();
             // 导入后对齐方案档位（Schemes ↔ Profiles[ActiveProfile] 同一实例），
             // 并通知档位按钮同步选中态（导入可能来自不同档位的配置）。
             SyncProfileRuntime();
@@ -898,8 +899,13 @@ public sealed partial class MainViewModel
             imported.VisualizerOpacity = Compat.Clamp(imported.VisualizerOpacity, 0, 100);
             _visualizer.SetOpacity(imported.VisualizerOpacity);
             OnPropertyChanged(nameof(VisualizerOpacity));
-            // 主题随导入配置还原（夜间模式 / 白天模式）。
+            // 主题随导入配置还原（夜间模式 / 白天模式 + 当前档位的方案定制外观）。
             ApplyTheme();
+            // 方案定制随导入配置还原：档位名称 / 主题绑定 / 图标 / 应用名 / 键帽配色 / 三色 / 公告。
+            _config.NormalizeProfileNames();
+            _config.NormalizeProfileAppearances();
+            OnPropertyChanged(nameof(ProfileNames));
+            ApplyAppearance();
             MasterKeyText = imported.GlobalSwitch.HasKey
                 ? InputNameMapper.GetKeyName(imported.GlobalSwitch.VirtualKey, imported.GlobalSwitch.Extended)
                 : "未设置";

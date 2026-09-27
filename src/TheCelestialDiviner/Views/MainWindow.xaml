@@ -208,7 +208,7 @@
              代码同步 IsChecked 实现单选语义；全部 Focusable=False（仅鼠标操作，
              悬停展开不受影响），与全窗口键盘不可达策略一致 -->
         <!-- 顶层菜单项（菜单键）：按钮观感（lucide menu 图标 + 文本，配色同 IconButtonStyle），
-             悬停 / 展开高亮；位于窗口左下角 → 子菜单向上弹出 -->
+             悬停 / 展开高亮；位于窗口左下角 → 子菜单下拉（下方放不下时自动翻到上方） -->
         <Style x:Key="MenuTopStyle" TargetType="MenuItem">
             <Setter Property="Foreground" Value="{DynamicResource ThemeFg}"/>
             <Setter Property="FontSize" Value="12"/>
@@ -232,10 +232,10 @@
                                                       VerticalAlignment="Center" RecognizesAccessKey="True"/>
                                 </StackPanel>
                             </Border>
-                            <!-- 左下角 → 向上弹出且左对齐：显式坐标定位（Custom），规避系统
-                                 菜单右对齐辅助选项（MenuDropAlignment）把 Top 摆位镜像成右对齐 -->
+                            <!-- 左下角 → 下拉且左对齐（下方放不下时自动翻到上方）：显式坐标定位（Custom），
+                                 规避系统菜单右对齐辅助选项（MenuDropAlignment）把 Top 摆位镜像成右对齐 -->
                             <Popup Placement="Custom" PlacementTarget="{Binding ElementName=Bg}"
-                                   CustomPopupPlacementCallback="{x:Static conv:MenuPlacements.AboveTarget}"
+                                   CustomPopupPlacementCallback="{x:Static conv:MenuPlacements.BelowTarget}"
                                    IsOpen="{TemplateBinding IsSubmenuOpen}" AllowsTransparency="True"
                                    Focusable="False" PopupAnimation="Fade">
                                 <!-- 上下内边距必须为 0：内边距会使首行比分组项低 2px、
@@ -669,14 +669,14 @@
                 <!-- 右三：切换方案设置（Dock=Right 声明在全局开关热键设置之后 → 落于其左侧）。
                      按钮缺省显示"未设置"；点击进入录入：左键左侧键位 / 直接按键设置，
                      右键已设置键位取消恢复缺省；设置后按下该键按顺序切换非空方案档位。
-                     悬停 / 录入时经 MouseEnter/Leave 在注释区显示说明 -->
+                     悬停 / 录入时经 MouseEnter/Leave 在注释区显示说明（按钮原有 Tooltip 文案已并入
+                    注释区说明 CycleKeyComment，不再用悬浮 Tooltip） -->
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"
                             MouseEnter="OnCycleKeyCommentEnter" MouseLeave="OnCommentMouseLeave">
                     <TextBlock Text="切换方案设置：" VerticalAlignment="Center" FontSize="11"
                                Foreground="{DynamicResource ThemeFg}"/>
                     <Button Height="26" MinWidth="34" Padding="4,0" Margin="0,0,8,0"
-                            Command="{Binding SetCycleKeyPickingCommand}"
-                            ToolTip="切换方案热键：按下按 ①→②→③→④ 顺序切换到下一个非空方案档位；点击按钮进入录入（左键键位 / 直接按键设置，右键已设置键位取消恢复未设置）">
+                            Command="{Binding SetCycleKeyPickingCommand}">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
                                 <!-- 配色与全局开关热键按钮同源（HotkeySetting* 随主题注入） -->
@@ -706,6 +706,12 @@
                       Padding="0" Margin="0,0,8,0" Focusable="False">
                     <MenuItem Header="选项" Style="{StaticResource MenuTopStyle}"
                               SubmenuOpened="OnSettingsMenuSubmenuOpened">
+                        <!-- 方案定制（第一项，动作项 Tag = action）：四个方案档位命名 + 主题绑定
+                             （默认主题 / 衍天高手 / 莫问高手）+ 默认主题下的外观定制
+                             （应用图标 / 应用名 / 键帽配色 / 三色）；悬停说明走注释区（MenuComments） -->
+                        <MenuItem Header="方案定制" Tag="action" Style="{StaticResource MenuSubStyle}"
+                                  Command="{Binding CustomizeProfilesCommand}"
+                                  MouseEnter="OnMenuCommentEnter" MouseLeave="OnMenuCommentLeave"/>
                         <MenuItem x:Name="KeyboardModeMenu" Header="键盘注入" Style="{StaticResource MenuSubStyle}"
                                   MouseEnter="OnMenuCommentEnter" MouseLeave="OnMenuCommentLeave">
                             <MenuItem Header="普通（SendInput）" Tag="0" Style="{StaticResource MenuSubStyle}"
@@ -747,6 +753,18 @@
                                       Command="{Binding SetVisualizerModeCommand}"
                                       CommandParameter="{Binding RelativeSource={RelativeSource Self}, Path=Tag}"/>
                         </MenuItem>
+                        <!-- 导入 / 导出配置（自底栏移入）：作用于整份配置（导入整体覆盖、导出整份：
+                             方案档位 + 热键 + 各项设置），悬停说明走注释区（MenuComments）。
+                             Style 必须显式指定 MenuSubStyle —— 漏写会落到系统默认 MenuItem 模板
+                             （行高 22 / 字号 12 / 系统缩进与高亮，且夜间模式不可用，与同级项明显不统一；
+                             本页实测：带上样式后与「键盘注入」「检查更新」等逐行一致 —— 行高 24、
+                             同一文本起点、字号 11、前景 ThemeFg）。Tag = action 走动作项语义（无 ●） -->
+                        <MenuItem Header="导入配置" Tag="action" Style="{StaticResource MenuSubStyle}"
+                                  Command="{Binding ImportCommand}"
+                                  MouseEnter="OnMenuCommentEnter" MouseLeave="OnMenuCommentLeave"/>
+                        <MenuItem Header="导出配置" Tag="action" Style="{StaticResource MenuSubStyle}"
+                                  Command="{Binding ExportCommand}"
+                                  MouseEnter="OnMenuCommentEnter" MouseLeave="OnMenuCommentLeave"/>
                         <!-- 检查更新（动作项，Tag = action 折叠 ● 占位列 → 与上方分组项 14px 文本起点左对齐）：
                              查询 Gitee Release，发现新版本经确认后下载安装自动重启；
                              检查 / 下载期间禁用并显示“检查中…”；悬停说明走注释区（MenuComments） -->
@@ -766,14 +784,8 @@
                     </MenuItem>
                 </Menu>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <!-- 导入 / 导出配置（自方案面板底部移入，紧跟「选项」菜单键之后；
-                         作用于当前方案档位） -->
-                    <Button Content="导入配置" Style="{StaticResource IconButtonStyle}"
-                            Height="26" Padding="8,0" Margin="0,0,8,0" Command="{Binding ImportCommand}"
-                            ToolTip="从 JSON 文件导入当前档位的连发键配置"/>
-                    <Button Content="导出配置" Style="{StaticResource IconButtonStyle}"
-                            Height="26" Padding="8,0" Margin="0,0,8,0" Command="{Binding ExportCommand}"
-                            ToolTip="将当前档位的连发键配置导出为 JSON 文件"/>
+                    <!-- 导入 / 导出配置：已移入左下角「选项」菜单（键帽可视化分组项之后、检查更新之前；
+                         菜单键与「调整可视化位置」间的 8px 间隙由 Menu 右边距提供，不变） -->
                     <!-- 调整可视化键帽位置：弹出独立窗口（应用图标键帽 + 区域虚线框），拖拽定位，
                          键帽上方确定按钮保存退出。悬停说明不在 Tooltip：经 MouseEnter
                          显示于左下注释区（OnBottomBarCommentEnter） -->
@@ -782,10 +794,11 @@
                             MouseEnter="OnBottomBarCommentEnter" MouseLeave="OnCommentMouseLeave"/>
                     <!-- 成为衍天高手：激活时总开关启动的语音播报改为「衍天高手启动」（关闭播报不变）。
                          激活态墨迹金色（AccentGold），未激活常规文字色（ThemeFg）——均为主题资源，
-                         日间 / 夜间模式自动适配 -->
-                    <Button Content="成为衍天高手" Height="26" Padding="8,0" Margin="8,0,0,0"
+                         日间 / 夜间模式自动适配。原悬浮 Tooltip 文案移入左下注释区
+                         （OnBottomBarCommentEnter → BottomBarComments） -->
+                    <Button x:Name="DivinerVoiceButton" Content="成为衍天高手" Height="26" Padding="8,0" Margin="8,0,0,0"
                             Command="{Binding ToggleDivinerVoiceCommand}"
-                            ToolTip="成为衍天高手：激活后总开关启动的语音播报改为「衍天高手启动」（关闭播报不变）">
+                            MouseEnter="OnBottomBarCommentEnter" MouseLeave="OnCommentMouseLeave">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
                                 <Setter Property="Foreground" Value="{DynamicResource ThemeFg}"/>
@@ -797,11 +810,13 @@
                             </Style>
                         </Button.Style>
                     </Button>
-                    <!-- 语音设置：弹出模态框，为总开关开启 / 关闭与方案切换导入自定义提示音（可试听 / 重置回默认） -->
-                    <Button Content="语音设置" Style="{StaticResource IconButtonStyle}"
+                    <!-- 语音设置：弹出模态框，为总开关开启 / 关闭与方案切换导入自定义提示音
+                         （可试听 / 重置回默认）。原悬浮 Tooltip 文案移入左下注释区
+                         （OnBottomBarCommentEnter → BottomBarComments） -->
+                    <Button x:Name="VoiceSettingsButton" Content="语音设置" Style="{StaticResource IconButtonStyle}"
                             Height="26" Padding="8,0" Margin="8,0,0,0"
                             Command="{Binding OpenVoiceSettingsCommand}"
-                            ToolTip="语音设置：为总开关开启 / 关闭与方案切换设置自定义提示音"/>
+                            MouseEnter="OnBottomBarCommentEnter" MouseLeave="OnCommentMouseLeave"/>
                 </StackPanel>
             </DockPanel>
         </Border>
@@ -969,7 +984,7 @@
                         </Grid>
                     </Border>
 
-                    <!-- 导入 / 导出配置：已移至底栏「选项」菜单键之后（作用于当前方案档位）。
+                    <!-- 导入 / 导出配置：已移至「选项」菜单（作用于整份配置）。
                          原位置改放「从左侧键盘管理方案」按钮：DockPanel 内声明在分区标签 Border 之后、
                          停靠 Bottom → 位于分区标签下方、面板最底部。
                          空闲 = 进入方案管理（左键添加 / 右键取消，持续到退出）；

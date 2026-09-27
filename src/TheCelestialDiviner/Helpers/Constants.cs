@@ -63,11 +63,36 @@ public static class Constants
     /// 成功拉取且内容有变化才覆盖本地缓存；没更新 / 失败保持旧内容。</summary>
     public const string NoticeRemoteUrl = "https://gitee.com/sofqi/The-Celestial-Diviner/raw/main/Notice.md";
 
+    /// <summary>莫问高手注释区公告远端地址（Notice2.md，同 Notice.md 的同步策略）。</summary>
+    public const string Notice2RemoteUrl = "https://gitee.com/sofqi/The-Celestial-Diviner/raw/main/Notice2.md";
+
     /// <summary>公告内容长度上限（字符）：超长视为异常内容丢弃，防止远端文件误传撑爆注释区。</summary>
     public const int NoticeMaxLength = 2000;
 
     /// <summary>全局开关键默认虚拟键码（F9 = 0x78）。</summary>
     public const int DefaultMasterKeyVk = 0x78;
+
+    /// <summary>方案档位自定义名称长度上限（字符）：档位标签四等分宽度与切换提示键帽宽度所限，过长会挤压排版。</summary>
+    public const int MaxProfileNameLength = 12;
+
+    /// <summary>方案档位自定义应用名长度上限（字符）：窗口标题 / 托盘提示宽度所限。</summary>
+    public const int MaxProfileAppNameLength = 16;
+
+    /// <summary>色值是否合法（#RRGGBB，大小写均可）。</summary>
+    public static bool IsHexColor(string? hex) => NormalizeHexColor(hex).Length == 7;
+
+    /// <summary>
+    /// 色值归一化：合法 #RRGGBB → 返回大写形式；空 / 非法 → 空串
+    /// （空串在方案定制语义里 = 用主题预设色）。
+    /// </summary>
+    public static string NormalizeHexColor(string? hex)
+    {
+        var text = hex?.Trim();
+        if (text is null || text.Length != 7 || text[0] != '#') return "";
+        for (var i = 1; i < text.Length; i++)
+            if (!Uri.IsHexDigit(text[i])) return "";
+        return text.ToUpperInvariant();
+    }
 
     /// <summary>全局开关提示语音默认音量（0~100）。</summary>
     public const double DefaultSoundVolume = 70;
@@ -93,4 +118,17 @@ public static class Constants
 
     /// <summary>双宏图块底色（主题紫深一档；调主色时按需同步）。</summary>
     public const string AccentDualHex = "#a364ea";
+
+    // ---------- 主题预设「莫问高手」调色板（与上三色同槽位：开关 / 按压 / 双宏） ----------
+    // 引用点与衍天配色完全一致（SectThemes 按门派把槽位映射到同一批资源键），
+    // 因此只需在此登记色值，界面各处（图块 / 模式标签 / 档位 / 横幅 / 勾选框 / 热键录入提示）自动跟随。
+
+    /// <summary>莫问高手：开关模式青绿（占衍天主题紫的槽位）。</summary>
+    public const string MoWenAccentPrimaryHex = "#31CBB6";
+
+    /// <summary>莫问高手：按压模式翠绿（占衍天主题金的槽位）。</summary>
+    public const string MoWenAccentGoldHex = "#66BB4D";
+
+    /// <summary>莫问高手：双宏配色青碧（占衍天双宏底色的槽位；与开关模式青绿互为互换后的取值）。</summary>
+    public const string MoWenAccentDualHex = "#2BE9F6";
 }
