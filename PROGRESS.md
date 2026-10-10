@@ -1,6 +1,6 @@
 # 衍天高手（The Celestial Diviner）开发进度交接
 
-更新：2026-10-11 — **发版 v1.7.7（性能修复：游戏高负载下键帽卡顿 / F9 延迟 / 启停拖累）**
+更新：2026-10-11 — **发版 v1.7.7（性能修复：游戏高负载下键帽卡顿 / F9 延迟 / 启停拖累）；双端 Release 已发布**
 
 ## 本次变更（发版 v1.7.7）
 - 📋 用户需求：实测确认性能修复生效（键帽响应及时、探针零告警）→ 按老规矩总结更新发版 1.7.7，
@@ -25,7 +25,16 @@
   exe 1,015,808 B；zip 1,497,880 B）
 - ✅ 发布说明：`dist/v1.7.7-release-notes.md`（使用范围声明 + 修复·性能 + 升级提示 + 使用说明，
   双端 Release 正文同一份）
-- 🔁 双端 Release 发布状态见下一条记录（发布后补记 id 与三端核对）
+- ✅ **Gitee 已发布**：git push（main + 标签）成功；Release 已创建
+  （id 1196204，target 4020ef3；附件 `TheCelestialDiviner-1.7.7-win64.zip` / 1,497,880 B）
+- ✅ **GitHub 已发布（走 REST API）**：`dist/gh-api-release.ps1` 逐字节复刻提交
+  （2cdaa8f / 4020ef3，tree / commit 均 MATCH）+ Release id 409165468 + 同尺寸附件
+  - ⚠️ 脚本缺陷与修复：标签目标曾取 `-Since` 后第一个复刻提交（commits[0]）——本次发布提交是
+    第二个，GitHub 标签一度错误指向 2cdaa8f；已按本地标签对象逐字节重建（1a0fe50 MATCH，
+    tagger 日期一致）并强制改引用；**脚本已修**（tag 目标改取 `rev-parse $Tag^{commit}`）
+- ✅ 三端一致核对：本地 HEAD = GitHub main = Gitee main = `4020ef3`；标签 `v1.7.7` 两端均指向发布提交；
+  两端附件尺寸一致（1,497,880 B）且 SHA256 与本地一致（93E3993B…BD869）
+- ✅ 公告远端：Gitee raw/main 的 Notice.md / Notice2.md 首行均已是 1.7.7 更新提示
 
 ## 上次变更（发版 v1.7.6）
 - 📋 用户需求：总结本轮更新 → 补进 CHANGELOG 与 README；在 GitHub 与 Gitee 发布 **1.7.6** Release；
