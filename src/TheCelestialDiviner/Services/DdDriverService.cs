@@ -395,6 +395,7 @@ public static class DdDriverService
     }
 
     private static int _autoFetchRunning;   // Interlocked 单飞标志（0 空闲 / 1 进行中）
+    private static int _lastDdLatencyLogTick;   // DD_key 耗时告警限频（Environment.TickCount）
 
     /// <summary>驱动自动获取是否正在进行（供 UI / VM 判断，无需精确）。</summary>
     public static bool IsAutoFetchRunning => Volatile.Read(ref _autoFetchRunning) == 1;
@@ -592,7 +593,16 @@ public static class DdDriverService
             // 预登记待决回环名额（必须在注入调用之前：回环事件可能在
             // DD_key 返回前就到达钩子）；注入失败则撤销（见 EchoGuard）。
             var stamp = EchoGuard.NoteInjection(vk, down);
+            // 诊断埋点：DD_key 内核注入耗时限频告警（>50ms = 驱动 / 系统侧拥堵，
+            // 所有任务线程在 Gate 上串行等待，连发节奏与启停响应都会被拖慢）。
+            var ddStart = Stopwatch.GetTimestamp();
             var ret = SafeCall(_ddKey, MakeKeyArgs(code, down), out var seh);
+            var ddMs = (Stopwatch.GetTimestamp() - ddStart) * 1000.0 / Stopwatch.Frequency;
+            if (ddMs > 50 && unchecked(Environment.TickCount - _lastDdLatencyLogTick) > 2000)
+            {
+                _lastDdLatencyLogTick = Environment.TickCount;
+                Logger.Warn($"DD_key 注入耗时 {ddMs:0}ms（vk=0x{vk:X2}, down={down}）。");
+            }
             if (!seh && ret == 0) return true;
             EchoGuard.CancelNote(vk, down, stamp);
             return false;

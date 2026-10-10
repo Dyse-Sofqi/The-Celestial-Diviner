@@ -64,8 +64,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private InputSource? _dualFirstPick;               // 双宏两步录入：已选的第 1 键
     private string _pickingPromptText = "请选择按键";  // 选择态提示条文字
     private int _lastPickingExitTick;                  // 最近一次退出选择态的时刻（Environment.TickCount，退出冷却防陈旧点击重进）
-    private bool _masterKeyHeld;                       // 总开关键按下沿标记（按住自动重复只响应第一次，抬起复位）
-    private bool _cycleKeyHeld;                        // 切换方案热键按下沿标记（同上）
+    private volatile bool _masterKeyHeld;              // 总开关键按下沿标记（仅钩子线程读写；按住自动重复只响应第一次，抬起复位）
+    private volatile bool _cycleKeyHeld;               // 切换方案热键按下沿标记（同上）
+    private bool _pickingActiveMirror;                 // 选择态的钩子线程镜像（Volatile.Read/Write 访问；PickingActive 变更时同步，调度器分流判定用）
+    private int _lastMasterUiLagLogTick;               // 总开关 UI 呈现延迟告警限频（Environment.TickCount）
 
     /// <summary>全局总开关提示语音服务（开启 = “启动”，关闭 = “关闭”）。</summary>
     private readonly SoundCueService _soundCue = new();
@@ -520,6 +522,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         get => _pickingActive;
         private set
         {
+            // 镜像先行写入：选择态进出的瞬间钩子线程以镜像分流，早到的 UI 侧处理
+            // 由 HandleHookDownPicking 的权威态判定兜底。
+            Volatile.Write(ref _pickingActiveMirror, value);
             if (Set(ref _pickingActive, value)) OnPropertyChanged(nameof(PickingPromptVisible));
         }
     }
@@ -616,10 +621,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             RequestDdDriverFetch();
     }
 
-    // ---------- 钩子事件接入（由 View 在安装成功后绑定） ----------
+    // ---------- 钩子事件接入（由 View 绑定；钩子线程直通调用，不经 UI 封送） ----------
     /// <summary>
-    /// 输入源按下（钩子线程调用，已封送 UI 线程）：
-    /// 优先总开关键 → 切换方案热键 → 键位录入选择态 → 调度器。
+    /// 输入源按下（钩子线程调用）：调度器路径零封送直通——连发启停不再排在 UI 线程
+    /// 积压工作之后（高负载下松键即停）；仅 UI 动作（总开关 / 档位切换 / 键位录入）
+    /// 封送回 UI 线程。优先总开关键 → 切换方案热键 → 键位录入选择态 → 调度器。
     /// </summary>
     public void HandleHookDown(InputSource source)
     {
@@ -627,12 +633,13 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         {
             // 按下沿判定：按住时 OS 会持续投递 KEYDOWN（自动重复，最快约 31ms 一次），
             // 若每次都翻转，一次长按会把总开关来回拨几十次、最终状态随机，体感“按了没反应”。
-            // 只响应第一次按下，抬起（HandleHookUp）复位。
+            // 只响应第一次按下，抬起（HandleHookUp）复位。沿标记仅钩子线程读写。
             if (_masterKeyHeld) return;
             _masterKeyHeld = true;
-            // 键位录入选择态 / 录制期间不响应（避免把总开关键录为方案源或热键时误切总开关）。
-            if (!KeyRecorder.IsAnyRecording && !_pickingActive)
-                ToggleGlobalEnabled();   // 本方法已在 UI 线程（View 已封送），无需再绕一次 Dispatcher
+            // 录制 / 选择态不响应（避免把总开关键录为方案源或热键时误切总开关）。
+            // volatile 直读判定，钩子线程即可完成，不等 UI。
+            if (KeyRecorder.IsAnyRecording || Volatile.Read(ref _pickingActiveMirror)) return;
+            ToggleGlobalEnabledFromHook();
             return;
         }
 
@@ -643,34 +650,47 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             _cycleKeyHeld = true;
             // 切换方案热键：按下按顺序切换非空方案档位。录入选择态 / 录制期间不响应
             // （该键已被占用，不能录为方案源；也避免录入切换方案热键时误触切换）。
-            if (!KeyRecorder.IsAnyRecording && !_pickingActive)
-                CycleToNextProfile();
+            RunOnUi(() =>
+            {
+                if (!KeyRecorder.IsAnyRecording && !PickingActive)
+                    CycleToNextProfile();
+            });
             return;
         }
 
-        if (_pickingActive)
+        if (Volatile.Read(ref _pickingActiveMirror))
         {
-            // 管理模式：键盘按键直接录入（Esc 退出；双宏成对录入中先放弃第 1 键，偶数态才退出）；
-            // 鼠标按下交 View 命中测试（落在键鼠图块上 → 右键取消 / 其余键录入，否则请求退出）。
-            if (source.Kind == InputKind.Keyboard)
-            {
-                if (source.VirtualKey == 0x1B) TryExitPicking();
-                else CompletePick(source);
-                return;
-            }
-            if (source.Kind == InputKind.Mouse &&
-                source.Mouse is not (MouseInput.WheelUp or MouseInput.WheelDown))
-            {
-                PickingMouseReceived?.Invoke(source);
-                return;
-            }
-            return; // 滚轮滚动不打断选择态
+            // 管理模式逻辑整体依赖 UI 状态（提示条 / 命中测试 / 录入），封送 UI 线程处理；
+            // 选择态是非常规战斗路径，多一跳封送延迟无关紧要。
+            RunOnUi(() => HandleHookDownPicking(source));
+            return;
         }
 
-        _scheduler.HandleSourceDown(source);
+        _scheduler.HandleSourceDown(source);   // 调度器自带 _gate 锁，明确支持钩子线程调用
     }
 
-    /// <summary>输入源释放（UI 线程调用，View 已封送）：复位热键按下沿标记并转交调度器。</summary>
+    /// <summary>选择态按下处理（UI 线程）：键盘按键直接录入（Esc 退出；双宏成对录入中
+    /// 先放弃第 1 键，偶数态才退出）；鼠标按下交 View 命中测试（落在键鼠图块上 →
+    /// 右键取消 / 其余键录入，否则请求退出）；滚轮滚动不打断选择态。</summary>
+    private void HandleHookDownPicking(InputSource source)
+    {
+        // 镜像早到兜底（进/出选择态瞬间穿越的钩子事件）：以 UI 线程权威态为准。
+        if (!PickingActive) return;
+        if (source.Kind == InputKind.Keyboard)
+        {
+            if (source.VirtualKey == 0x1B) TryExitPicking();
+            else CompletePick(source);
+            return;
+        }
+        if (source.Kind == InputKind.Mouse &&
+            source.Mouse is not (MouseInput.WheelUp or MouseInput.WheelDown))
+        {
+            PickingMouseReceived?.Invoke(source);
+        }
+    }
+
+    /// <summary>输入源释放（钩子线程直通调用）：复位热键按下沿标记并转交调度器。
+    /// Hold 连发的松键即停走此路径，不再受 UI 线程繁忙影响。</summary>
     public void HandleHookUp(InputSource source)
     {
         // 热键按下沿标记随抬起复位（低级钩子全局投递，抬起事件不会丢）。
@@ -679,19 +699,52 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _scheduler.HandleSourceUp(source);
     }
 
+    /// <summary>钩子线程 → UI 线程封送（应用退出中 Application.Current 为 null 时静默丢弃）。</summary>
+    private static void RunOnUi(Action action) =>
+        Application.Current?.Dispatcher.BeginInvoke(action);
+
     // ---------- 全局总开关 ----------
     /// <summary>
     /// 切换总开关（横幅、控件透明度、调度器、提示语音、配置持久化）。
+    /// UI 入口（按钮 / 托盘菜单；UI 线程调用）。
     /// 开启播“启动”、关闭播“关闭”；关闭时调度器立即停止所有连发任务。
     /// </summary>
-    public void ToggleGlobalEnabled()
+    public void ToggleGlobalEnabled() => ApplyGlobalEnabled(!GloballyEnabled);
+
+    /// <summary>总开关热键入口（钩子线程调用）：调度器立即生效，不等 UI——游戏窗口最大化
+    /// 时 UI 线程可能被悬浮窗 Hide/Show 的 DWM 同步长时间卡住，旧实现整条启停链都排在
+    /// 积压之后（体感“按了没反应”，连按数次还会在 UI 恢复后爆发回放、停在错误状态）。
+    /// 以调度器当前态为翻转基准：连按次序与最终态始终和实际按键一一对应。</summary>
+    private void ToggleGlobalEnabledFromHook() => ApplyGlobalEnabled(!_scheduler.MasterEnabled);
+
+    /// <summary>应用总开关目标态：调度器与配置字段就地生效（任意线程安全）；
+    /// UI 呈现（横幅 / 控件 / 语音 / 落盘 / 日志）封送 UI 线程（已在 UI 线程则直接执行）。</summary>
+    private void ApplyGlobalEnabled(bool enabled)
     {
-        GloballyEnabled = !GloballyEnabled;
-        _config.GlobalSwitch.Enabled = GloballyEnabled;
-        _scheduler.SetMasterEnabled(GloballyEnabled);
-        if (GloballyEnabled) _soundCue.PlayStart(DivinerVoiceEnabled); else _soundCue.PlayStop();
-        SaveConfigDeferred();   // 防抖落盘：热键长按 / 快速连按时不反复同步写文件
-        AddLog(GloballyEnabled ? "总开关已开启（启动）。" : "总开关已关闭，所有连发已停止。");
+        _scheduler.SetMasterEnabled(enabled);
+        _config.GlobalSwitch.Enabled = enabled;
+        var requestedTick = Environment.TickCount;   // UI 积压探针基准（ApplyUi 实际执行时刻之差）
+
+        void ApplyUi()
+        {
+            // 诊断埋点：请求 → UI 实际执行的延迟（>300ms = UI 线程积压，
+            // 语音播报与横幅随之迟滞——热键状态本身已即时生效）。限频记录。
+            var lag = unchecked(Environment.TickCount - requestedTick);
+            if (lag > 300 && unchecked(Environment.TickCount - _lastMasterUiLagLogTick) > 2000)
+            {
+                _lastMasterUiLagLogTick = Environment.TickCount;
+                Logger.Warn($"总开关 UI 呈现延迟 {lag}ms（UI 线程积压）。");
+            }
+
+            GloballyEnabled = enabled;   // 横幅 / 控件 / 提醒键帽联动（含 _visualizer.SetMasterSwitch）
+            if (enabled) _soundCue.PlayStart(DivinerVoiceEnabled); else _soundCue.PlayStop();
+            SaveConfigDeferred();   // 防抖落盘：热键长按 / 快速连按时不反复同步写文件
+            AddLog(enabled ? "总开关已开启（启动）。" : "总开关已关闭，所有连发已停止。");
+        }
+
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess()) ApplyUi();
+        else dispatcher.BeginInvoke(ApplyUi);
     }
 
     /// <summary>设置全局开关键（null 表示清除）。冲突时返回 false 且不修改。</summary>

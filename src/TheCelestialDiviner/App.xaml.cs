@@ -38,6 +38,14 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // 软件渲染（进程级）：游戏前台最大化时 iGPU 的 3D 队列被游戏打满（实测引擎占用
+        // 87%、DWM 仅 3%），本程序任何窗口的 GPU 提交都排在游戏队列末尾——实测每帧等待
+        // 0.5~3.9s，与窗口、表面积、提交频率均无关（键帽悬浮窗卡顿 / 启动渲染卡 5.5s 的根因）。
+        // 本程序窗口都很小且简单（键帽 = 圆角矩形 + 文本，主窗口低频交互），CPU 光栅化代价
+        // 可忽略；键帽悬浮窗由此经内存位图 + UpdateLayeredWindow 上传（copy 引擎空闲），
+        // 呈现完全脱离被游戏占满的 GPU 队列。
+        System.Windows.Media.RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
+
             // 服务组装（手动 DI，规模小无需容器）。
         _configService = new ConfigService();
         _hookService = new InputHookService();

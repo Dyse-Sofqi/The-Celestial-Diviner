@@ -26,6 +26,11 @@ public sealed class RunningTask
     /// <summary>工作线程。</summary>
     public Thread? Thread;
 
+    /// <summary>状态唤醒信号：激活 / 停止 / 停发 / Hold 全释放广播时置位。
+    /// 任务循环用它做事件等待（替代旧版 2ms 忙轮询——十几个任务待机即产生
+    /// 约每秒数千次线程唤醒，与游戏抢调度）。</summary>
+    public readonly AutoResetEvent Wake = new(false);
+
     private int _inFlight;   // 在途点击计数（含按压 Sleep，退出 / 重建前须归零防止按键卡死）
 
     /// <summary>是否有正在执行的点击（按下 → 按住 → 抬起全过程）。</summary>
@@ -78,8 +83,8 @@ public sealed class TaskSchedulerService
     {
         lock (_gate)
         {
+            foreach (var t in _tasks) { t.StopRequested = true; t.Wake.Set(); }
             StopAllCore();
-            foreach (var t in _tasks) t.StopRequested = true;
             _tasks.Clear();
             _sourceMap.Clear();
             _downSources.Clear();
@@ -222,8 +227,8 @@ public sealed class TaskSchedulerService
                 }
             }
 
-            if (!isWheel)
-                OnLog($"输入源 [{InputNameMapper.GetSourceName(source)}] 按下。");
+            // 逐键“按下/释放”日志已移除：战斗节奏下约 20 行/秒纯噪音（写盘在 UI/钩子
+            // 线程同步执行、UI 日志面板随之刷屏）；任务启停状态变化已在 Activate / Deactivate 落日志。
             NotifyFiringChangedLocked();
         }
     }
@@ -243,7 +248,6 @@ public sealed class TaskSchedulerService
                 if (task.Configs[0].Mode == TriggerMode.Hold) Deactivate(task);
             }
 
-            OnLog($"输入源 [{InputNameMapper.GetSourceName(source)}] 释放。");
             NotifyFiringChangedLocked();
         }
     }
@@ -288,6 +292,7 @@ public sealed class TaskSchedulerService
         {
             // 开关模式：按一次启动 / 再按一次停止。
             task.Active = !task.Active;
+            task.Wake.Set();   // 翻转即时唤醒任务循环（启动开始连发 / 停止退出间隔等待）
             if (task.Active)
             {
                 OnLog($"连发 [{name}] 已启动（Toggle）。");
@@ -304,6 +309,7 @@ public sealed class TaskSchedulerService
             // 按压模式：置位激活，全局 Hold 计数 +1（暂停所有 Toggle）。
             task.Active = true;
             Interlocked.Increment(ref _activeHoldCount);
+            task.Wake.Set();
         }
     }
 
@@ -324,8 +330,15 @@ public sealed class TaskSchedulerService
     {
         if (!task.Active) return;
         task.Active = false;
-        if (task.Configs[0].Mode == TriggerMode.Hold)
-            Interlocked.Decrement(ref _activeHoldCount);
+        task.Wake.Set();   // 唤醒任务循环退出间隔等待 / 待机阻塞
+        if (task.Configs[0].Mode == TriggerMode.Hold &&
+            Interlocked.Decrement(ref _activeHoldCount) == 0)
+        {
+            // 最后一个 Hold 释放：Hold 计数归零解除对所有 Toggle 的暂停。
+            // 旧版靠任务循环 2ms 轮询感知；事件化后广播唤醒全部任务立即重新评估。
+            foreach (var t in _tasks)
+                t.Wake.Set();
+        }
     }
 
     /// <summary>聚合连发激活态并在翻转时触发事件（须在锁内调用）：任一任务 Active 即视为连发中
@@ -338,7 +351,9 @@ public sealed class TaskSchedulerService
         FiringChanged?.Invoke(any);
     }
 
-    /// <summary>任务主循环：Stopwatch + 分块 Sleep（配合 timeBeginPeriod(1)）控制间隔；异常自动恢复。
+    /// <summary>任务主循环：Stopwatch 控制间隔，状态等待全部事件化（Wake 信号）。
+    /// 待机不再轮询（旧版每任务 2ms 空转，十几个任务待机即每秒数千次唤醒）；
+    /// 间隔等待同样由信号打断（停止 / 停发 / Hold 暂停广播），超时兜底防信号丢失。
     /// 每轮按压时长与间隔各自独立抖动 ±20%（消除恒定周期的机器指纹；
     /// 间隔 > <see cref="Constants.TimingJitterCutoffMs"/> 的方案进入精确模式，取消抖动）。
     /// 多目标任务（双宏开关）按索引轮流触发，未触发时相位归零（重新激活从第 1 键开始）。</summary>
@@ -360,8 +375,10 @@ public sealed class TaskSchedulerService
                 if (!firing)
                 {
                     phase = 0; // 停止期间相位归零：重新激活时从第 1 个目标键开始。
-                    Thread.Sleep(2);
                     sw.Reset();
+                    // 事件等待：Activate / Hold 全释放广播 / 停止信号唤醒；
+                    // 周期性超时兜底（信号丢失时任务不至永久沉睡）。
+                    task.Wake.WaitOne(1000);
                     continue;
                 }
 
@@ -383,15 +400,15 @@ public sealed class TaskSchedulerService
                 phase = (phase + 1) % task.Configs.Count;
                 sw.Restart();
 
-                // 间隔等待（弹起 → 下次按下；精确模式不抖动）：按剩余时长分块休眠保持响应停止信号——
-                // 间隔上限 90000ms（一分半），长间隔不再逐毫秒空转（1ms 级精度仅短间隔需要）。
+                // 间隔等待（弹起 → 下次按下；精确模式不抖动）：事件等待带超时——
+                // 被停止 / 停发 / Hold 暂停广播时立即返回重新评估，否则睡满剩余间隔。
                 var gapMs = JitterMs(cfg.IntervalMs, Constants.MinIntervalMs, Constants.MaxIntervalMs, precise);
                 while (!task.StopRequested && task.Active &&
-                       (!isToggle || Interlocked.CompareExchange(ref _activeHoldCount, 0, 0) == 0) &&
-                       sw.ElapsedMilliseconds < gapMs)
+                       (!isToggle || Interlocked.CompareExchange(ref _activeHoldCount, 0, 0) == 0))
                 {
                     var remaining = gapMs - sw.ElapsedMilliseconds;
-                    Thread.Sleep(remaining > 10 ? 10 : 1);
+                    if (remaining <= 0) break;
+                    if (task.Wake.WaitOne((int)remaining)) break;
                 }
             }
             catch (Exception ex)

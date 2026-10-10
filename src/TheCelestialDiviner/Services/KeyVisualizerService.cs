@@ -20,7 +20,8 @@ public enum VisualizerMode
 
 /// <summary>
 /// 键位可视化服务：持有可可视化键位注册表（含每键开关），
-/// 订阅全局钩子的按下 / 释放事件，把命中注册表的按键封送到 UI 线程驱动悬浮层。
+/// 订阅全局钩子的按下 / 释放事件，把命中注册表的按键封送到悬浮窗线程驱动悬浮层
+/// （悬浮窗运行在独立 STA 线程，呈现阻塞不波及主 UI 线程，见 AttachOverlay）。
 /// 注册表由主视图模型随方案变更同步（默认全量注册 + 默认开启）。
 /// </summary>
 public sealed class KeyVisualizerService
@@ -36,6 +37,15 @@ public sealed class KeyVisualizerService
     private readonly Dictionary<InputSource, VisualKeyState> _registry = new();
     private bool _globalEnabled = true;   // 可视化总闸门（不影响各键开关状态的记忆）
     private VisualizerMode _mode = VisualizerMode.All;   // 可视化方案（默认全部）
+
+    // ---------- UI 封送合并（快照 / 脉冲按 UI 帧合并，见 DispatchSnapshot / OnTargetFired） ----------
+    private readonly object _dispatchGate = new();     // 封送合并状态锁（钩子/任务线程 ↔ UI 线程）
+    private List<string>? _pendingSnapshot;            // 待渲染的最新快照（后到覆盖先到）
+    private Dictionary<string, int> _pendingBumps = new();   // 合并期内各键连击增量（保计数）
+    private bool _snapshotQueued;                      // 快照渲染已排队（排队期间只更新待渲染数据）
+    private Dictionary<string, (int HoldMs, int Count, int EnqueueTick)> _pendingPulses = new();
+    private bool _pulseQueued;                         // 脉冲渲染已排队
+    private int _lastUiLagLogTick;                     // UI 积压告警限频（Environment.TickCount）
 
     /// <summary>
     /// 当前按住中的键位（按下顺序；真源）。释放时移除，快照驱动悬浮层逐键独立更新，
@@ -77,8 +87,8 @@ public sealed class KeyVisualizerService
         source.VirtualKey is 0xA0 or 0xA1 or 0xA2 or 0xA3 or 0xA4 or 0xA5 or 0x5B or 0x5C;
 
     private readonly InputHookService _hooks;
-    private KeycapOverlayWindow? _overlay;
-    private Dispatcher? _dispatcher;
+    private volatile KeycapOverlayWindow? _overlay;
+    private volatile Dispatcher? _dispatcher;   // 悬浮窗线程的调度器（悬浮窗运行在独立 STA 线程，见 AttachOverlay）
 
     /// <summary>悬浮窗创建前的暂存位置（AttachOverlay 时应用；修复启动时序：VM 构造早于窗口创建）。</summary>
     private (double Left, double Top)? _pendingPosition;
@@ -93,50 +103,101 @@ public sealed class KeyVisualizerService
         hooks.SourceUp += OnSourceUp;
     }
 
-    /// <summary>初始化悬浮层（UI 线程调用；重复调用安全）。创建后立即应用暂存位置。</summary>
+    /// <summary>
+    /// 初始化悬浮层（UI 线程调用；重复调用安全）。创建后立即应用暂存位置。
+    /// 悬浮窗运行在独立 STA 线程（独立 Dispatcher + 消息泵）：游戏前台最大化时，
+    /// 悬浮窗的 Show/Hide/SetWindowPos 与逐帧动画渲染要和 DWM 同步，可能阻塞数秒——
+    /// 放在主 UI 线程会把 F9 语音/横幅、主窗口交互整条拖死（体感"聚焦游戏就卡死，
+    /// 点任务栏/退出最大化立刻跟上"）。独立线程后这些阻塞只吃掉悬浮窗自己的呈现，
+    /// 主线程、钩子线程、连发线程全部不受影响；悬浮窗视觉在最坏情况下短暂冻结属可接受代价。
+    /// </summary>
     public void AttachOverlay()
     {
         if (_overlay is not null) return;
-        _dispatcher = Application.Current?.Dispatcher;
-        _overlay = new KeycapOverlayWindow();
-        // 启动即预创建 HWND（不显示）：置顶 / 穿透样式在本程序仍是前台时建立，
-        // 避免第一次按键时才在游戏前台创建分层窗口（首键卡顿 + 置顶序错位）。
-        _overlay.PreloadHandle();
-        // 启动时序：VM 构造时窗口尚未存在，SetPosition 只能暂存；窗口创建后在此应用。
-        if (_pendingPosition is { } pos)
-            _overlay.SetSavedPosition(pos.Left, pos.Top);
-        if (_pendingOpacity is { } opacity)
-            _overlay.SetOpacity(opacity);
+        var ready = new ManualResetEventSlim(false);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var overlay = new KeycapOverlayWindow();
+                overlay.Dispatcher.UnhandledException += (_, e) =>
+                {
+                    // 悬浮层纯展示：吞掉未处理异常保线程存活，不让键帽故障拖垮应用。
+                    Logger.Error("键帽悬浮窗线程未处理异常。", e.Exception);
+                    e.Handled = true;
+                };
+                _overlay = overlay;
+                _dispatcher = overlay.Dispatcher;   // 后续所有悬浮层操作都封送到此线程
+                // 启动时序：VM 构造时窗口尚未存在，SetPosition/SetOpacity 只能暂存；创建后在此应用。
+                if (_pendingPosition is { } pos)
+                    overlay.SetSavedPosition(pos.Left, pos.Top);
+                if (_pendingOpacity is { } opacity)
+                    overlay.SetOpacity(opacity);
+                // 启动即预创建 HWND（不显示）：置顶 / 穿透样式在本程序仍是前台时建立，
+                // 避免第一次按键时才在游戏前台创建分层窗口（首键卡顿 + 置顶序错位）。
+                overlay.PreloadHandle();
+                // 预显示（一次 Show，此后窗口常驻空透明）：运行期零 Show/Hide/SetWindowPos，
+                // 彻底消除与前台最大化游戏的 DWM 同步阻塞（实测 Show 6s / Hide 9s，键帽画面停滞根因）。
+                overlay.Preshow();
+                // 渲染时钟激励器：FSO 游戏前台时 DWM 合成事件驱动、时钟停摆，键帽更新
+                // 排队等合成（实测滞后 0.5~3s 且与表面积/频率无关）——1×1 心跳窗口持续激励合成时钟。
+                overlay.CreatePacer();
+                RefreshReminder();
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("键帽悬浮窗线程初始化失败。", ex);
+            }
+            finally
+            {
+                ready.Set();
+            }
+            Dispatcher.Run();   // 悬浮窗消息泵：IsBackground 线程随进程退出
+        })
+        { Name = "KeycapOverlayThread", IsBackground = true };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        ready.Wait(3000);
 
         // 幽灵按住项看门狗：EchoGuard 吞掉物理释放时的兜底回收（见 PurgeGhostHeld）。
+        // 主 UI 线程计时，仅计算与封送，不直接触碰悬浮窗（跨线程）。
         _ghostTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
         _ghostTimer.Tick += (_, _) => PurgeGhostHeld();
         _ghostTimer.Start();
-
-        // 悬浮层创建后补应用此前积压的提醒状态（VM 构造期 SetReminderEnabled 无处落地）。
-        RefreshReminder();
     }
 
-    /// <summary>进入位置调整模式（虚拟键帽拖拽，确认回调 Left/Top）。</summary>
-    public void BeginAdjust(Action<double, double> onConfirm) =>
-        _overlay?.BeginAdjust(onConfirm);
+    /// <summary>进入位置调整模式（虚拟键帽拖拽，确认回调 Left/Top）。
+    /// 封送到悬浮窗线程执行；确认回调再封送回主 UI 线程（回调里写配置 / UI 日志集合，
+    /// ObservableCollection 与 WPF 绑定有 UI 线程亲和）。</summary>
+    public void BeginAdjust(Action<double, double> onConfirm)
+    {
+        var uiDispatcher = Application.Current?.Dispatcher;
+        _dispatcher?.BeginInvoke(() =>
+        {
+            _overlay?.BeginAdjust((l, t) =>
+            {
+                if (uiDispatcher is { } d && !d.CheckAccess()) d.BeginInvoke(() => onConfirm(l, t));
+                else onConfirm(l, t);
+            });
+        });
+    }
 
-    /// <summary>设置悬浮窗位置（null = 忽略）。窗口未创建时暂存，创建后自动应用。</summary>
+    /// <summary>设置悬浮窗位置（null = 忽略）。窗口未创建时暂存，创建后封送到悬浮窗线程应用。</summary>
     public void SetPosition(double? left, double? top)
     {
         if (left is not { } l || top is not { } t) return;
         if (_overlay is { } overlay)
-            overlay.SetSavedPosition(l, t);
+            _dispatcher?.BeginInvoke(() => overlay.SetSavedPosition(l, t));
         else
             _pendingPosition = (l, t);
     }
 
-    /// <summary>设置键帽透明度（0~100 百分比；实时生效）。窗口未创建时暂存，创建后自动应用。</summary>
+    /// <summary>设置键帽透明度（0~100 百分比；实时生效）。窗口未创建时暂存，创建后封送应用。</summary>
     public void SetOpacity(double percent)
     {
         var v = Compat.Clamp(percent, 0, 100);
         if (_overlay is { } overlay)
-            overlay.SetOpacity(v);
+            _dispatcher?.BeginInvoke(() => overlay.SetOpacity(v));
         else
             _pendingOpacity = v;
     }
@@ -159,7 +220,9 @@ public sealed class KeyVisualizerService
     }
 
     /// <summary>连发目标键脉冲（任务线程触发，封送 UI 线程；不占用物理按住快照）。
-    /// 目标键可视化开关为关时不渲染脉冲键帽（与物理按键路径同语义）。</summary>
+    /// 目标键可视化开关为关时不渲染脉冲键帽（与物理按键路径同语义）。
+    /// 同键脉冲按 UI 帧合并（极限档 45 发/秒不再每发一次调度）：合并期内计数累加，
+    /// 一次 HoldPulse 以 repeat 补齐连击角标，视觉按压一次、计数不丢。</summary>
     private void OnTargetFired(TargetKeyConfig target)
     {
         lock (_gate)
@@ -173,9 +236,39 @@ public sealed class KeyVisualizerService
 
         var label = KeycapTargetName(target);
         var holdMs = target.HoldMs;
-        var overlay = _overlay;
-        var dispatcher = _dispatcher;
-        dispatcher?.BeginInvoke(() => overlay?.HoldPulse(label, holdMs, repeat: 1));
+        if (_dispatcher is null) return;   // 悬浮窗未创建：丢弃（与旧版 BeginInvoke 落空同语义，防排队标志卡死）
+        lock (_dispatchGate)
+        {
+            var prev = _pendingPulses.TryGetValue(label, out var p) ? p.Count : 0;
+            _pendingPulses[label] = (holdMs, prev + 1, Environment.TickCount);
+            if (_pulseQueued) return;
+            _pulseQueued = true;
+        }
+        _dispatcher.BeginInvoke(() =>
+        {
+            Dictionary<string, (int HoldMs, int Count, int EnqueueTick)> pulses;
+            lock (_dispatchGate)
+            {
+                pulses = _pendingPulses;
+                _pendingPulses = new Dictionary<string, (int, int, int)>();
+                _pulseQueued = false;
+            }
+            // 诊断埋点：入队 → UI 线程实际执行的派发延迟（>150ms = 悬浮窗线程积压，
+            // 键帽动画 / 横幅 / 语音呈现都会随之迟滞）。限频记录。
+            var nowTick = Environment.TickCount;
+            var worst = 0;
+            foreach (var kv in pulses)
+            {
+                var lag = unchecked(nowTick - kv.Value.EnqueueTick);
+                if (lag > worst) worst = lag;
+                _overlay?.HoldPulse(kv.Key, kv.Value.HoldMs, kv.Value.Count);
+            }
+            if (worst > 150 && unchecked(nowTick - _lastUiLagLogTick) > 1000)
+            {
+                _lastUiLagLogTick = nowTick;
+                Logger.Warn($"键帽派发延迟 {worst}ms（悬浮窗线程积压）。");
+            }
+        });
     }
 
     /// <summary>目标键配置 → 输入源（可视化注册表查询用；滚轮映射为鼠标滚轮源）。</summary>
@@ -284,14 +377,15 @@ public sealed class KeyVisualizerService
     // ---------- 状态提醒键帽（底栏按钮：总开关开启时常驻应用图标键帽，连发期间隐藏） ----------
     // 提醒键帽的显隐无视键位可视化总开关（_globalEnabled），只由以下状态决定：
     // 按钮开启 + 应用总开关开启 + 无连发任务激活 + 停发恢复倒计时未挂起。
-    // 以下字段仅 UI 线程读写（调度器事件经 Dispatcher 封送），无需加锁。
+    // _masterSwitch/_reminderEnabled 由 VM 侧线程写入（volatile 保证悬浮窗线程可见）；
+    // _firing 与 _reminderShown/_reminderResumeTimer 仅悬浮窗线程（调度器事件经 Dispatcher 封送）读写。
 
     /// <summary>全部连发停止后恢复提醒键帽显示的延时。</summary>
     private static readonly TimeSpan ReminderResumeDelay = TimeSpan.FromSeconds(2.5);
 
-    private bool _masterSwitch;      // 应用总开关（GloballyEnabled；随 VM 属性同步）
-    private bool _reminderEnabled;   // 底栏“状态提醒”按钮开关
-    private bool _firing;            // 连发任务激活态（FiringChanged 镜像）
+    private volatile bool _masterSwitch;      // 应用总开关（GloballyEnabled；随 VM 属性同步）
+    private volatile bool _reminderEnabled;   // 底栏“状态提醒”按钮开关
+    private volatile bool _firing;            // 连发任务激活态（FiringChanged 镜像；PurgeGhostHeld 主线程读取）
     private bool _reminderShown;     // 提醒键帽当前已应用到悬浮层的期望态（悬浮层未创建前不推进）
     private DispatcherTimer? _reminderResumeTimer;   // 停发后恢复倒计时（期间再次连发则取消）
 
@@ -420,15 +514,37 @@ public sealed class KeyVisualizerService
         DispatchSnapshot(bumpLabel: null);
     }
 
-    /// <summary>把当前快照封送 UI 线程全量协调渲染（bumpLabel 指定本次按下递增连击的键帽）。</summary>
+    /// <summary>把当前快照封送 UI 线程全量协调渲染（bumpLabel 指定本次按下递增连击的键帽）。
+    /// 快照按 UI 帧合并：按键事件风暴（物理自动重复约 30 次/秒 + 多任务脉冲）不再逐事件
+    /// 排队渲染，UI 线程每次只渲染最新快照；合并期内的连击 bump 按键累加，角标计数不丢。</summary>
     private void DispatchSnapshot(string? bumpLabel)
     {
         List<string> snapshot;
         lock (_gate)
             snapshot = _globalEnabled ? BuildSnapshotLocked() : new List<string>();
-        var overlay = _overlay;
-        var dispatcher = _dispatcher;
-        dispatcher?.BeginInvoke(() => overlay?.UpdateKeys(snapshot, bumpLabel));
+        if (_dispatcher is null) return;   // 悬浮窗未创建：丢弃（与旧版 BeginInvoke 落空同语义，防排队标志卡死）
+        lock (_dispatchGate)
+        {
+            _pendingSnapshot = snapshot;
+            if (bumpLabel is not null)
+                _pendingBumps[bumpLabel] = (_pendingBumps.TryGetValue(bumpLabel, out var n) ? n : 0) + 1;
+            if (_snapshotQueued) return;
+            _snapshotQueued = true;
+        }
+        _dispatcher.BeginInvoke(() =>
+        {
+            List<string> snap;
+            Dictionary<string, int> bumps;
+            lock (_dispatchGate)
+            {
+                snap = _pendingSnapshot!;
+                bumps = _pendingBumps;
+                _pendingSnapshot = null;
+                _pendingBumps = new Dictionary<string, int>();
+                _snapshotQueued = false;
+            }
+            _overlay?.UpdateKeys(snap, bumps);
+        });
     }
 
     /// <summary>按住键位快照（调用方持锁）：修饰键在前（仅物理按住事件跟踪），其余按按下顺序；全程应用模式过滤。</summary>

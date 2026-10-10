@@ -27,6 +27,7 @@ public sealed class InputHookService : IDisposable
     private uint _win32ThreadId;
     private readonly ManualResetEventSlim _installResult = new(false);
     private volatile bool _installOk;
+    private static int _lastLatencyLogTick;   // 管线延迟告警限频（Environment.TickCount）
 
     /// <summary>输入源按下（键盘按下 / 鼠标按下 / 滚轮滚动）。</summary>
     public event Action<InputSource>? SourceDown;
@@ -53,10 +54,13 @@ public sealed class InputHookService : IDisposable
         _running = true;
 
         // 专用钩子线程：独立消息泵，避免 UI 线程繁忙导致钩子超时被系统移除。
+        // AboveNormal：钩子回调必须及时取消息（整个系统输入管线要等它返回），
+        // 高负载下 Normal 优先级可能被饿到秒级——钩子线程几乎不耗 CPU，提级无副作用。
         _hookThread = new Thread(HookThreadProc)
         {
             Name = "InputHookThread",
-            IsBackground = true
+            IsBackground = true,
+            Priority = ThreadPriority.AboveNormal
         };
         _hookThread.SetApartmentState(ApartmentState.STA);
         _hookThread.Start();
@@ -120,6 +124,16 @@ public sealed class InputHookService : IDisposable
 
                     if (isDown || isUp)
                     {
+                        // 诊断埋点：事件生成（info.time）→ 本回调送达的管线延迟。
+                        // >50ms 说明系统输入管线被挤压（钩子链 / DPC / RIT 饥饿），
+                        // 与本程序内部处理无关——限频记录供定位。
+                        var latency = unchecked(Environment.TickCount - (int)info.time);
+                        if (latency > 50 && unchecked(Environment.TickCount - _lastLatencyLogTick) > 2000)
+                        {
+                            _lastLatencyLogTick = Environment.TickCount;
+                            Logger.Warn($"键盘输入管线延迟 {latency}ms（vk=0x{info.vkCode:X2}, down={isDown}）。");
+                        }
+
                         // DD 键盘模式：注入回环与物理输入在系统层不可区分
                         // （无 INJECTED 标记、设备归因相同），按注入时间线消除回环，
                         // 防止任务目标键再触发注册源造成 Toggle 被回环关断 / Hold 被回环打断。
@@ -154,13 +168,17 @@ public sealed class InputHookService : IDisposable
     {
         if (nCode >= 0)
         {
+            var msg = wParam.ToInt32();
+            // 移动事件占钩子消息的绝对大头（游戏中数百次/秒），本程序不使用：
+            // 不解析结构体直接放行，减少钩子线程每事件的结构体拷贝开销。
+            if (msg == NativeMethods.WM_MOUSEMOVE)
+                return NativeMethods.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
             try
             {
                 var info = Marshal.PtrToStructure<NativeMethods.MSLLHOOKSTRUCT>(lParam);
 
                 if (info.dwExtraInfo != InjectMagic)
                 {
-                    var msg = wParam.ToInt32();
                     var mouseData = info.mouseData;
 
                     // 鼠标输入源解析（按下 / 释放 / 滚轮）。

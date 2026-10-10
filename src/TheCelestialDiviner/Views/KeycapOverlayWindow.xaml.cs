@@ -27,17 +27,31 @@ public sealed partial class KeycapOverlayWindow : Window
     private const double BorderWidth = 2;                        // border.width（黑边）
     private const double PressOffset = TextSize * 0.25;          // 按下下沉 0.25×size（8，盖住底座）
     // 当前配色（默认 Pansy；由 MainViewModel 随配置加载 / 下拉切换调用 ApplyScheme）。
-    private static KeycapScheme _scheme = KeycapSchemes.Resolve(null);
+    // static 字段会被主线程写、悬浮窗线程读（窗口独立线程运行），volatile 保证可见性。
+    private static volatile KeycapScheme _scheme = KeycapSchemes.Resolve(null);
 
-    // 从当前配色解析的颜色（键帽面 / 底座 / 文字 / 边框）。
-    private static Color FaceColor => ParseHex(_scheme.Face);
-    private static Color BaseColor => ParseHex(_scheme.Base);
-    private static Color TextColor => ParseHex(_scheme.Text);
+    // 从当前配色解析的冻结画刷（按 hex 缓存共享）：键帽构造不再逐个
+    // ColorConverter 解析 + new SolidColorBrush——高频连发下键帽重建是常态，
+    // 冻结画刷跨键帽复用零成本（解析只在配色切换后首次用到时发生一次）。
+    private static SolidColorBrush FaceBrush => CachedBrush(_scheme.Face);
+    private static SolidColorBrush BaseBrush => CachedBrush(_scheme.Base);
+    private static SolidColorBrush TextBrush => CachedBrush(_scheme.Text);
     // 边框：keyviz 点选配色预设时 setBorderStyle({ color: scheme.secondary })，即边框 = 方案底座色。
-    private static Color BorderColor => ParseHex(_scheme.Border);
+    //（命名避开 Window 继承的 Control.BorderBrush / BorderBrush 属性。）
+    private static SolidColorBrush SchemeBorderBrush => CachedBrush(_scheme.Border);
 
-    private static Color ParseHex(string hex) =>
-        (Color)ColorConverter.ConvertFromString(hex);
+    private static readonly Dictionary<string, SolidColorBrush> BrushCache = new();
+
+    private static SolidColorBrush CachedBrush(string hex)
+    {
+        if (!BrushCache.TryGetValue(hex, out var brush))
+        {
+            brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+            brush.Freeze();
+            BrushCache[hex] = brush;
+        }
+        return brush;
+    }
     private static readonly TimeSpan FadeIn = TimeSpan.FromMilliseconds(120);
     private static readonly TimeSpan FadeOut = TimeSpan.FromMilliseconds(300);
     private static readonly TimeSpan DismissAfter = TimeSpan.FromSeconds(1.2);
@@ -65,12 +79,18 @@ public sealed partial class KeycapOverlayWindow : Window
     /// <summary>提醒键帽期望显示态（调整模式临时清场后据此恢复）。</summary>
     private bool _reminderDesired;
 
+    // 注意：本窗口遵循"只 Show 一次、永不 Hide"策略——
+    // 游戏前台最大化时，Show/Hide/SetWindowPos 类窗口管理器调用会与 DWM 同步阻塞数秒
+    // （实测 Show 6.1s、Hide ~9.5s，见 Show 耗时探针日志），是键帽画面停滞/残留的根因。
+    // 窗口空内容时本来就是全透明（视觉为零），启动预显示后整个生命周期零窗口管理器调用；
+    // 唯一例外是位置调整模式的临时 Hide（用户主动操作、通常不在游戏内，可接受）。
+
     /// <summary>应用图标缓存（提醒键帽内容；懒加载，取 ico 中分辨率最大的帧）。
     /// 档位外观（应用图标）切换时随 <see cref="SetAppIconUri"/> 失效重建。</summary>
     private static ImageSource? _appIcon;
 
     /// <summary>当前档位外观的应用图标资源（默认 = 衍天 app.ico）。</summary>
-    private static string _appIconUri = "pack://application:,,,/Resources/app.ico";
+    private static volatile string _appIconUri = "pack://application:,,,/Resources/app.ico";
 
     /// <summary>设置应用图标资源（档位外观切换时由 KeyVisualizerService 调用）：
     /// 资源名变化才清缓存，下次加载（含已存在键帽的重建）即用新图标。</summary>
@@ -158,7 +178,9 @@ public sealed partial class KeycapOverlayWindow : Window
         _reminderCap = null;
         _caps.Remove(removed);
         _host.Children.Remove(removed);
-        if (_caps.Count == 0) Hide();
+        // 不 Hide：窗口保持显示（空内容 = 全透明，视觉为零），随后的脉冲键帽 /
+        // 恢复的提醒键帽直接渲染进同一窗口——Show/Hide 会与前台最大化的游戏做
+        // DWM 同步阻塞数秒（见类头部策略说明）。
     }
 
     /// <summary>新增普通键帽（插入到提醒键帽之前：窗口右对齐，提醒键帽恒居末位位置稳定）。</summary>
@@ -174,10 +196,14 @@ public sealed partial class KeycapOverlayWindow : Window
     /// <summary>用户保存的悬浮窗位置（Left/Top；null = 默认屏幕右下角）。</summary>
     public Point? PositionOverride { get; set; }
 
-    /// <summary>设置保存位置（配置加载 / 位置确定时调用；下一次显示即生效）。</summary>
+    private bool _positionApplied;   // 当前位置已应用（窗口移动 SetWindowPos 去重：与前台游戏同步代价高昂）
+
+    /// <summary>设置保存位置（配置加载 / 位置确定时调用；下一次显示即生效，可见时立即落位）。</summary>
     public void SetSavedPosition(double left, double top)
     {
         PositionOverride = new Point(left, top);
+        _positionApplied = false;
+        if (IsVisible) PositionToSaved();   // 调整模式保存 / 配置导入时窗口可能正显示着键帽
     }
 
     /// <summary>设置键帽悬浮层整体透明度（0~100 百分比；0 = 完全透明，100 = 完全不透明）。
@@ -201,7 +227,29 @@ public sealed partial class KeycapOverlayWindow : Window
         _activityTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _activityTimer.Tick += (_, _) => RetireIdleCaps();
         _activityTimer.Start();
+        // 呈现节流排水计时器：Tick 只订阅一次（ScheduleApply 仅 Start/Stop，不重复挂接）。
+        _applyTimer.Tick += (_, _) => DrainPending();
+        // 软件渲染已在 App.OnStartup 进程级启用（RenderOptions.ProcessRenderMode）：
+        // 键帽呈现走内存位图 + UpdateLayeredWindow，不进被游戏打满的 GPU 3D 队列。
+
+        // 诊断埋点：渲染滞后。UpdateKeys / HoldPulse 更新视觉时打 _lastInvalidateTick 基准，
+        // CompositionTarget.Rendering 在帧真正渲染前触发——两者之差即"更新请求 → 实际渲染"
+        // 的管线滞后（分层窗口上传 + DWM 争抢）；每帧渲染后推进基准，动画连帧时即帧间隔。
+        CompositionTarget.Rendering += (_, _) =>
+        {
+            var now = Environment.TickCount;
+            var lag = unchecked(now - _lastInvalidateTick);
+            _lastInvalidateTick = now;
+            if (lag > 500 && unchecked(now - _lastRenderLagLogTick) > 2000)
+            {
+                _lastRenderLagLogTick = now;
+                Logger.Warn($"键帽渲染滞后 {lag}ms（分层窗口上传/DWM 争抢）。");
+            }
+        };
     }
+
+    private int _lastInvalidateTick = Environment.TickCount;   // 渲染失效基准（渲染滞后探针）
+    private int _lastRenderLagLogTick;
 
     /// <summary>应用配色方案（悬浮窗与键帽控件均为静态引用；重建当前显示以立即生效）。</summary>
     public static void ApplyScheme(KeycapScheme scheme)
@@ -209,7 +257,7 @@ public sealed partial class KeycapOverlayWindow : Window
         _scheme = scheme;
     }
 
-    private static bool _isDarkTheme;   // 当前主题深浅（调整模式提示条配色用）
+    private static volatile bool _isDarkTheme;   // 当前主题深浅（主线程写、悬浮窗线程读：调整模式提示条配色用）
 
     /// <summary>同步主题深浅（App.ApplyTheme 调用；调整模式提示条随主题换色）。</summary>
     public static void SetThemeDark(bool isDark) => _isDarkTheme = isDark;
@@ -358,9 +406,13 @@ public sealed partial class KeycapOverlayWindow : Window
         if (_reminderDesired) SetReminderVisible(true);
     }
 
-    /// <summary>定位到保存的位置（无保存位置时回退屏幕右下角）。</summary>
+    /// <summary>定位到保存的位置（无保存位置时回退屏幕右下角）。已应用过即跳过：
+    /// Left/Top 赋值即使值相同也可能触发窗口移动 SetWindowPos——与前台最大化的
+    /// 游戏 DWM 同步代价高昂，位置只在变化时应用一次。</summary>
     private void PositionToSaved()
     {
+        if (_positionApplied) return;
+        _positionApplied = true;
         if (PositionOverride is { } pos)
         {
             Left = pos.X;
@@ -413,6 +465,13 @@ public sealed partial class KeycapOverlayWindow : Window
     {
         var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero) return;
+        MakeClickThrough(hwnd);
+    }
+
+    /// <summary>给任意 HWND 加穿透 + 不抢焦点 + 工具窗口样式（主悬浮层 / 渲染时钟激励器共用）。</summary>
+    private static void MakeClickThrough(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return;
         var ex = NativeMethods.GetWindowLong(hwnd, NativeMethods.GWL_EXSTYLE);
         _ = NativeMethods.SetWindowLong(hwnd, NativeMethods.GWL_EXSTYLE,
             ex | NativeMethods.WS_EX_TRANSPARENT | NativeMethods.WS_EX_NOACTIVATE | NativeMethods.WS_EX_TOOLWINDOW);
@@ -445,23 +504,190 @@ public sealed partial class KeycapOverlayWindow : Window
             | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
     }
 
-    /// <summary>显示悬浮层并重新声明置顶（所有显示路径统一走这里）。</summary>
-    private void ShowOverlay()
+    /// <summary>
+    /// 启动预显示（悬浮窗线程创建时调用一次）：此后窗口常驻——空内容 = 全透明（视觉为零），
+    /// 运行期所有 ShowOverlay / 释放收尾都因窗口已可见而不再产生任何窗口管理器调用，
+    /// 彻底消除 Show/Hide/SetWindowPos 与前台最大化游戏的 DWM 同步阻塞（实测 6~10 秒）。
+    /// 预显示本身若恰逢游戏前台，代价由悬浮窗独立线程承担且空窗口不可见。
+    /// </summary>
+    public void Preshow() => ShowOverlay();
+
+    // ---------- 渲染时钟激励器（1×1 合成心跳） ----------
+    // FSO 游戏（独立翻转）前台时 DWM 合成是事件驱动的：桌面无动画就不合成，而 WPF
+    // 渲染线程与 DWM 帧时钟同步——时钟停摆时键帽的每次视觉更新都排队等下一次合成
+    // （任务栏时钟一分钟一格、鼠标为硬件光标不触发合成），实测 0.5~3 秒一档，
+    // 与表面积、提交频率均无关。此 1×1 不可见窗口以 60fps 做肉眼不可见的颜色动画
+    // （alpha 1↔2/255），持续激励本线程的合成时钟，键帽渲染即回归帧级实时。
+    // 成本：每秒 60 次 1×1 像素合成，可忽略。
+    private Window? _pacer;
+
+    /// <summary>创建渲染时钟激励器（悬浮窗线程调用；随悬浮窗生命周期常驻）。</summary>
+    public void CreatePacer()
     {
-        Show();
-        AssertTopmost(this);
+        try
+        {
+            var rect = new System.Windows.Shapes.Rectangle
+            {
+                Width = 1,
+                Height = 1,
+                Fill = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0))   // 1/255 alpha：肉眼不可见但持续绘制
+            };
+            ((SolidColorBrush)rect.Fill).BeginAnimation(SolidColorBrush.ColorProperty,
+                new System.Windows.Media.Animation.ColorAnimation(
+                    Color.FromArgb(2, 0, 0, 0), Color.FromArgb(1, 0, 0, 0),
+                    new System.Windows.Duration(TimeSpan.FromMilliseconds(16)))
+                {
+                    AutoReverse = true,
+                    RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever
+                });
+
+            var work = SystemParameters.WorkArea;
+            var pacer = new Window
+            {
+                Title = "KeycapRenderPacer",
+                WindowStyle = WindowStyle.None,
+                ShowInTaskbar = false,
+                ShowActivated = false,
+                AllowsTransparency = true,
+                Background = Brushes.Transparent,
+                Width = 1,
+                Height = 1,
+                Topmost = true,
+                Focusable = false,
+                ResizeMode = ResizeMode.NoResize,
+                Left = work.Right - 1,
+                Top = work.Bottom - 1,
+                Content = rect
+            };
+            RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;   // 进程级已在 App 启用，此处冗余兜底
+            pacer.SourceInitialized += (_, _) => MakeClickThrough(
+                new System.Windows.Interop.WindowInteropHelper(pacer).Handle);
+            pacer.Show();
+            _pacer = pacer;
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"渲染时钟激励器创建失败（高负载游戏前台键帽可能滞后）：{ex.Message}");
+        }
     }
 
-    /// <summary>
-    /// 快照协调渲染：显示集 = 当前按住键位全量快照，逐键独立更新（多键同按互不顶替）。
-    /// 新键入组 → 追加键帽（bumpLabel 递增连击角标）；快照中消失 → 抬起并进入 1.2s 独立宽限；
-    /// 各键帽宽限到期后独立淡出移除（活动计时器巡检），发射中的脉冲键帽不受影响。
-    /// </summary>
-    public void UpdateKeys(IReadOnlyList<string> snapshot, string? bumpLabel)
+    /// <summary>显示悬浮层（所有显示路径统一走这里）：位置在显示瞬间应用；
+    /// 已可见时直接返回——预显示后窗口常驻，本方法实际只在首次 / 调整模式恢复时执行。</summary>
+    private void ShowOverlay()
+    {
+        if (IsVisible) return;
+        PositionToSaved();
+        // 诊断埋点：Show + 置顶声明的窗口管理器调用耗时（游戏前台最大化时与 DWM
+        // 同步可能阻塞数秒——此调用在悬浮窗独立线程执行，只影响键帽呈现）。
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        Show();
+        AssertTopmost(this);
+        sw.Stop();
+        if (sw.ElapsedMilliseconds > 100 && unchecked(Environment.TickCount - _lastShowCostLogTick) > 2000)
+        {
+            _lastShowCostLogTick = Environment.TickCount;
+            Logger.Warn($"悬浮窗 Show/置顶 耗时 {sw.ElapsedMilliseconds}ms（DWM 同步）。");
+        }
+    }
+
+    private static int _lastShowCostLogTick;   // Show 耗时告警限频
+
+    // ---------- 呈现节流（80ms 窗口合并应用视觉更新） ----------
+    // 游戏前台最大化时，分层窗口的呈现与 DWM 相互拖拽——连发期间每秒 40~60 次视觉
+    // 更新会把呈现队列越灌越深（实测渲染滞后 0.5~1.9s，与表面积无关）。
+    // 以 ~12fps 节奏合并应用：快照/脉冲状态始终取最新、连击计数跨窗口累加，
+    // 画面滞后上限 ≈ 一个窗口，呈现提交次数 ↓ 5 倍。
+    private const int ApplyIntervalMs = 80;
+    private int _lastApplyTick;
+    private bool _applyScheduled;
+    private List<string>? _pendingSnap;                  // 待应用的最新快照（后到覆盖先到）
+    private Dictionary<string, int>? _pendingSnapBumps;  // 待应用的快照连击增量（跨窗口累加）
+    private readonly Dictionary<string, (int HoldMs, int Count)> _pendingPulseUpdates = new();
+    private readonly DispatcherTimer _applyTimer = new();   // 节流期到点排水（复用单例；Tick 在构造函数订阅一次）
+
+    private void EnqueueSnapshot(List<string> snapshot, Dictionary<string, int>? bumps)
+    {
+        _pendingSnap = snapshot;
+        if (bumps is not null)
+        {
+            _pendingSnapBumps ??= new Dictionary<string, int>();
+            foreach (var kv in bumps)
+                _pendingSnapBumps[kv.Key] = (_pendingSnapBumps.TryGetValue(kv.Key, out var n) ? n : 0) + kv.Value;
+        }
+        ScheduleApply();
+    }
+
+    private void EnqueuePulse(string label, int holdMs, int repeat)
+    {
+        var prev = _pendingPulseUpdates.TryGetValue(label, out var p) ? p.Count : 0;
+        _pendingPulseUpdates[label] = (holdMs, prev + repeat);
+        ScheduleApply();
+    }
+
+    private void ScheduleApply()
+    {
+        var now = Environment.TickCount;
+        var elapsed = unchecked(now - _lastApplyTick);
+        if (elapsed >= ApplyIntervalMs)
+        {
+            DrainPending();
+            return;
+        }
+        if (_applyScheduled) return;
+        _applyScheduled = true;
+        _applyTimer.Interval = TimeSpan.FromMilliseconds(ApplyIntervalMs - elapsed);
+        _applyTimer.Start();
+    }
+
+    private void ApplyTimerTick(object? sender, EventArgs e)
+    {
+        _applyTimer.Stop();
+        _applyScheduled = false;
+        DrainPending();
+    }
+
+    private void DrainPending()
+    {
+        _lastApplyTick = Environment.TickCount;
+        var snap = _pendingSnap;
+        var bumps = _pendingSnapBumps;
+        _pendingSnap = null;
+        _pendingSnapBumps = null;
+        if (snap is not null) UpdateKeysCore(snap, bumps);
+        if (_pendingPulseUpdates.Count > 0)
+        {
+            foreach (var kv in _pendingPulseUpdates)
+                HoldPulseCore(kv.Key, kv.Value.HoldMs, kv.Value.Count);
+            _pendingPulseUpdates.Clear();
+        }
+    }
+
+    /// <summary>快照协调渲染入口：进入 80ms 呈现节流（更新排队合并后由 DrainPending 应用）。</summary>
+    public void UpdateKeys(List<string> snapshot, Dictionary<string, int>? bumps)
     {
         // 调整模式中忽略按键显示：主悬浮层已隐藏，且调整结束后再恢复显示。
         if (_adjustWindow is not null) return;
+        EnqueueSnapshot(snapshot, bumps);
+    }
 
+    /// <summary>连发脉冲渲染入口：进入 80ms 呈现节流（repeat 计数在节流窗口内累加保真）。</summary>
+    public void HoldPulse(string label, int holdMs, int repeat = 1)
+    {
+        if (_adjustWindow is not null) return;
+        if (repeat < 1) repeat = 1;
+        if (holdMs < 10) holdMs = 10;
+        EnqueuePulse(label, holdMs, repeat);
+    }
+
+    /// <summary>
+    /// 快照协调渲染核心（节流排水时执行，悬浮窗线程）：显示集 = 当前按住键位全量快照，
+    /// 逐键独立更新（多键同按互不顶替）。新键入组 → 追加键帽（bumps 递增连击角标）；
+    /// 快照中消失 → 抬起并进入 1.2s 独立宽限；各键帽宽限到期后独立淡出移除
+    /// （活动计时器巡检），发射中的脉冲键帽不受影响。
+    /// bumps = 节流期内各键连击增量（多窗口增量一次补齐）。
+    /// </summary>
+    private void UpdateKeysCore(List<string> snapshot, Dictionary<string, int>? bumps)
+    {
         if (snapshot.Count == 0)
         {
             // 全部释放：抬起所有键帽，各自进入 1.2s 独立宽限（活动计时器到期淡出移除）。
@@ -503,25 +729,24 @@ public sealed partial class KeycapOverlayWindow : Window
             if (snapshot.Contains(cap.Label))
                 cap.SetPressed(true);
 
-        // 4) 本次按下的键帽递增连击角标（连击计数随键帽销毁重置）。
-        if (bumpLabel is not null)
-            foreach (var cap in _caps.Where(c => c.Label == bumpLabel).ToList())
-                cap.BumpPressCount();
+        // 4) 合并期内按下的键帽递增连击角标（连击计数随键帽销毁重置）。
+        if (bumps is not null)
+            foreach (var cap in _caps)
+                if (bumps.TryGetValue(cap.Label, out var n))
+                    for (var i = 0; i < n; i++) cap.BumpPressCount();
 
-        PositionToSaved();
-        ShowOverlay();
+        _lastInvalidateTick = Environment.TickCount;   // 渲染滞后探针基准：视觉已更新，等待下一帧渲染
+        ShowOverlay();   // 位置在显示瞬间应用（见 ShowOverlay）；已可见时不再重复定位
     }
 
     /// <summary>
-    /// 连发脉冲渲染：目标键每发射一次 → 键帽执行一次完整按下弹起（按压 HoldMs 后瞬间弹起）+ 连击角标递增。
+    /// 连发脉冲渲染核心（节流排水时执行，悬浮窗线程）：目标键每次批量发射 → 键帽执行
+    /// 一次完整按下弹起（按压 HoldMs 后瞬间弹起）+ 连击角标按 repeat 次数递增。
     /// 不参与快照协调（目标键是注入脉冲，非物理按住）；停发后键帽停在弹起态，1.2s 独立淡出。
+    /// repeat = 节流期内累计发射次数（高频档多帧脉冲合并为一次视觉按压，角标按次数补齐）。
     /// </summary>
-    public void HoldPulse(string label, int holdMs, int repeat = 1)
+    private void HoldPulseCore(string label, int holdMs, int repeat = 1)
     {
-        if (_adjustWindow is not null) return;
-        if (repeat < 1) repeat = 1;
-        if (holdMs < 10) holdMs = 10;
-
         var cap = _caps.FirstOrDefault(c => c.Label == label);
         if (cap is null)
         {
@@ -533,8 +758,8 @@ public sealed partial class KeycapOverlayWindow : Window
         for (var i = 0; i < repeat; i++)
             cap.BumpPressCount();
 
-        PositionToSaved();
-        ShowOverlay();
+        _lastInvalidateTick = Environment.TickCount;   // 渲染滞后探针基准：视觉已更新，等待下一帧渲染
+        ShowOverlay();   // 位置在显示瞬间应用（见 ShowOverlay）；已可见时不再重复定位
     }
 
     /// <summary>锚定屏幕右下角（主屏工作区，边距 24px）。</summary>
@@ -552,8 +777,18 @@ public sealed partial class KeycapOverlayWindow : Window
     /// </summary>
     private void RetireIdleCaps()
     {
-        if (_adjustWindow is not null || !IsVisible || _caps.Count == 0) return;
+        // 诊断埋点：活动巡检计时器应每 250ms 一跳；间隔异常 = 悬浮窗线程被阻塞
+        // （渲染提交 / DWM 同步 / 分层窗口逐帧上传），键帽画面会随之陈旧。
         var now = Environment.TickCount;
+        var delta = unchecked(now - _lastHeartbeatTick);
+        _lastHeartbeatTick = now;
+        if (delta > 1000 && unchecked(now - _lastHeartbeatLogTick) > 2000)
+        {
+            _lastHeartbeatLogTick = now;
+            Logger.Warn($"悬浮窗线程心跳间隔 {delta}ms（线程被阻塞，键帽画面停滞）。");
+        }
+
+        if (_adjustWindow is not null || !IsVisible || _caps.Count == 0) return;
         var grace = (int)DismissAfter.TotalMilliseconds;
         foreach (var cap in _caps.ToList())
         {
@@ -563,10 +798,13 @@ public sealed partial class KeycapOverlayWindow : Window
             {
                 _host.Children.Remove(cap);
                 _caps.Remove(cap);
-                if (_caps.Count == 0) Hide();
+                // 不 Hide：窗口保持显示（空内容 = 全透明），避免 Show/Hide 的 DWM 阻塞。
             });
         }
     }
+
+    private int _lastHeartbeatTick = Environment.TickCount;   // 巡检心跳（诊断悬浮窗线程阻塞）
+    private int _lastHeartbeatLogTick;
 
     /// <summary>颜色加深（近似 keyviz 的 oklch darken：RGB 各通道 × (1 - amount)）。</summary>
     private static Color Darken(Color c, double amount) =>
@@ -582,6 +820,8 @@ public sealed partial class KeycapOverlayWindow : Window
         private readonly Border _face;       // 上层键帽面（按下时整体下移）
         private readonly Border? _badge;       // 连击角标（右上角，keyviz PressCount 正圆）
         private readonly TextBlock? _badgeText; // 角标内数字（圆内双轴居中）
+        private readonly ScaleTransform _badgeScale; // 角标弹跳缩放（预创建复用，渲染级）
+        private bool _badgePopping;          // 角标弹跳进行中（高频连发下合并弹跳动画）
         private readonly TranslateTransform _press;
         private readonly DispatcherTimer _pulsePop;  // 脉冲弹起定时器（HoldMs 后瞬间弹起）
         private bool _physHeld;              // 物理按住态：为真时脉冲不抢视觉
@@ -628,8 +868,8 @@ public sealed partial class KeycapOverlayWindow : Window
                 Height = CapHeight,
                 VerticalAlignment = VerticalAlignment.Top,
                 CornerRadius = new CornerRadius(BorderRadius),
-                Background = new SolidColorBrush(FaceColor),
-                BorderBrush = new SolidColorBrush(BorderColor),
+                Background = FaceBrush,
+                BorderBrush = SchemeBorderBrush,
                 BorderThickness = new Thickness(BorderWidth),
                 Padding = new Thickness(TextSize * 0.5, TextSize * 0.4, TextSize * 0.5, TextSize * 0.4),
                 Child = icon is not null ? CreateIconFace(icon)
@@ -639,7 +879,7 @@ public sealed partial class KeycapOverlayWindow : Window
                             Text = label,
                             FontSize = TextSize,
                             FontWeight = FontWeights.Medium,
-                            Foreground = new SolidColorBrush(TextColor),
+                            Foreground = TextBrush,
                             VerticalAlignment = VerticalAlignment.Center,
                             HorizontalAlignment = HorizontalAlignment.Center
                         },
@@ -652,8 +892,8 @@ public sealed partial class KeycapOverlayWindow : Window
                 Height = CapHeight,
                 VerticalAlignment = VerticalAlignment.Bottom,
                 CornerRadius = new CornerRadius(BorderRadius),
-                Background = new SolidColorBrush(BaseColor),
-                BorderBrush = new SolidColorBrush(BorderColor),
+                Background = BaseBrush,
+                BorderBrush = SchemeBorderBrush,
                 BorderThickness = new Thickness(BorderWidth)
             };
 
@@ -664,23 +904,28 @@ public sealed partial class KeycapOverlayWindow : Window
             {
                 FontSize = TextSize * 0.4,
                 FontWeight = FontWeights.Bold,
-                Foreground = new SolidColorBrush(FaceColor),
+                Foreground = FaceBrush,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             };
+            // 弹跳用预创建缩放变换（RenderTransform 仅渲染级，不触发布局重排；
+            // 旧版每次弹跳新建 ScaleTransform + LayoutTransform，45 发/秒连发下全窗重排）。
+            _badgeScale = new ScaleTransform();
             _badge = new Border
             {
                 MinWidth = TextSize * 0.75,
                 Height = TextSize * 0.75,
                 CornerRadius = new CornerRadius(TextSize * 0.375),   // 圆角 50% → 正圆
                 Padding = new Thickness(2, 0, 2, 0),
-                Background = new SolidColorBrush(TextColor),
+                Background = TextBrush,
                 Child = _badgeText,
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Top,
                 Margin = new Thickness(0, -TextSize * 0.25, -TextSize * 0.25, 0),
                 Visibility = Visibility.Collapsed,
-                IsHitTestVisible = false
+                IsHitTestVisible = false,
+                RenderTransformOrigin = new Point(0.5, 0.5),   // 绕自身中心缩放（弹跳原地起伏）
+                RenderTransform = _badgeScale
             };
 
             Child = new Grid();
@@ -709,7 +954,7 @@ public sealed partial class KeycapOverlayWindow : Window
         private static System.Windows.Shapes.Path CreateVectorFace(Geometry icon) => new()
         {
             Data = icon,
-            Stroke = new SolidColorBrush(TextColor),
+            Stroke = TextBrush,
             StrokeThickness = 2,
             StrokeStartLineCap = PenLineCap.Round,
             StrokeEndLineCap = PenLineCap.Round,
@@ -782,6 +1027,8 @@ public sealed partial class KeycapOverlayWindow : Window
         /// <summary>
         /// 连发脉冲：一次完整按键视觉 —— 按下（min(50, holdMs) 缓动）→ holdMs 后瞬间弹起，
         /// 与真实注入节奏（按压 HoldMs + 间隔 IntervalMs）同步；新脉冲取消未决弹起重开一轮。
+        /// 弹起未决期间到达的脉冲（常规档 26/26ms 连发）只顺延弹起时刻：视觉已处于按下动画，
+        /// 不再每发重建动画对象（合并为持续按住视觉，停发后随最后一个弹起收尾）。
         /// </summary>
         public void PulsePress(int holdMs)
         {
@@ -789,7 +1036,13 @@ public sealed partial class KeycapOverlayWindow : Window
             _lastActivityTick = _lastPulseTick;   // 脉冲即活动：宽限持续顺延，停发后才开始倒计时
             if (_physHeld) return;   // 物理按住中：键帽已处于按下态，脉冲只计角标
 
-            _pulsePop.Stop();
+            if (_pulsePop.IsEnabled)
+            {
+                _pulsePop.Stop();
+                _pulsePop.Interval = TimeSpan.FromMilliseconds(holdMs);
+                _pulsePop.Start();
+                return;
+            }
             var anim = new DoubleAnimation(PressOffset, TimeSpan.FromMilliseconds(Math.Min(50, holdMs)))
             {
                 EasingFunction = new ExponentialEase { EasingMode = EasingMode.EaseInOut }
@@ -811,12 +1064,20 @@ public sealed partial class KeycapOverlayWindow : Window
             _badgeText.Text = _pressCount.ToString();   // keyviz PressCount：裸数字
             if (_badge.Visibility != Visibility.Visible)
                 _badge.Visibility = Visibility.Visible;
-            // 角标弹跳（复刻 keyviz press-count 提示）。
-            var scale = new ScaleTransform(1, 1, 0.5, 0.5);
+            StartBadgePop();
+        }
+
+        /// <summary>角标弹跳（复刻 keyviz press-count 提示）：预创建 ScaleTransform 以
+        /// RenderTransform 复用（仅渲染级，不触发布局重排）；弹跳进行中不重复开新动画
+        /// ——高频连发下 45 发/秒的递增只在 150ms 窗口结束后重启一次弹跳。</summary>
+        private void StartBadgePop()
+        {
+            if (_badgePopping) return;
+            _badgePopping = true;
             var pop = new DoubleAnimation(1.2, 1.0, TimeSpan.FromMilliseconds(150));
-            scale.BeginAnimation(ScaleTransform.ScaleXProperty, pop);
-            scale.BeginAnimation(ScaleTransform.ScaleYProperty, pop);
-            _badge.LayoutTransform = scale;
+            pop.Completed += (_, _) => _badgePopping = false;
+            _badgeScale.BeginAnimation(ScaleTransform.ScaleXProperty, pop);
+            _badgeScale.BeginAnimation(ScaleTransform.ScaleYProperty, pop);
         }
     }
 }

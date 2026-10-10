@@ -296,11 +296,11 @@ public partial class MainWindow : Window
         // 方案定制：「选项」菜单首项 → 模态框（四个档位命名 + 主题绑定 + 默认主题外观定制）。
         _vm.ProfileCustomizeRequested += ShowProfileCustomize;
 
-        // 钩子事件 → UI 封送（调度器本身线程安全，但日志与 UI 属性需封送）。
-        _app.Hooks.SourceDown += src =>
-            Dispatcher.BeginInvoke(() => _vm.HandleHookDown(src));
-        _app.Hooks.SourceUp += src =>
-            Dispatcher.BeginInvoke(() => _vm.HandleHookUp(src));
+        // 钩子事件 → 钩子线程直通处理：连发启停路径（调度器，自身加锁线程安全）不再
+        // 排队等 UI 线程，高负载下松键即停；仅 UI 动作（总开关 / 档位切换 / 键位录入）
+        // 由 HandleHookDown 内部封送回 UI 线程。
+        _app.Hooks.SourceDown += _vm.HandleHookDown;
+        _app.Hooks.SourceUp += _vm.HandleHookUp;
 
         // VM 弹窗请求 + 键位录入选择态的鼠标命中测试。
         _vm.ImportRequested += ImportConfig;

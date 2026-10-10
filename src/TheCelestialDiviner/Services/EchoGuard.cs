@@ -1,3 +1,5 @@
+using TheCelestialDiviner.Helpers;
+
 namespace TheCelestialDiviner.Services;
 
 /// <summary>
@@ -45,6 +47,7 @@ public static class EchoGuard
 
     private static readonly object Gate = new();
     private static readonly Dictionary<int, VkState> States = new();
+    private static int _lastEchoLatencyLogTick;   // 回环到达延迟告警限频（Environment.TickCount）
 
     /// <summary>
     /// 预登记待决回环名额（注入线程调用，必须在 DD_key 之前——
@@ -95,7 +98,16 @@ public static class EchoGuard
 
             // FIFO 按序消除：同键同方向事件在输入管线内保序，注入名额与回环
             // 事件一一对应；不限到达延迟（时间窗硬门槛会在延迟尖峰下漏判）。
+            // 诊断埋点：名额登记（注入时刻）→ 回环到达（钩子）的管线延迟，
+            // 与游戏收到的输入走同一条 win32k 队列——延迟大即"按键到达游戏慢"。
+            var stamp = list[0];
             list.RemoveAt(0);
+            var latency = unchecked(eventTime - stamp);
+            if (latency > 100 && unchecked(Environment.TickCount - _lastEchoLatencyLogTick) > 2000)
+            {
+                _lastEchoLatencyLogTick = Environment.TickCount;
+                Logger.Warn($"注入输入到达延迟 {latency}ms（vk=0x{vk:X2}, down={down}；win32k 输入队列积压）。");
+            }
             return true;
         }
     }

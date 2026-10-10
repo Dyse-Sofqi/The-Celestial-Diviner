@@ -36,6 +36,9 @@ public static class NativeMethods
     public const int WM_KEYUP = 0x0101;
     public const int WM_SYSKEYUP = 0x0105;
 
+    /// <summary>鼠标移动（WH_MOUSE_LL 收到的高频消息，本程序不使用）。</summary>
+    public const int WM_MOUSEMOVE = 0x0200;
+
     public const int WM_LBUTTONDOWN = 0x0201;
     public const int WM_LBUTTONUP = 0x0202;
     public const int WM_RBUTTONDOWN = 0x0204;
