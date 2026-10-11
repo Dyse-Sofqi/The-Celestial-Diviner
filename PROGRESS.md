@@ -1,8 +1,51 @@
 # 衍天高手（The Celestial Diviner）开发进度交接
 
-更新：2026-10-11 — **发版 v1.7.7（性能修复：游戏高负载下键帽卡顿 / F9 延迟 / 启停拖累）；双端 Release 已发布**
+更新：2026-10-11 — **发版 v1.7.8（连发频率上限翻倍 + 移除时序抖动 + 检查更新红点提醒）；双端 Release 已发布**
 
-## 本次变更（发版 v1.7.7）
+## 本次变更（发版 v1.7.8）
+- 📋 用户需求：连发频率上限提升至 5ms（确认连按压时长下限一起降）+ 删除 ±20% 随机浮动；
+  按老规矩发版 1.7.8，双版 Notice 一句话总结并提示升级；「选项 → 检查更新」添加小红点提醒
+- ✅ 连发时序（commit `a834d85`，9 文件）：
+  - `MinIntervalMs` / `MinHoldMs` 10 → 5：最高连发约 100 发/秒（周期 = 按压 + 间隔 = 10ms）；
+    5ms 为 timeBeginPeriod(1) 下 WaitOne / Sleep 精度的实用下限（实际落点略高）；
+    逐帧轮询游戏在 5ms 区间大多采不到样，主要面向 DirectInput / DD / 消息模式与轮询之外场景
+  - 移除 ±20% 抖动：删 `TimingJitterPercent` / `TimingJitterCutoffMs` / `JitterMs` / `Rand` 机制，
+    按压与间隔直传配置值（配置加载已钳位）；原「间隔 >100ms 精确模式」语义扩展到全部间隔
+  - `EchoGuard.MaxPendingPerVk` 128 → 256（100 发/秒 × 2s 过期窗口 = 200，防回环系统性丢失时
+    FIFO 名额溢出漏判回环；原定容注释「45 发/秒 × 2s = 90」按新频率改写）
+  - 注入失败日志 2 秒限频（`LogSendFailure`，SendInput / PostMessage 两路径共用）：
+    5ms 连发被 UIPI 拦截时不再每秒刷约百行错误日志
+- ✅ 检查更新红点（commit `20d412a`，3 文件）：
+  - 启动后台预检 `CheckUpdateDotAsync`（Gitee releases/latest，静默无弹窗）：发现新版本 →
+    「选项 → 检查更新」右上角亮红点（#E5484D 6px，`UpdateDotVisibility`）；
+    手动检查确认已是最新 → 熄灭；检查中 DataTrigger 整体替换 Header，红点随之隐藏；
+    注释区悬停说明同步（MenuComments）
+- ✅ 版本：csproj `Version` / `FileVersion` 1.7.7 → **1.7.8**；编译 0 警告 0 错误（Debug + Release）
+- ✅ CHANGELOG：v1.7.8 详录（新增 · 检查更新红点提醒 / 变更 · 连发时序 / 发布包）
+- ✅ 公告：Notice.md / Notice2.md 首行 → 「点选项检查升级1.7.8版本：连发间隔与按压下限降至5ms
+  （最高约100发/秒）、移除±20%随机抖动、检查更新新增红点提醒，建议尽快更新。」（70 字）
+  - 打包顺序教训：首次打包后才发现公告改动未进 exe（内嵌兜底公告仍旧行）→ 重新 publish +
+    重打包，并按字节扫描验证 exe 内嵌公告 = 1.7.8 新行（旧行 / 抖动文案均已不在）
+- ✅ 发布包：`dist/TheCelestialDiviner-1.7.8-win64.zip`（**14 项**与 1.7.7 一致，不含闭源 DD 驱动；
+  exe 1,016,832 B；zip 1,498,237 B；SHA256 `3a648998…b108c3`）
+- ✅ 发布说明：`dist/v1.7.8-release-notes.md`（双端 Release 正文同一份，双端 body 与本地完全一致）
+- ✅ 提交与标签：`a834d85`（连发时序）→ `20d412a`（红点）→ `6ed4556`（v1.7.8 发版）；
+  注释标签 `v1.7.8`（对象 `24871d3` → 6ed4556）
+- ✅ **Gitee 已发布**：git push（main + 标签）成功；Release id 1197582（target 6ed4556）+ 附件 1,498,237 B
+  - ⚠️ 标签重写坑：创建 Release 的 API 调用（target_commitish）把 Gitee 注释标签引用重写成了
+    轻量标签（ls-remote 无 `^{}` 剥离行）——`git push +refs/tags/v1.7.8` 强推恢复注释对象（MATCH）
+- ✅ **GitHub 已发布（gh-api-release.ps1）**：三笔提交逐字节复刻（tree / commit 均 MATCH）+
+  main → 6ed4556 + Release id 409639004 + 同尺寸附件
+  - ⚠️ 脚本建标签缺陷复发（v1.7.7 同类问题第二次）：POST /git/tags 响应 sha 为空、refs 落成
+    轻量标签直指 6ed4556——已按本地标签对象逐字节重建（`24871d3` MATCH，tagger 日期一致）并
+    强制改引用（type: tag）；脚本缺陷待修（疑与响应解析有关，待复现排查）
+- ✅ 三端一致核对（发布提交）：本地 = Gitee main = GitHub main = `6ed4556`；标签 `v1.7.8` 两端均为
+  注释对象 `24871d3`（剥离 → 6ed4556）；两端附件下载件 SHA256 与本地完全一致（1,498,237 B）
+- ✅ 公告远端：Gitee raw/main 的 Notice.md / Notice2.md 首行均已是 1.7.8 更新提示
+- ℹ️ 待用户实测：5/5 极限组合下 DD 模式与扫描码模式的 down/up 配对与启停响应；
+  旧版本运行 → 红点亮起 → 检查更新 → 升级 1.7.8 全链路
+
+## 上次变更（发版 v1.7.7）
 - 📋 用户需求：实测确认性能修复生效（键帽响应及时、探针零告警）→ 按老规矩总结更新发版 1.7.7，
   双版 Notice 一句话总结并提示更新
 - ✅ 性能修复主体（commit `2cdaa8f`，12 文件 +711/-162，经四轮探针定位 + 用户实测四轮验证）：
