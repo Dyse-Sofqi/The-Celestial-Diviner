@@ -221,7 +221,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             : "未设置";
         _soundVolume = Compat.Clamp(_config.SoundVolume, 0, 100);
         _soundCue.Volume = _soundVolume / 100.0;
-        _soundCue.ApplyCustom(_config.CustomSounds);   // 自定义提示音（缺省 = 内嵌默认音频）
+        _soundCue.ApplyTheme(CurrentLook.Theme, ThemeSoundFor(CurrentLook.Theme));   // 主题语音方案（高松灯 / 墨提斯 + 按主题自定义）
 
         // 调度器日志 → UI 日志面板（钩子线程触发，封送到 UI 线程）。
         _scheduler.Log += msg =>
@@ -1130,6 +1130,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         }
         Views.KeycapOverlayWindow.ApplyScheme(KeycapSchemes.Resolve(scheme));
         _visualizer.SetSectIcon(look.AppIconUri);          // 状态提醒 / 调整模式键帽图标
+        _soundCue.ApplyTheme(look.Theme, ThemeSoundFor(look.Theme));   // 主题语音方案随主题整套切换（高松灯 ↔ 墨提斯）
+        OnPropertyChanged(nameof(DivinerVoiceButtonText)); // “成为衍天/莫问高手”按钮文案随主题
         AppearanceChanged?.Invoke(look);                   // 窗口标题与图标、托盘图标与提示
         OnPropertyChanged(nameof(CurrentAppearance));
         if (!noticeChanged) return;
@@ -1276,6 +1278,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// <summary>“成为衍天高手”开关联动命令（底栏按钮）。</summary>
     public ICommand ToggleDivinerVoiceCommand { get; }
 
+    /// <summary>当前主题是否莫问高手（按钮文案与启动音变体的判定源）。</summary>
+    public bool IsMoWenTheme => ReferenceEquals(CurrentLook.Theme, SectThemes.MoWen);
+
+    /// <summary>底栏按钮文案：随当前档位主题切换（莫问高手主题 = 「成为莫问高手」，其余 = 「成为衍天高手」）。</summary>
+    public string DivinerVoiceButtonText => IsMoWenTheme ? "成为莫问高手" : "成为衍天高手";
+
     /// <summary>语音设置（底栏按钮）：弹出模态框为开启 / 关闭 / 方案切换语音导入自定义音频。</summary>
     public ICommand OpenVoiceSettingsCommand { get; }
 
@@ -1334,13 +1342,13 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             _config.DivinerVoiceEnabled = value;
             SaveConfig();
             AddLog(value
-                ? "成为衍天高手：总开关启动的语音播报改为「衍天高手启动」。"
-                : "成为衍天高手已关闭：总开关启动的语音播报恢复「启动」。");
+                ? $"{DivinerVoiceButtonText}：总开关启动的语音播报改为「{(IsMoWenTheme ? "莫问糕手启动" : "衍天高手启动")}」。"
+                : $"{DivinerVoiceButtonText}已关闭：总开关启动的语音播报恢复「启动」。");
             OnPropertyChanged(nameof(DivinerVoiceEnabled));   // 底栏按钮墨迹随开关切换金色 ↔ 常规色
         }
     }
 
-    // ---------- 语音设置（自定义提示音：开启 / 关闭 / 方案切换） ----------
+    // ---------- 语音设置（主题语音方案：开启 / 关闭 / 方案切换，按主题独立设置） ----------
 
     /// <summary>语音用途显示名（对话框标题 / 日志）。</summary>
     public static string VoiceCueName(SoundCue cue) => cue switch
@@ -1350,73 +1358,112 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _ => "方案切换",
     };
 
-    /// <summary>某用途语音的当前显示名（“默认音频”或自定义文件名）。</summary>
-    public string VoiceCueDisplayName(SoundCue cue)
-    {
-        var name = GetCustomSound(cue);
-        // net48 参考程序集里 string.IsNullOrEmpty 无 NotNullWhen 注解，用模式匹配让编译器确认非空
-        return name is { Length: > 0 } ? name : "默认音频";
-    }
+    /// <summary>主题在配置中对应的语音方案（下标钳位；加载 / 导入时已归一化到主题数）。</summary>
+    private CustomSoundConfig ThemeSoundFor(SectTheme theme) =>
+        _config.ThemeSounds[Compat.Clamp(SectThemes.IndexOf(theme), 0, SectThemes.All.Length - 1)];
 
-    /// <summary>某用途是否已设置自定义语音。</summary>
-    public bool HasCustomVoice(SoundCue cue) => !string.IsNullOrEmpty(GetCustomSound(cue));
+    private CustomSoundConfig ThemeSoundConfig(int themeIndex) =>
+        _config.ThemeSounds[Compat.Clamp(themeIndex, 0, SectThemes.All.Length - 1)];
 
-    private string? GetCustomSound(SoundCue cue) => cue switch
+    private static string? GetStoredSound(CustomSoundConfig config, SoundCue cue) => cue switch
     {
-        SoundCue.Start => _config.CustomSounds.Start,
-        SoundCue.Stop => _config.CustomSounds.Stop,
-        _ => _config.CustomSounds.Cycle,
+        SoundCue.Start => config.Start,
+        SoundCue.Stop => config.Stop,
+        _ => config.Cycle,
     };
 
-    private void SetCustomSound(SoundCue cue, string? storedName)
+    private static void SetStoredSound(CustomSoundConfig config, SoundCue cue, string? storedName)
     {
         switch (cue)
         {
-            case SoundCue.Start: _config.CustomSounds.Start = storedName; break;
-            case SoundCue.Stop: _config.CustomSounds.Stop = storedName; break;
-            default: _config.CustomSounds.Cycle = storedName; break;
+            case SoundCue.Start: config.Start = storedName; break;
+            case SoundCue.Stop: config.Stop = storedName; break;
+            default: config.Cycle = storedName; break;
         }
     }
 
+    /// <summary>指定主题的某用途是否已设置自定义语音（语音设置“重置”按钮的可用态）。</summary>
+    public bool HasThemeVoice(int themeIndex, SoundCue cue) =>
+        GetStoredSound(ThemeSoundConfig(themeIndex), cue) is { Length: > 0 };
+
+    /// <summary>指定主题某用途的存储文件名（“{用途前缀}_原文件名”；未设置为空串）。</summary>
+    public string ThemeVoiceStoredName(int themeIndex, SoundCue cue) =>
+        GetStoredSound(ThemeSoundConfig(themeIndex), cue) ?? "";
+
+    /// <summary>语音设置对话框“默认音频”项的显示名：标注该主题的配套默认来源
+    /// （默认主题 / 衍天高手 = 高松灯，莫问高手 = 墨提斯；配套文件缺失时显示纯“默认音频”）。</summary>
+    public string VoiceDefaultLabel(int themeIndex, SoundCue cue)
+    {
+        var (start, stop, cycle) = SectThemes.CueFiles(SectThemes.ByIndex(themeIndex));
+        var file = cue switch { SoundCue.Start => start, SoundCue.Stop => stop, _ => cycle };
+        var path = SoundCueService.FindCandidate(file);
+        return path is null ? "默认音频" : $"默认音频（{SoundCueService.ShortDisplayName(path)}）";
+    }
+
     /// <summary>
-    /// 导入自定义语音（复制到语音目录 → 热应用 → 落盘）。返回 null = 成功，否则为失败原因。
+    /// 导入主题语音（复制到语音目录 → 落盘）。返回 null = 成功，否则为失败原因。
+    /// 编辑当前激活主题时热应用；其他主题仅落盘，切换到该主题时经 ApplyAppearance 生效。
     /// 文件被占用 / 无权限等异常由 View 提示；失败后恢复原有装载。
     /// </summary>
-    public string? ImportVoiceCue(SoundCue cue, string sourcePath)
+    public string? ImportThemeVoice(int themeIndex, SoundCue cue, string sourcePath)
     {
         try
         {
-            _soundCue.UnloadCue(cue);   // 释放旧文件占用，否则同名音频文件无法覆盖
+            _soundCue.UnloadCue(cue);   // 释放媒体源占用，否则同名音频文件无法覆盖
             var stored = SoundCueService.ImportCustom(cue, sourcePath);
-            SetCustomSound(cue, stored);
-            _soundCue.ApplyCustom(_config.CustomSounds);
+            SetStoredSound(ThemeSoundConfig(themeIndex), cue, stored);
             SaveConfig();
-            AddLog($"{VoiceCueName(cue)}语音已设置为 [{Path.GetFileName(sourcePath)}]。");
+            HotApplyThemeVoice(themeIndex);
+            AddLog($"{SectThemes.ByIndex(themeIndex).DisplayName} · {VoiceCueName(cue)}语音已设置为 [{Path.GetFileName(sourcePath)}]。");
             return null;
         }
         catch (Exception ex)
         {
             Logger.Error("导入自定义语音失败。", ex);
-            _soundCue.ApplyCustom(_config.CustomSounds);   // 失败后恢复原装载
+            HotApplyThemeVoice(themeIndex);   // 失败后恢复原装载（编辑当前主题时）
             return ex.Message;
         }
     }
 
-    /// <summary>重置某用途语音为默认（删除自定义文件 → 热应用 → 落盘）。</summary>
-    public void ResetVoiceCue(SoundCue cue)
+    /// <summary>重置指定主题某用途语音为主题配套默认（删除自定义文件 → 落盘；当前主题热应用）。</summary>
+    public void ResetThemeVoice(int themeIndex, SoundCue cue)
     {
-        var old = GetCustomSound(cue);
-        if (string.IsNullOrEmpty(old)) return;
-        SetCustomSound(cue, null);
+        var config = ThemeSoundConfig(themeIndex);
+        var old = GetStoredSound(config, cue);
+        if (old is not { Length: > 0 }) return;
+        SetStoredSound(config, cue, null);
         _soundCue.UnloadCue(cue);
         SoundCueService.DeleteCustom(old);
-        _soundCue.ApplyCustom(_config.CustomSounds);
         SaveConfig();
-        AddLog($"{VoiceCueName(cue)}语音已重置为默认。");
+        HotApplyThemeVoice(themeIndex);
+        AddLog($"{SectThemes.ByIndex(themeIndex).DisplayName} · {VoiceCueName(cue)}语音已重置为主题配套默认。");
     }
 
-    /// <summary>试听某用途语音（不改配置；开启语音试听“启动”音，非衍天高手变体）。</summary>
-    public void PreviewVoiceCue(SoundCue cue) => _soundCue.PreviewCue(cue);
+    /// <summary>试听指定主题方案的某用途音频（独立试听播放器，当前主题之外也可试听）：
+    /// 自定义音频优先，否则主题配套音频；两者都不可用时静默。</summary>
+    public void PreviewThemeVoice(int themeIndex, SoundCue cue)
+        => _soundCue.PreviewFile(ResolveThemeVoicePath(themeIndex, cue));
+
+    /// <summary>解析主题方案的音频文件路径：自定义（语音目录）优先，否则主题配套（程序目录候选）。</summary>
+    private string? ResolveThemeVoicePath(int themeIndex, SoundCue cue)
+    {
+        var stored = GetStoredSound(ThemeSoundConfig(themeIndex), cue);
+        if (stored is { Length: > 0 })
+        {
+            var path = Path.Combine(SoundCueService.SoundsDir, stored);
+            if (File.Exists(path)) return path;
+        }
+        var (start, stop, cycle) = SectThemes.CueFiles(SectThemes.ByIndex(themeIndex));
+        var file = cue switch { SoundCue.Start => start, SoundCue.Stop => stop, _ => cycle };
+        return SoundCueService.FindCandidate(file);
+    }
+
+    /// <summary>编辑当前激活主题时热应用语音方案；其他主题仅落盘（切换档位时经 ApplyAppearance 生效）。</summary>
+    private void HotApplyThemeVoice(int themeIndex)
+    {
+        if (themeIndex != SectThemes.IndexOf(CurrentLook.Theme)) return;
+        _soundCue.ApplyTheme(CurrentLook.Theme, ThemeSoundFor(CurrentLook.Theme));
+    }
 
     /// <summary>
     /// 键帽配色方案名（KeycapSchemes.All 之一）：设置菜单「键帽配色」与方案定制共用。

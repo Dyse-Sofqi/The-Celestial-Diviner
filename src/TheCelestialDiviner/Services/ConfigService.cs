@@ -106,6 +106,14 @@ public sealed class ConfigService
         // v6：连发时序增加按压时长（HoldMs）——缺失 / 非法值由 NormalizeTiming 落到默认 26ms，无需迁移动作。
         // v7：状态提醒开关——字段有默认值，无需迁移动作。
         // v9：切换方案热键——字段有默认值（HasKey = false 未设置），无需迁移动作。
+        // v17：主题语音方案——旧全局自定义提示音迁移到全部三个主题（保持既有听感；
+        // 此后在语音设置中按主题独立设置），CustomSounds 字段保留不再读取。
+        if (fromVersion < 17)
+        {
+            config.ThemeSounds =
+                [config.CustomSounds.Clone(), config.CustomSounds.Clone(), config.CustomSounds.Clone()];
+        }
+
         // v10：“成为衍天高手”语音按钮——字段有默认值（关闭），无需迁移动作。
         // v11：注释区公告缓存——字段有默认值（空 = 内嵌默认公告），无需迁移动作。
         // v12：键帽透明度——字段有默认值（100 = 完全不透明），无需迁移动作。
@@ -127,6 +135,7 @@ public sealed class ConfigService
     /// </summary>
     public static void NormalizeTiming(AppConfig config)
     {
+        config.NormalizeThemeSounds();   // 主题语音方案补齐 / 截断到主题数
         config.DefaultIntervalMs =
             Compat.Clamp(config.DefaultIntervalMs, Constants.MinIntervalMs, Constants.MaxIntervalMs);
         config.DefaultHoldMs = NormalizeHold(config.DefaultHoldMs);

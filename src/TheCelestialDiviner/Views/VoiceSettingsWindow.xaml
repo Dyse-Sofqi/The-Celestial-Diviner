@@ -6,12 +6,21 @@
         ShowInTaskbar="False" Background="{DynamicResource ThemeBg}"
         Foreground="{DynamicResource ThemeFg}" FontSize="12"
         UseLayoutRounding="True">
-    <!-- 模态语音设置：三行（开启 / 关闭 / 方案切换），每行可导入自定义音频、试听、重置回默认。
+    <!-- 模态语音设置：顶部主题选择器（每个主题各一套语音方案，随主题切换整套生效）+
+         三行（开启 / 关闭 / 方案切换），每行可从下拉选择 / 导入自定义音频、试听、重置回主题配套默认。
          行内容由 code-behind 构建（三行结构一致，避免 XAML 重复与额外行 VM）。 -->
     <Border Padding="18,16,18,14">
         <DockPanel>
-            <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Opacity="0.75" Margin="0,0,0,14"
-                       Text="为总开关开启 / 关闭与方案切换设置自定义提示音（支持 mp3 / wav / m4a / aac / wma）。导入的音频会复制到程序数据目录并立即生效，原文件删除后仍可使用；可随时试听或重置回默认。"/>
+            <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Opacity="0.75" Margin="0,0,0,12"
+                       Text="每个主题各绑定一套语音方案（默认主题 / 衍天高手 = 高松灯，莫问高手 = 墨提斯），
+切换方案档位时随主题整套切换；也可为各主题单独选择开启 / 关闭 / 方案切换提示音
+（支持 mp3 / wav / m4a / aac / wma）。编辑当前主题立即生效，编辑其他主题在切换到该主题时生效；导入的音频会复制到程序数据目录，原文件删除后仍可使用。"/>
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
+                <TextBlock Text="主题语音方案" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                <ComboBox x:Name="ThemePicker" Width="180" Height="26" Margin="10,0,0,0"
+                          Style="{StaticResource RoundedComboStyle}"
+                          ToolTip="选择要设置的主题：各主题的语音方案相互独立，随主题切换整套生效"/>
+            </StackPanel>
             <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right"
                         Margin="0,16,0,0">
                 <Button Content="关闭" Width="78" Height="28"

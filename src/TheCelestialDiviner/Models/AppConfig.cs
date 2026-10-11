@@ -250,18 +250,19 @@ public sealed class ProfileCycleConfig
 }
 
 /// <summary>
-/// 自定义提示音配置（语音设置对话框导入；值为语音目录下的文件名，空 = 使用内嵌默认音频）。
-/// 导入的音频会复制到 %APPDATA%\TheCelestialDiviner\sounds，因此原文件删除后仍可用。
+/// 主题语音方案配置（每个主题各一套；值为语音目录下的文件名，空 = 该主题的配套默认音频，
+/// 见 SectThemes.CueFiles）。导入的音频会复制到 %APPDATA%\TheCelestialDiviner\sounds，
+/// 因此原文件删除后仍可用。
 /// </summary>
 public sealed class CustomSoundConfig
 {
-    /// <summary>总开关开启语音文件名（空 = 默认启动音）。</summary>
+    /// <summary>总开关开启语音文件名（空 = 主题配套默认启动音）。</summary>
     public string? Start { get; set; }
 
-    /// <summary>总开关关闭语音文件名（空 = 默认关闭音）。</summary>
+    /// <summary>总开关关闭语音文件名（空 = 主题配套默认关闭音）。</summary>
     public string? Stop { get; set; }
 
-    /// <summary>切换方案语音文件名（空 = 默认切换音）。</summary>
+    /// <summary>切换方案语音文件名（空 = 主题配套默认切换音）。</summary>
     public string? Cycle { get; set; }
 
     /// <summary>创建当前实例的副本。</summary>
@@ -286,8 +287,9 @@ public sealed class AppConfig
     /// v4：方案三档位 ①②③ + 当前档位；v5：键位可视化开关表；v6：连发时序增加按压时长；
     /// v7：状态提醒开关；v8：状态提醒默认激活；v9：切换方案热键；v10：成为衍天高手语音按钮；
     /// v11：注释区公告内容缓存；v12：键帽透明度；v13：自定义提示音；v14：门派主题 + 莫问公告缓存；
-    /// v15：方案档位自定义名称；v16：方案档位外观定制（主题绑定 + 默认主题自定义，取代全局门派主题））。</summary>
-    public const int CurrentVersion = 16;
+    /// v15：方案档位自定义名称；v16：方案档位外观定制（主题绑定 + 默认主题自定义，取代全局门派主题）；
+    /// v17：主题语音方案（提示音按主题绑定，随主题切换；取代全局 CustomSounds））。</summary>
+    public const int CurrentVersion = 17;
 
     /// <summary>配置文件版本号（预留迁移能力）。</summary>
     public int Version { get; set; } = CurrentVersion;
@@ -399,8 +401,26 @@ public sealed class AppConfig
     /// <summary>切换方案热键配置（按下按顺序切换非空方案档位；与全局开关键、连发方案互斥）。</summary>
     public ProfileCycleConfig ProfileCycle { get; set; } = new();
 
-    /// <summary>自定义提示音（全局开关开启 / 关闭 / 方案切换；缺省 = 内嵌默认音频）。</summary>
+    /// <summary>
+    /// 自定义提示音（v13~v16 的全局选择）。v17 起语音方案按主题存储于 <see cref="ThemeSounds"/>，
+    /// 本字段运行期不再读取，保留仅为旧版程序读档兼容（降级场景仍可用）。
+    /// </summary>
     public CustomSoundConfig CustomSounds { get; set; } = new();
+
+    /// <summary>
+    /// 各主题的语音方案（下标 = 主题下标 0/1/2 ↔ 默认主题 / 衍天高手 / 莫问高手；
+    /// 项内空名 = 该主题的配套默认音频，见 SectThemes.CueFiles）。
+    /// 切换方案档位 → 主题 → 语音方案整套随动；语音设置对话框按主题独立设置。
+    /// </summary>
+    public List<CustomSoundConfig> ThemeSounds { get; set; } = [new(), new(), new()];
+
+    /// <summary>主题语音方案归一化：补齐 / 截断到主题数（加载与导入配置后调用）。</summary>
+    public void NormalizeThemeSounds()
+    {
+        while (ThemeSounds.Count < SectThemes.All.Length) ThemeSounds.Add(new CustomSoundConfig());
+        if (ThemeSounds.Count > SectThemes.All.Length)
+            ThemeSounds.RemoveRange(SectThemes.All.Length, ThemeSounds.Count - SectThemes.All.Length);
+    }
 
     /// <summary>全局开关提示语音音量（0~100，默认 70）。</summary>
     public double SoundVolume { get; set; } = Constants.DefaultSoundVolume;
@@ -452,6 +472,7 @@ public sealed class AppConfig
         GlobalSwitch = GlobalSwitch.Clone(),
         ProfileCycle = ProfileCycle.Clone(),
         CustomSounds = CustomSounds.Clone(),
+        ThemeSounds = ThemeSounds.Select(t => t.Clone()).ToList(),
         SoundVolume = SoundVolume,
         UseScanCodes = UseScanCodes,
         KeyboardMode = KeyboardMode,

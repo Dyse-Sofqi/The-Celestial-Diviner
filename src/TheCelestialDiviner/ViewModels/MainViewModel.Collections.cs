@@ -915,8 +915,7 @@ public sealed partial class MainViewModel
                 : "未设置";
             OnPropertyChanged(nameof(ProfileCycleSource));
             SoundVolume = Compat.Clamp(imported.SoundVolume, 0, 100);
-            // 自定义提示音随导入配置还原（文件缺失自动回退默认并留痕）。
-            _soundCue.ApplyCustom(imported.CustomSounds);
+            // 主题语音方案随导入配置还原（ApplyAppearance 已按当前档位主题整套装载，文件缺失留痕）。
             // 键盘注入模式随配置同步（导入 / 导出；旧配置回退 UseScanCodes 语义）。
             var mode = imported.KeyboardMode is >= 0 and <= 3
                 ? imported.KeyboardMode

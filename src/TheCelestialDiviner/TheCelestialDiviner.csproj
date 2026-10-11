@@ -17,8 +17,8 @@
     <!-- 管理员权限 + PerMonitorV2 DPI 声明 -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Resources\app.ico</ApplicationIcon>
-    <Version>1.7.8</Version>
-    <FileVersion>1.7.8.0</FileVersion>
+    <Version>1.7.9</Version>
+    <FileVersion>1.7.9.0</FileVersion>
     <AssemblyTitle>衍天高手</AssemblyTitle>
     <Product>衍天高手 (The Celestial Diviner)</Product>
     <Description>键盘 / 鼠标连发工具（全局钩子 + SendInput，.NET Framework 4.8）</Description>
@@ -46,9 +46,13 @@
   </ItemGroup>
 
   <!-- 全局开关提示语音（内嵌资源，SoundCueService 播放）：
-       启动 / 停止 / 衍天高手启动（“成为衍天高手”激活时替代启动音） -->
+       衍天高手启动（“成为衍天高手”激活时替代启动音）/
+       莫问糕手启动（莫问高手主题下“成为莫问高手”激活时替代启动音）。
+       注意：开启 / 关闭 / 切换三段基础提示音已从程序分离（散装随发布包 audio/ 分发，
+       按主题配套选用，见 SectThemes.CueFiles）——不再内嵌。 -->
   <ItemGroup>
-    <Resource Include="Resources\Sounds\*.mp3" />
+    <Resource Include="Resources\Sounds\DivinerStartVoice.mp3" />
+    <Resource Include="Resources\Sounds\MoWenDivinerStartVoice.wav" />
   </ItemGroup>
 
   <!-- 注释区公告（仓库根目录 Notice.md）：内嵌为兜底默认内容，

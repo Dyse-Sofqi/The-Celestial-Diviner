@@ -2,20 +2,24 @@ using System.Collections.Generic;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using TheCelestialDiviner.Helpers;
 using TheCelestialDiviner.Services;
 using TheCelestialDiviner.ViewModels;
 
 namespace TheCelestialDiviner.Views;
 
 /// <summary>
-/// 语音设置模态框：为总开关开启 / 关闭与方案切换三种提示音选择音频
-/// （下拉列表 = 内嵌默认 + 程序目录里的候选音频 + 当前已导入的自定义音频；
-/// 也可用「导入…」从任意位置选择文件）——选择即复制到语音目录并立即生效，
-/// 支持试听与重置回内嵌默认音频。
+/// 语音设置模态框：按主题独立设置语音方案（顶部主题选择器 → 该主题的开启 / 关闭 / 方案切换三行）。
+/// 下拉列表 = 该主题的配套默认音频（高松灯 / 墨提斯）+ 程序目录候选音频 + 已导入的自定义音频；
+/// 也可用「导入…」从任意位置选择文件——选择即复制到语音目录：编辑当前主题立即生效，
+/// 编辑其他主题在切换到该主题时生效。支持试听（独立播放器，任意主题可试听）与重置回主题配套默认。
 /// </summary>
 public partial class VoiceSettingsWindow : Window
 {
     private readonly MainViewModel _vm;
+
+    /// <summary>正在编辑的主题下标（0/1/2 ↔ 默认主题 / 衍天高手 / 莫问高手；默认 = 当前激活主题）。</summary>
+    private int _editThemeIndex;
 
     /// <summary>下拉项类型：默认音频 / 程序目录候选音频 / 已导入的自定义音频。</summary>
     private enum CueOptionKind
@@ -42,6 +46,15 @@ public partial class VoiceSettingsWindow : Window
     {
         InitializeComponent();
         _vm = vm;
+        _editThemeIndex = SectThemes.IndexOf(vm.CurrentLook.Theme);
+        ThemePicker.ItemsSource = SectThemes.All.Select(t => t.DisplayName).ToList();
+        ThemePicker.SelectionChanged += (_, _) =>
+        {
+            if (ThemePicker.SelectedIndex < 0) return;
+            _editThemeIndex = ThemePicker.SelectedIndex;
+            foreach (var cue in _rows.Keys) RefreshRow(cue);
+        };
+        ThemePicker.SelectedIndex = _editThemeIndex;   // 回调时 _rows 尚为空，无副作用
         AddRow(SoundCue.Start, "开启语音");
         AddRow(SoundCue.Stop, "关闭语音");
         AddRow(SoundCue.Cycle, "方案切换语音");
@@ -75,8 +88,9 @@ public partial class VoiceSettingsWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(10, 0, 10, 0),
             Style = (Style)Application.Current.Resources["RoundedComboStyle"],
-            ToolTip = "可选音频：内嵌默认音频、程序目录里的候选音频（把音频文件放到程序目录即可出现）、"
-                      + "以及已导入的自定义音频；选择即生效并复制到语音目录",
+            ToolTip = "可选音频：该主题的配套默认音频（随主题：高松灯 / 墨提斯）、程序目录里的候选音频"
+                      + "（把音频文件放到程序目录即可出现）、以及已导入的自定义音频；选择即复制到语音目录"
+                      + "（当前主题立即生效，其他主题在切换到该主题时生效）",
         };
         picker.SelectionChanged += (_, _) => OnPick(cue);
         Grid.SetColumn(picker, 1);
@@ -90,7 +104,7 @@ public partial class VoiceSettingsWindow : Window
         var import = MakeButton("导入");
         import.Click += (_, _) => OnImport(cue);
         var preview = MakeButton("试听");
-        preview.Click += (_, _) => _vm.PreviewVoiceCue(cue);
+        preview.Click += (_, _) => _vm.PreviewThemeVoice(_editThemeIndex, cue);
         var reset = MakeButton("重置");
         reset.Click += (_, _) => OnReset(cue);
         buttons.Children.Add(import);
@@ -123,7 +137,7 @@ public partial class VoiceSettingsWindow : Window
         };
         if (dlg.ShowDialog(this) != true) return;
 
-        var error = _vm.ImportVoiceCue(cue, dlg.FileName);
+        var error = _vm.ImportThemeVoice(_editThemeIndex, cue, dlg.FileName);
         if (error is not null)
         {
             MessageBox.Show(this, $"导入失败：{error}", "语音设置",
@@ -133,23 +147,24 @@ public partial class VoiceSettingsWindow : Window
         RefreshRow(cue);
     }
 
-    /// <summary>重置：删除自定义音频并恢复默认（未设置时按钮禁用）。</summary>
+    /// <summary>重置：删除自定义音频并恢复该主题的配套默认（未设置时按钮禁用）。</summary>
     private void OnReset(SoundCue cue)
     {
-        if (!_vm.HasCustomVoice(cue)) return;
-        _vm.ResetVoiceCue(cue);
+        if (!_vm.HasThemeVoice(_editThemeIndex, cue)) return;
+        _vm.ResetThemeVoice(_editThemeIndex, cue);
         RefreshRow(cue);
     }
 
-    /// <summary>刷新某行的下拉列表（默认音频 + 程序目录候选 + 当前自定义）与重置按钮可用态。
-    /// 显示名一律精简：去路径、去扩展名、去用途前缀（改用途前缀匹配仍用完整文件名）。</summary>
+    /// <summary>刷新某行的下拉列表（主题配套默认 + 程序目录候选 + 当前自定义）与重置按钮可用态。
+    /// 显示名一律精简：去路径、去扩展名、去用途前缀（改用途前缀匹配仍用完整文件名）；
+    /// “默认音频”项随所编辑主题标注配套来源（高松灯 / 墨提斯）。</summary>
     private void RefreshRow(SoundCue cue)
     {
         if (!_rows.TryGetValue(cue, out var row)) return;
-        var stored = _vm.HasCustomVoice(cue) ? _vm.VoiceCueDisplayName(cue) : "";
+        var stored = _vm.HasThemeVoice(_editThemeIndex, cue) ? _vm.ThemeVoiceStoredName(_editThemeIndex, cue) : "";
         var original = SoundCueService.OriginalFileName(cue, stored);   // "{前缀}_原文件名" → 原文件名
 
-        var options = new List<CueOption> { new("默认音频", CueOptionKind.Default) };
+        var options = new List<CueOption> { new(_vm.VoiceDefaultLabel(_editThemeIndex, cue), CueOptionKind.Default) };
         var selected = 0;
         foreach (var path in SoundCueService.ScanCandidates())
         {
@@ -177,12 +192,13 @@ public partial class VoiceSettingsWindow : Window
         {
             _refreshing = false;
         }
-        row.Reset.IsEnabled = _vm.HasCustomVoice(cue);
+        row.Reset.IsEnabled = _vm.HasThemeVoice(_editThemeIndex, cue);
     }
 
     /// <summary>
-    /// 下拉选择：默认项 → 重置回内嵌音频；候选音频 → 与「导入…」同效（复制到语音目录并热应用）；
-    /// 「已导入」项 → 已是当前音频，不做动作。失败（文件被占用等）弹提示并回到刷新后的选中态。
+    /// 下拉选择：默认项 → 重置回该主题的配套默认音频；候选音频 → 与「导入…」同效（复制到语音目录，
+    /// 编辑当前主题时热应用）；「已导入」项 → 已是当前音频，不做动作。失败（文件被占用等）
+    /// 弹提示并回到刷新后的选中态。
     /// </summary>
     private void OnPick(SoundCue cue)
     {
@@ -193,12 +209,12 @@ public partial class VoiceSettingsWindow : Window
         switch (option.Kind)
         {
             case CueOptionKind.Default:
-                if (!_vm.HasCustomVoice(cue)) return;
-                _vm.ResetVoiceCue(cue);
+                if (!_vm.HasThemeVoice(_editThemeIndex, cue)) return;
+                _vm.ResetThemeVoice(_editThemeIndex, cue);
                 break;
 
             case CueOptionKind.Candidate:
-                var error = _vm.ImportVoiceCue(cue, option.CandidatePath!);
+                var error = _vm.ImportThemeVoice(_editThemeIndex, cue, option.CandidatePath!);
                 if (error is not null)
                     MessageBox.Show(this, $"选择失败：{error}", "语音设置",
                         MessageBoxButton.OK, MessageBoxImage.Warning);

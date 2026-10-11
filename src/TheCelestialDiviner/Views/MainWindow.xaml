@@ -802,11 +802,12 @@
                     <Button x:Name="AdjustVisualizerButton" Content="调整可视化位置" Style="{StaticResource IconButtonStyle}"
                             Height="26" Padding="8,0" Command="{Binding AdjustVisualizerCommand}"
                             MouseEnter="OnBottomBarCommentEnter" MouseLeave="OnCommentMouseLeave"/>
-                    <!-- 成为衍天高手：激活时总开关启动的语音播报改为「衍天高手启动」（关闭播报不变）。
+                    <!-- 成为衍天/莫问高手：文案随当前档位主题（DivinerVoiceButtonText，莫问主题 = 「成为莫问高手」）；
+                         激活时总开关启动的语音播报改为对应主题的启动音（衍天高手启动 / 莫问糕手启动），关闭播报不变。
                          激活态墨迹金色（AccentGold），未激活常规文字色（ThemeFg）——均为主题资源，
                          日间 / 夜间模式自动适配。原悬浮 Tooltip 文案移入左下注释区
                          （OnBottomBarCommentEnter → BottomBarComments） -->
-                    <Button x:Name="DivinerVoiceButton" Content="成为衍天高手" Height="26" Padding="8,0" Margin="8,0,0,0"
+                    <Button x:Name="DivinerVoiceButton" Content="{Binding DivinerVoiceButtonText}" Height="26" Padding="8,0" Margin="8,0,0,0"
                             Command="{Binding ToggleDivinerVoiceCommand}"
                             MouseEnter="OnBottomBarCommentEnter" MouseLeave="OnCommentMouseLeave">
                         <Button.Style>

@@ -20,42 +20,47 @@ public enum SoundCue
 }
 
 /// <summary>
-/// 提示语音服务：播放内嵌 MP3（总开关开启 = 启动 / 衍天高手启动，关闭 = 停止，
-/// 切换方案热键触发 = 切换），并支持把上述三种语音替换为用户导入的自定义音频。
+/// 提示语音服务：播放各主题配套的基础提示音（开启 / 关闭 / 切换，散装音频随发布包分发，
+/// 见 SectThemes.CueFiles：默认主题与衍天高手 = 高松灯、莫问高手 = 墨提斯），
+/// 以及内嵌的主题启动变体（衍天高手启动 / 莫问糕手启动，“成为衍天/莫问高手”激活时替代启动音）。
+/// 解析优先级：主题自定义（语音设置按主题选择，存于配置 ThemeSounds）> 主题配套音频 >
+/// 静音（配套文件缺失留痕——基础提示音已从程序分离，不再内嵌）；启动变体不可自定义，恒为内嵌资源。
 /// WPF MediaPlayer 的媒体管线不解析 pack://application 资源 URI——Open 会静默失败
-/// （HasAudio=false、不触发异常、Play 无声），故启动时把内嵌 MP3 解包到临时目录，
-/// 以文件 URI 播放；自定义音频在导入时已复制到语音目录，直接从该目录播放。
+/// （HasAudio=false、不触发异常、Play 无声），故内嵌资源解包到临时目录以文件 URI 播放；
+/// 主题配套与自定义音频均为磁盘文件，直接以文件 URI 播放。
 /// 音量（0.0~1.0）在每次播放前应用，Play 异步非阻塞。
 /// </summary>
 public sealed class SoundCueService
 {
-    private static readonly Uri StartCueUri =
-        new("pack://application:,,,/Resources/Sounds/StartVoice.mp3");
-
-    private static readonly Uri StopCueUri =
-        new("pack://application:,,,/Resources/Sounds/StopVoice.mp3");
-
     private static readonly Uri DivinerStartCueUri =
         new("pack://application:,,,/Resources/Sounds/DivinerStartVoice.mp3");
 
-    private static readonly Uri CycleCueUri =
-        new("pack://application:,,,/Resources/Sounds/CycleVoice.mp3");
+    private static readonly Uri MoWenDivinerStartCueUri =
+        new("pack://application:,,,/Resources/Sounds/MoWenDivinerStartVoice.wav");
 
     private readonly MediaPlayer _startPlayer = new();
     private readonly MediaPlayer _stopPlayer = new();
     private readonly MediaPlayer _divinerStartPlayer = new();
+    private readonly MediaPlayer _mowenDivinerStartPlayer = new();
     private readonly MediaPlayer _cyclePlayer = new();
+    private readonly MediaPlayer _previewPlayer = new();   // 试听专用（可播当前主题之外的主题方案音频）
 
-    // 内嵌默认音频（解包到临时目录后的文件 URI）。
-    private Uri? _defaultStart;
-    private Uri? _defaultStop;
+    // 主题启动变体（内嵌资源解包到临时目录后的文件 URI；不可自定义，恒为内嵌）。
     private Uri? _defaultDivinerStart;
-    private Uri? _defaultCycle;
+    private Uri? _defaultMowenDivinerStart;
 
-    // 自定义音频（语音目录下的文件 URI；null = 未设置 / 文件缺失，回退默认）。
+    // 当前主题的自定义音频（语音目录下的文件 URI；null = 未设置 / 文件缺失，回退主题配套音频）。
     private Uri? _customStart;
     private Uri? _customStop;
     private Uri? _customCycle;
+
+    // 当前主题的配套音频（程序目录文件 URI；null = 配套文件缺失，留痕后静音）。
+    private Uri? _themeStart;
+    private Uri? _themeStop;
+    private Uri? _themeCycle;
+
+    // 当前主题是否莫问高手（启动音变体选择：莫问主题播「莫问糕手启动」，其余播「衍天高手启动」）。
+    private bool _moWenActive;
 
     private double _volume = Constants.DefaultSoundVolume / 100.0;
 
@@ -109,43 +114,86 @@ public sealed class SoundCueService
             Logger.Error("停止提示音加载失败。", e.ErrorException);
         _divinerStartPlayer.MediaFailed += (_, e) =>
             Logger.Error("衍天高手启动提示音加载失败。", e.ErrorException);
+        _mowenDivinerStartPlayer.MediaFailed += (_, e) =>
+            Logger.Error("莫问糕手启动提示音加载失败。", e.ErrorException);
         _cyclePlayer.MediaFailed += (_, e) =>
             Logger.Error("切换提示音加载失败。", e.ErrorException);
+        _previewPlayer.MediaFailed += (_, e) =>
+            Logger.Error("试听音频加载失败。", e.ErrorException);
 
         try
         {
             var dir = Path.Combine(Path.GetTempPath(), Constants.AppFolderName);
             Directory.CreateDirectory(dir);
-            _defaultStart = ExtractToTemp(StartCueUri, dir, "StartVoice.mp3");
-            _defaultStop = ExtractToTemp(StopCueUri, dir, "StopVoice.mp3");
             _defaultDivinerStart = ExtractToTemp(DivinerStartCueUri, dir, "DivinerStartVoice.mp3");
-            _defaultCycle = ExtractToTemp(CycleCueUri, dir, "CycleVoice.mp3");
+            _defaultMowenDivinerStart = ExtractToTemp(MoWenDivinerStartCueUri, dir, "MoWenDivinerStartVoice.wav");
         }
         catch (Exception ex)
         {
-            Logger.Error("提示语音资源加载失败（开关切换将静音）。", ex);
+            Logger.Error("启动变体提示音资源加载失败。", ex);
         }
 
-        Reload(_startPlayer, _defaultStart);
-        Reload(_stopPlayer, _defaultStop);
-        Reload(_divinerStartPlayer, _defaultDivinerStart);
-        Reload(_cyclePlayer, _defaultCycle);
+        ReloadAll();
     }
 
     /// <summary>
-    /// 应用自定义语音配置（null / 空项 = 内嵌默认音频；文件缺失时静默回退默认并留痕）。
-    /// 启动加载、导入配置、导入 / 重置单个语音后调用；重复调用安全。
+    /// 应用主题语音方案：解析该主题的自定义选择（配置 ThemeSounds 对应项，按主题独立）
+    /// 与主题配套音频（SectThemes.CueFiles：高松灯 / 墨提斯，散装于程序目录）并整套装载。
+    /// 切换方案档位 / 方案定制 / 导入配置（ApplyAppearance）与语音设置修改（编辑当前主题时）调用
+    /// ——语音方案随主题整套切换。配套文件缺失时该用途静音并留痕（基础提示音已不内嵌）。
     /// </summary>
-    public void ApplyCustom(CustomSoundConfig? config)
+    public void ApplyTheme(SectTheme theme, CustomSoundConfig? custom)
     {
-        _customStart = ResolveCustom(config?.Start);
-        _customStop = ResolveCustom(config?.Stop);
-        _customCycle = ResolveCustom(config?.Cycle);
+        _moWenActive = ReferenceEquals(theme, SectThemes.MoWen);
+        _customStart = ResolveCustom(custom?.Start);
+        _customStop = ResolveCustom(custom?.Stop);
+        _customCycle = ResolveCustom(custom?.Cycle);
+        var (start, stop, cycle) = SectThemes.CueFiles(theme);
+        _themeStart = ResolveThemeFile(start);
+        _themeStop = ResolveThemeFile(stop);
+        _themeCycle = ResolveThemeFile(cycle);
+        ReloadAll();
+    }
 
-        Reload(_startPlayer, _customStart ?? _defaultStart);
-        Reload(_stopPlayer, _customStop ?? _defaultStop);
-        Reload(_cyclePlayer, _customCycle ?? _defaultCycle);
-        Reload(_divinerStartPlayer, _defaultDivinerStart);   // 衍天高手启动音不可自定义，恒为默认
+    /// <summary>主题配套候选文件名 → 程序目录文件 URI（缺失返回 null 并留痕）。</summary>
+    private static Uri? ResolveThemeFile(string fileName)
+    {
+        var path = FindCandidate(fileName);
+        if (path is null)
+        {
+            Logger.Warn($"主题配套提示音缺失，该用途将静音：{fileName}（随发布包 audio/ 分发）");
+            return null;
+        }
+        return new Uri(path);
+    }
+
+    /// <summary>按文件名在程序目录（exe 同级 + audio 子目录）查找候选音频（大小写不敏感）；缺失返回 null。</summary>
+    public static string? FindCandidate(string fileName)
+    {
+        foreach (var dir in new[] { AppDir, Path.Combine(AppDir, "audio") })
+        {
+            try
+            {
+                var path = Path.Combine(dir, fileName);
+                if (File.Exists(path)) return path;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"主题配套提示音查找失败（{dir}）：{ex.Message}");
+            }
+        }
+        return null;
+    }
+
+    /// <summary>按当前优先级重装全部播放器：主题自定义 > 主题配套音频（文件缺失静音）；
+    /// 衍天 / 莫问启动变体不可自定义，恒为内嵌资源。</summary>
+    private void ReloadAll()
+    {
+        Reload(_startPlayer, _customStart ?? _themeStart);
+        Reload(_stopPlayer, _customStop ?? _themeStop);
+        Reload(_cyclePlayer, _customCycle ?? _themeCycle);
+        Reload(_divinerStartPlayer, _defaultDivinerStart);
+        Reload(_mowenDivinerStartPlayer, _defaultMowenDivinerStart);
     }
 
     /// <summary>自定义文件名 → 文件 URI（空 / 文件缺失返回 null 并留痕）。</summary>
@@ -174,7 +222,7 @@ public sealed class SoundCueService
     }
 
     /// <summary>
-    /// 释放某个语音的媒体源占用（导入覆盖 / 删除文件前调用；随后 ApplyCustom 会重新装载）。
+    /// 释放某个语音的媒体源占用（导入覆盖 / 删除文件前调用；随后 ApplyTheme 会重新装载）。
     /// 不释放时 MediaPlayer 持有文件句柄，覆盖 / 删除自定义音频会失败。
     /// </summary>
     public void UnloadCue(SoundCue cue)
@@ -250,9 +298,12 @@ public sealed class SoundCueService
         set => _volume = Compat.Clamp(value, 0.0, 1.0);
     }
 
-    /// <summary>播放“启动”提示音（总开关开启时）。自定义开启音优先；否则 diviner = “成为衍天高手”启动音。</summary>
+    /// <summary>播放“启动”提示音（总开关开启时）。自定义开启音优先；否则按激活与主题选变体：
+    /// diviner（成为衍天/莫问高手激活）→ 莫问主题播「莫问糕手启动」、其余播「衍天高手启动」；普通态播「启动」。</summary>
     public void PlayStart(bool diviner = false) =>
-        Play(diviner && _customStart is null ? _divinerStartPlayer : _startPlayer);
+        Play(diviner && _customStart is null
+            ? (_moWenActive ? _mowenDivinerStartPlayer : _divinerStartPlayer)
+            : _startPlayer);
 
     /// <summary>播放“停止”提示音（总开关停用时）。</summary>
     public void PlayStop() => Play(_stopPlayer);
@@ -260,13 +311,14 @@ public sealed class SoundCueService
     /// <summary>播放“切换”提示音（切换方案热键触发并实际切换档位时；独立播放器，可与开关语音叠加）。</summary>
     public void PlayCycle() => Play(_cyclePlayer);
 
-    /// <summary>试听指定语音（语音设置对话框用；开启语音试听“启动”音，非衍天高手变体）。</summary>
-    public void PreviewCue(SoundCue cue) => Play(cue switch
+    /// <summary>试听指定音频文件（语音设置对话框用；经独立播放器，可试听当前主题之外的主题方案）。
+    /// 路径为空 / 文件缺失时静默忽略。</summary>
+    public void PreviewFile(string? path)
     {
-        SoundCue.Start => _startPlayer,
-        SoundCue.Stop => _stopPlayer,
-        _ => _cyclePlayer,
-    });
+        if (path is null || !File.Exists(path)) return;
+        Reload(_previewPlayer, new Uri(path));
+        Play(_previewPlayer);
+    }
 
     /// <summary>
     /// 导入自定义语音：复制到语音目录并清理该用途的其他旧文件，返回存储文件名。

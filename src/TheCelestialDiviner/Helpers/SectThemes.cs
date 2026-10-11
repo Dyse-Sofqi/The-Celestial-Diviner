@@ -109,6 +109,14 @@ public static class SectThemes
     /// <summary>全部主题（下标即持久化值；0 = 默认主题）。</summary>
     public static readonly SectTheme[] All = [Default, Diviner, MoWen];
 
+    /// <summary>主题配套的语音方案文件名（程序目录候选音频，随发布包 audio/ 分发）：
+    /// 默认主题与衍天高手 = 「高松灯」三段（原内嵌默认音频分离而来），莫问高手 = 「墨提斯」三段。
+    /// 启动 / 停止 / 切换随主题整套切换；用户在语音设置中按主题选择的自定义音频优先于配套默认。</summary>
+    public static (string Start, string Stop, string Cycle) CueFiles(SectTheme theme) =>
+        ReferenceEquals(theme, MoWen)
+            ? ("墨提斯，启动！.wav", "墨提斯，停止！.wav", "墨提斯，切换！.wav")
+            : ("高松灯启动.mp3", "高松灯停止.mp3", "高松灯切换.mp3");
+
     /// <summary>按下标取主题（越界回退默认主题）。</summary>
     public static SectTheme ByIndex(int index) =>
         index >= 0 && index < All.Length ? All[index] : Default;
