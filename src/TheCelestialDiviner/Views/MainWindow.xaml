@@ -767,9 +767,19 @@
                                   MouseEnter="OnMenuCommentEnter" MouseLeave="OnMenuCommentLeave"/>
                         <!-- 检查更新（动作项，Tag = action 折叠 ● 占位列 → 与上方分组项 14px 文本起点左对齐）：
                              查询 Gitee Release，发现新版本经确认后下载安装自动重启；
-                             检查 / 下载期间禁用并显示“检查中…”；悬停说明走注释区（MenuComments） -->
-                        <MenuItem Header="检查更新" Tag="action" Command="{Binding CheckUpdateCommand}"
+                             启动后台预检发现新版本时文本右上角亮小红点提醒（UpdateDotVisibility），
+                             手动检查确认已是最新后熄灭；检查 / 下载期间禁用并显示“检查中…”
+                             （DataTrigger 整体替换 Header，红点随 Grid 一起消失）；悬停说明走注释区（MenuComments） -->
+                        <MenuItem Tag="action" Command="{Binding CheckUpdateCommand}"
                                   MouseEnter="OnMenuCommentEnter" MouseLeave="OnMenuCommentLeave">
+                            <MenuItem.Header>
+                                <Grid>
+                                    <TextBlock Text="检查更新" Margin="0,0,9,0"/>
+                                    <Ellipse Width="6" Height="6" HorizontalAlignment="Right" VerticalAlignment="Top"
+                                             Margin="0,0,2,0" Fill="#E5484D"
+                                             Visibility="{Binding UpdateDotVisibility}"/>
+                                </Grid>
+                            </MenuItem.Header>
                             <MenuItem.Style>
                                 <Style TargetType="MenuItem" BasedOn="{StaticResource MenuSubStyle}">
                                     <Style.Triggers>
@@ -1046,7 +1056,7 @@
                                          Tag="0" IsChecked="True" Checked="OnTimingPresetChecked"
                                          Style="{StaticResource ModeTabStyle}"
                                          MouseEnter="OnSectionTabMouseEnter" MouseLeave="OnSectionTabMouseLeave"
-                                         ToolTip="按压 26ms / 间隔 26ms（各自独立抖动 ±20%）：40~100 帧全区间零丢失，约 19 发/秒。仅作为之后添加连发键的默认值，已有方案不变。"/>
+                                         ToolTip="按压 26ms / 间隔 26ms：40~100 帧全区间零丢失，约 19 发/秒。仅作为之后添加连发键的默认值，已有方案不变。"/>
                             <RadioButton x:Name="TimingExtremeRadio" Grid.Column="1" GroupName="TimingPreset" Content="极限档 11ms"
                                          Tag="1" Checked="OnTimingPresetChecked"
                                          Style="{StaticResource ModeTabStyle}"
@@ -1112,7 +1122,7 @@
                         <TextBlock Grid.Column="2" Grid.ColumnSpan="4" Text="按压+间隔" TextAlignment="Center"
                                    VerticalAlignment="Center" FontSize="11" Opacity="0.6"
                                    Foreground="{DynamicResource ThemeFg}"
-                                   ToolTip="按压 = 按下到弹起；间隔 = 弹起到下次按下；周期 = 按压 + 间隔，各自随机抖动 ±20%"/>
+                                   ToolTip="按压 = 按下到弹起；间隔 = 弹起到下次按下；周期 = 按压 + 间隔"/>
                         <!-- 可视化总开关（eye / eye-off；关闭时全部键位暂停显示） -->
                         <Button Grid.Column="6" Width="22" Height="20" Padding="0" Margin="0,0,4,0"
                                 HorizontalAlignment="Left"

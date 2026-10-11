@@ -616,6 +616,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         // 公告更新检查：后台查询 Gitee，成功且内容有变化才覆盖注释区默认内容（失败保持旧内容）。
         _ = CheckNoticeUpdateAsync();
 
+        // 更新预检：后台查询 Gitee Release，发现新版本点亮「检查更新」小红点（失败静默）。
+        _ = CheckUpdateDotAsync();
+
         // DD 驱动缺失引导：窗口可见后弹出确认（用户发起官方渠道下载，程序仅做下载器）。
         if (_ddAutoActivate && !DdDriverService.IsAutoFetchRunning)
             RequestDdDriverFetch();
@@ -930,6 +933,16 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         private set => Set(ref _checkingUpdate, value);
     }
 
+    private Visibility _updateDotVisibility;
+
+    /// <summary>「检查更新」菜单项的小红点可见性：启动后台预检发现新版本时亮起，
+    /// 手动检查确认已是最新后熄灭（更新安装重启后远端 = 当前，自然不再亮）。</summary>
+    public Visibility UpdateDotVisibility
+    {
+        get => _updateDotVisibility;
+        private set => Set(ref _updateDotVisibility, value);
+    }
+
     /// <summary>更新确认弹窗请求（View 弹 Yes/No 框列出远端版本与说明，返回是否继续）。</summary>
     public event Func<UpdateCheck, bool>? UpdateConfirmRequested;
 
@@ -962,12 +975,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             if (check.Version <= UpdateService.CurrentVersion)
             {
                 AddLog($"检查更新：已是最新版本（远端 {check.TagName}）。");
+                UpdateDotVisibility = Visibility.Collapsed;   // 确认无更新：熄灭小红点
                 UpdateMessageRequested?.Invoke("检查更新",
                     $"当前已是最新版本 v{UpdateService.CurrentVersion.ToString(3)}。");
                 return;
             }
 
-            // 有新版本 → 弹框确认（View 列出远端版本与发布说明）。
+            // 有新版本 → 保持 / 点亮小红点（用户取消安装时仍提醒待更新），弹框确认。
+            UpdateDotVisibility = Visibility.Visible;
             AddLog($"发现新版本 {check.TagName}。");
             if (UpdateConfirmRequested?.Invoke(check) != true)
             {
@@ -990,6 +1005,28 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         finally
         {
             CheckingUpdate = false;   // 重启路径下进程即将退出，复位无实际影响
+        }
+    }
+
+    /// <summary>
+    /// 启动后台更新预检（不打扰用户，不弹窗）：发现 Gitee 有比当前更新的 Release 时
+    /// 点亮「选项 → 检查更新」的小红点提醒；无更新 / 网络不可用一律静默跳过。
+    /// </summary>
+    private async Task CheckUpdateDotAsync()
+    {
+        try
+        {
+            var check = await UpdateService.FetchLatestAsync();
+            if (check is { } c && c.Version > UpdateService.CurrentVersion)
+            {
+                UpdateDotVisibility = Visibility.Visible;
+                AddLog($"发现新版本 {c.TagName}：「选项 → 检查更新」已亮红点提醒。");
+            }
+        }
+        catch (Exception ex)
+        {
+            // 双保险静默（FetchLatestAsync 内部已兜底）：启动预检任何失败不得影响主流程。
+            Logger.Info($"启动更新预检失败（不影响使用）：{ex.Message}");
         }
     }
 
