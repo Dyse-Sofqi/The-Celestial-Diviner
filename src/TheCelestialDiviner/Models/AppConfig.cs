@@ -135,14 +135,14 @@ public sealed class TargetKeyConfig
     public TriggerMode Mode { get; set; } = TriggerMode.Toggle;
 
     /// <summary>
-    /// 按压时长（毫秒，10~100，默认 26）：按下到弹起的持续时间。
+    /// 按压时长（毫秒，5~100，默认 26）：按下到弹起的持续时间。
     /// 逐帧轮询输入的游戏每帧采样一次，按压须 ≥ 帧窗口（40fps ≈ 25ms）才能保证
-    /// 按下状态必被采样到；实际注入时逐发独立抖动 ±20%。
+    /// 按下状态必被采样到；低于帧窗口的短按压可能整帧丢失，由使用方按场景取舍。
     /// </summary>
     public int HoldMs { get; set; } = Constants.DefaultHoldMs;
 
-    /// <summary>连发间隔（毫秒，10~90000，默认 26）：弹起到下一次按下的间隔；
-    /// 连发周期 = 按压时长 + 间隔，实际注入时逐发独立抖动 ±20%。</summary>
+    /// <summary>连发间隔（毫秒，5~90000，默认 26）：弹起到下一次按下的间隔；
+    /// 连发周期 = 按压时长 + 间隔。</summary>
     public int IntervalMs { get; set; } = Constants.DefaultIntervalMs;
 
     /// <summary>实验功能：连发时附带 Ctrl（注入修饰按下 → 目标 → 修饰抬起）。</summary>
@@ -417,10 +417,10 @@ public sealed class AppConfig
     /// </summary>
     public int KeyboardMode { get; set; } = DefaultKeyboardMode;
 
-    /// <summary>方案面板默认连发间隔（毫秒，添加连发键时录入该值），10~90000。</summary>
+    /// <summary>方案面板默认连发间隔（毫秒，添加连发键时录入该值），5~90000。</summary>
     public int DefaultIntervalMs { get; set; } = Constants.DefaultIntervalMs;
 
-    /// <summary>方案面板默认按压时长（毫秒，添加连发键时录入该值），10~100。</summary>
+    /// <summary>方案面板默认按压时长（毫秒，添加连发键时录入该值），5~100。</summary>
     public int DefaultHoldMs { get; set; } = Constants.DefaultHoldMs;
 
     /// <summary>连发时序档位：0 = 常规（26/26，40~100 帧零丢失）、1 = 极限（11/11，帧率 ≥90

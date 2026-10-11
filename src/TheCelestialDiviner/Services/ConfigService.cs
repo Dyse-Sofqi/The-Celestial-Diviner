@@ -121,8 +121,8 @@ public sealed class ConfigService
     }
 
     /// <summary>
-    /// 连发时序归一化：间隔低于下限（10ms）提升到下限；按压时长缺失 / 非法（≤0，
-    /// 旧版配置无此字段）落到默认值，其余钳位到 10~100。
+    /// 连发时序归一化：间隔低于下限（5ms）提升到下限；按压时长缺失 / 非法（≤0，
+    /// 旧版配置无此字段）落到默认值，其余钳位到 5~100。
     /// 加载与导入配置后调用。
     /// </summary>
     public static void NormalizeTiming(AppConfig config)

@@ -12,7 +12,7 @@ public static class Constants
     /// <summary>配置备份文件名（损坏时保留原件）。</summary>
     public const string ConfigBackupFileName = "config.json.bak";
 
-    // ---------- 连发时序（周期 = 按压时长 + 间隔，两者逐发独立抖动 ±20%） ----------
+    // ---------- 连发时序（周期 = 按压时长 + 间隔） ----------
     // 默认 26ms 的依据：逐帧轮询输入的游戏每帧采样一次，只有"按压 ≥ 帧窗口"才能保证
     // 按下状态必被采样到、"间隔 ≥ 帧窗口"才能保证两次按压不被合并为一次持续按住。
     // 40fps（帧窗口 25ms）是常见游戏的帧率下限，故按压/间隔默认均取 25ms + 余量 = 26ms，
@@ -35,26 +35,22 @@ public static class Constants
     /// <summary>默认按压时长（毫秒）：按下到弹起的持续时间（= 常规档）。</summary>
     public const int DefaultHoldMs = RegularHoldMs;
 
-    /// <summary>连发间隔下限（毫秒）。</summary>
-    public const int MinIntervalMs = 10;
+    /// <summary>连发间隔下限（毫秒）：5ms 为注入线程等待精度下的实用下限
+    /// （timeBeginPeriod(1) 下 WaitOne / Sleep 仍有 ~1-2ms 调度毛刺，实际落点略高于设定值）。
+    /// 逐帧轮询输入的游戏在此区间大多采不到样（见上方帧窗口注释），主要面向
+    /// DirectInput / DD 驱动 / 消息模式与轮询之外的场景。</summary>
+    public const int MinIntervalMs = 5;
 
     /// <summary>连发间隔上限（毫秒）：90000 = 一分半（90 秒），覆盖慢速 / 定时触发场景
     /// （如定时补 buff）。注入节奏本身无上限约束，仅受线程 1ms 轮询精度影响。</summary>
     public const int MaxIntervalMs = 90000;
 
-    /// <summary>按压时长下限（毫秒）。</summary>
-    public const int MinHoldMs = 10;
+    /// <summary>按压时长下限（毫秒）：与间隔下限同为 5ms（精度依据见 MinIntervalMs）。
+    /// 极短按压在逐帧轮询的游戏里可能整帧采不到按下状态，由使用方按场景取舍。</summary>
+    public const int MinHoldMs = 5;
 
     /// <summary>按压时长上限（毫秒）。</summary>
     public const int MaxHoldMs = 100;
-
-    /// <summary>连发时序抖动幅度（±20%，按压与间隔各自独立取随机值）。</summary>
-    public const int TimingJitterPercent = 20;
-
-    /// <summary>取消抖动的最小间隔（毫秒）：间隔大于该值进入"精确模式"——
-    /// 场景不局限于按键辅助（如定时触发 / 慢速连发），按压与间隔均取消随机抖动、
-    /// 触发时刻精确；抖动仅保留给高频连发段（≤100ms）以规避固定节奏指纹。</summary>
-    public const int TimingJitterCutoffMs = 100;
 
     /// <summary>录制目标键的超时（毫秒）。</summary>
     public const int RecordTimeoutMs = 5000;

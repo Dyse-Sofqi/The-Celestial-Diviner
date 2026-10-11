@@ -118,7 +118,7 @@ public sealed class TargetKeyViewModel : INotifyPropertyChanged
         private set => Set(ref _modeName, value);
     }
 
-    /// <summary>连发间隔（毫秒，10~90000）。</summary>
+    /// <summary>连发间隔（毫秒，5~90000）。</summary>
     public int IntervalMs
     {
         get => _intervalMs;

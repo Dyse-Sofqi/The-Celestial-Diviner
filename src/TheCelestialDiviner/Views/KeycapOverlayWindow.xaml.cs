@@ -837,7 +837,7 @@ public sealed partial class KeycapOverlayWindow : Window
         public bool IsReminder { get; }
 
         /// <summary>连发发射中（最近 600ms 内有脉冲）：键帽由脉冲驱动，快照协调不得移除 / 抬起 / 按压。
-        /// 窗口只需覆盖单次脉冲按压时长（HoldMs ≤ 100ms）+ 抖动；连发间隔已放宽到
+        /// 窗口只需覆盖单次脉冲按压时长（HoldMs ≤ 100ms）；连发间隔已放宽到
         /// <see cref="Constants.MaxIntervalMs"/>（90000ms），不再按"最慢周期"整周期保活——
         /// 长间隔下脉冲之间键帽正常进入 1.2s 空闲宽限淡出，下次脉冲经 CancelRetire 复用重建。</summary>
         public bool IsPulseActive => Environment.TickCount - _lastPulseTick < 600;

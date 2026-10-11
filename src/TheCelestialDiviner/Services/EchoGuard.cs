@@ -35,9 +35,9 @@ public static class EchoGuard
     private const int ExpiryMs = 2000;
 
     /// <summary>每个虚拟键每个方向的待决名额上限。须覆盖过期窗口内的全部注入
-    /// （极限档约 45 发/秒 × 2s = 90，取 128 留裕量），超出丢弃最旧名额，
-    /// 防止回环系统性丢失（钩子失效）时名额无限累积。</summary>
-    private const int MaxPendingPerVk = 128;
+    /// （间隔下限 5ms + 按压下限 5ms ≈ 100 发/秒 × 2s = 200，取 256 留裕量），
+    /// 超出丢弃最旧名额，防止回环系统性丢失（钩子失效）时名额无限累积。</summary>
+    private const int MaxPendingPerVk = 256;
 
     private sealed class VkState
     {

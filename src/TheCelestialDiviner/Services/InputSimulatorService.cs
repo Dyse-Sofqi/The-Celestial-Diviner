@@ -13,6 +13,9 @@ namespace TheCelestialDiviner.Services;
 /// </summary>
 public static class InputSimulatorService
 {
+    /// <summary>注入失败日志限频基准（Environment.TickCount）。多任务线程并发写
+    /// 竞争无害：最坏情况多记一条日志，与钩子 / 回波埋点的既有限频惯例一致。</summary>
+    private static int _lastFailLogTick;
     /// <summary>
     /// 键盘注入模式：0 = SendInput（虚拟键码 + 扫描码，普通程序），
     /// 1 = SendInput + KEYEVENTF_SCANCODE（DirectInput / RawInput 游戏），
@@ -109,7 +112,7 @@ public static class InputSimulatorService
         // 本程序低级钩子对“无 InjectMagic 的键盘事件”会误判为物理输入，
         // 但消息模式的事件不进入系统输入流，低级钩子本就看不到，故无反馈循环风险。
         var ok = NativeMethods.PostMessage(hwnd, msg, (IntPtr)vk, (IntPtr)lParam);
-        if (!ok) Logger.Error($"PostMessage 投递失败（vk=0x{vk:X2}，last error = {Marshal.GetLastWin32Error()}）。");
+        if (!ok) LogSendFailure($"PostMessage 投递失败（vk=0x{vk:X2}，last error = {Marshal.GetLastWin32Error()}）。");
         return ok;
     }
 
@@ -272,10 +275,22 @@ public static class InputSimulatorService
         if (sent != 1)
         {
             // 注入失败（如被 UIPI 拦截），记录错误但不抛异常——由任务循环继续。
-            Logger.Error($"SendInput 注入失败（last error = {Marshal.GetLastWin32Error()}）。");
+            LogSendFailure($"SendInput 注入失败（last error = {Marshal.GetLastWin32Error()}）。");
             return false;
         }
         return true;
+    }
+
+    /// <summary>注入失败日志（2 秒限频）：5ms 间隔连发失败时逐发写盘可达每秒百行
+    /// （如对提权目标被 UIPI 拦截），既拖累连发线程也刷爆日志文件。</summary>
+    private static void LogSendFailure(string message)
+    {
+        var now = Environment.TickCount;
+        if (unchecked(now - _lastFailLogTick) > 2000)
+        {
+            _lastFailLogTick = now;
+            Logger.Error(message);
+        }
     }
 
     /// <summary>鼠标按下标志映射。</summary>

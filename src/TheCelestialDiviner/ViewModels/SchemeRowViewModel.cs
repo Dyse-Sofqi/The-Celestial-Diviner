@@ -133,7 +133,7 @@ public sealed class SchemeRowViewModel : INotifyPropertyChanged
     /// <summary>已提交的按压时长（毫秒；按压框虚影水印显示此值）。</summary>
     public int HoldMs => _holdMs;
 
-    /// <summary>按压时长编辑文本（交互语义与 <see cref="IntervalEdit"/> 完全一致，范围 10~100）。</summary>
+    /// <summary>按压时长编辑文本（交互语义与 <see cref="IntervalEdit"/> 完全一致，范围 5~100）。</summary>
     public string HoldEdit
     {
         get => _holdEdit;
@@ -214,7 +214,7 @@ public sealed class SchemeRowViewModel : INotifyPropertyChanged
     /// <summary>辅键已提交的按压时长（毫秒；仅 IsDual 有效）。</summary>
     public int SecondHoldMs => _secondHoldMs;
 
-    /// <summary>辅键按压时长编辑文本（交互语义与 <see cref="HoldEdit"/> 完全一致，范围 10~100）。</summary>
+    /// <summary>辅键按压时长编辑文本（交互语义与 <see cref="HoldEdit"/> 完全一致，范围 5~100）。</summary>
     public string SecondHoldEdit
     {
         get => _secondHoldEdit;
