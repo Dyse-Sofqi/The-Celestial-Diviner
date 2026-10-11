@@ -1,8 +1,54 @@
 # 衍天高手（The Celestial Diviner）开发进度交接
 
-更新：2026-10-11 — **发版 v1.7.8（连发频率上限翻倍 + 移除时序抖动 + 检查更新红点提醒）；双端 Release 已发布**
+更新：2026-10-11 — **发版 v1.7.9（主题语音方案：语音随主题整套切换 + 基础提示音分离随包分发）；双端 Release 已发布**
 
-## 本次变更（发版 v1.7.8）
+## 本次变更（发版 v1.7.9）
+- 📋 用户需求：三段内嵌默认音频分离出程序（命名「高松灯启动 / 停止 / 切换」）加入语音设置备选，
+  默认绑定默认主题与衍天高手主题；每个主题绑定语音方案、随主题切换而切换（四档位绑不同主题，
+  切换按键方案时同步换肤 + 换声）；语音设置中提供主题配套的语音方案设置
+- ✅ 主题语音方案（commit `8d86489`，16 文件）：
+  - `SectThemes.CueFiles`：默认主题 / 衍天高手 = 「高松灯」三段、莫问高手 = 「墨提斯」三段
+    （散装文件按名查找，`SoundCueService.FindCandidate` 扫 exe 同级 + audio 子目录）
+  - 基础提示音（启动 / 停止 / 切换）从内嵌 Resources 分离：删除 `Resources/Sounds` 三段 mp3
+    （git 记录删除），改散装随包分发；内嵌资源只剩两个启动变体（DivinerStartVoice.mp3 /
+    MoWenDivinerStartVoice.wav），exe 1,125,376 → 953,856 B；配套文件缺失该用途静音留痕
+  - 配置 v17：`ThemeSounds`（三主题各自 Start / Stop / Cycle）+ `NormalizeThemeSounds`；
+    迁移：旧全局 `CustomSounds` 克隆到三主题（保持既有听感）；`CustomSounds` 字段保留仅旧版读档兼容
+  - `SoundCueService.ApplyTheme(theme, custom)` 整套装载（解析优先级：主题自定义 > 主题配套音频 > 静音）；
+    移除 `ApplyCustom` / `ApplyThemeDefaults`；新增试听专用 `_previewPlayer` + `PreviewFile`
+  - 语音设置对话框：顶部主题选择器（默认 = 当前激活主题），按主题独立导入 / 重置 / 试听；
+    「默认音频」项标注配套来源（「默认音频（高松灯）」/「默认音频（墨提斯）」）；
+    编辑当前主题热应用、其他主题切档时经 ApplyAppearance 生效
+  - 上轮未发版功能一并入版：成为衍天 / 莫问高手按钮随主题文案（`DivinerVoiceButtonText`）+
+    莫问糕手启动音（内嵌）+ 检查更新启动预检红点（v1.7.8 已发布）无变动
+- ✅ 版本：csproj `Version` / `FileVersion` 1.7.8 → **1.7.9**；编译 0 警告 0 错误（Debug + Release）
+- ✅ CHANGELOG：v1.7.9 详录（新增·主题语音方案 / 变更·提示音分离 / 发布包）
+- ✅ 公告：Notice.md / Notice2.md 首行 → **双版合并一句**（131 字，用户指定在 1.7.8 基础上补充 1.7.9 总结）：
+  「点选项检查升级1.7.9版本：1.7.8 连发下限降至5ms（约100发/秒）/ 移除±20%抖动 / 检查更新红点提醒；
+  1.7.9 语音方案随主题整套切换（默认/衍天=高松灯、莫问=墨提斯）/ 基础提示音分离随包分发 /
+  语音设置按主题独立设置，建议尽快更新。」（exe 内嵌公告已字节级验证含双版总结）
+- ✅ 发布包：`dist/TheCelestialDiviner-1.7.9-win64.zip`（**20 项** = exe + 依赖 dll + 7zr.exe + 配置 +
+  **8 段候选提示音**——高松灯三段 / 墨提斯三段 / 02 wow / 14 ciallo；不含闭源 DD 驱动与使用说明.txt；
+  exe 953,856 B；zip 1,669,153 B；SHA256 `59108b3e…93e001`）——项数 14 → 20（基础提示音分离随包）
+- ✅ 发布说明：`dist/v1.7.9-release-notes.md`（双端 Release 正文同一份，GitHub body 与本地一致）
+- ✅ 提交与标签：`8d86489`（主题语音方案）→ `f7ba23f`（v1.7.9 发版）；注释标签 `v1.7.9`（对象 `d41b9fe` → f7ba23f）
+- ✅ **Gitee 已发布**：git push（main + 标签）成功；Release id 1197777 + 附件 1,669,153 B；
+  本轮建 Release **未触发**标签重写坑（注释对象完好，带 `^{}` 剥离行——1.7.8 时曾被 API 重写为轻量标签）
+- ✅ **GitHub 已发布（gh-api-release.ps1）**：两笔提交逐字节复刻（tree / commit 均 MATCH）+
+  main → f7ba23f + Release id 409683697 + 附件 1,669,153 B（API state=uploaded）
+  - ✅ 脚本缺陷修复（新边界）：本提交删除了三段 mp3，`Copy-Commit` 的 diff 路径含删除项 →
+    ls-tree 取 blob 抛「path missing」；已修——删除路径以 tree API 的 `sha=null`（mode 100644）表达，
+    tree SHA MATCH 验证通过（脚本仅存于本地 dist，不入库）
+  - ⚠️ 标签缺陷第三次复发（POST /git/tags 响应 sha 空 → refs 落轻量标签直指提交）——照例按本地标签对象
+    逐字节重建（`d41b9fe` MATCH，tagger 日期一致）+ 强制改引用（type: tag）；脚本该缺陷仍待根因排查
+- ✅ 三端一致核对（发布提交）：本地 = Gitee main = GitHub main = `f7ba23f`；标签 `v1.7.9` 两端均为
+  注释对象 `d41b9fe`（剥离 → f7ba23f）；Gitee 附件下载件 SHA256 与本地一致（1,669,153 B）；
+  GitHub 附件经 API 核对 size / state（github.com:443 直连再次不可用，下载件 SHA 校验跳过——老毛病）
+- ✅ 公告远端：Gitee raw/main 的 Notice.md / Notice2.md 与本地逐字节一致（双版合并总结已生效）
+- ℹ️ 待用户实测：切档位验证语音整套切换（高松灯 ↔ 墨提斯，全程无手动设置）；语音设置按主题
+  选择 / 试听 / 重置；旧配置自定义音迁移后各主题听感；从 Release 页下载 1.7.9 覆盖安装全链路
+
+## 上次变更（发版 v1.7.8）
 - 📋 用户需求：连发频率上限提升至 5ms（确认连按压时长下限一起降）+ 删除 ±20% 随机浮动；
   按老规矩发版 1.7.8，双版 Notice 一句话总结并提示升级；「选项 → 检查更新」添加小红点提醒
 - ✅ 连发时序（commit `a834d85`，9 文件）：
