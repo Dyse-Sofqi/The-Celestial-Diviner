@@ -38,6 +38,22 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // 单实例保护（必须早于一切初始化）：多实例会让两个进程互删 DD 驱动服务，
+        // 使 CreateServiceW 返回 1072，进而触发 DD 自己的「DD install error.」模态框；
+        // 并造成按键重复注入、config.json 互相覆盖。详见 SingleInstanceGuard 注释。
+        if (!SingleInstanceGuard.TryAcquire())
+        {
+            // 窗口已在前台就不再打扰；激活失败（如窗口在别的虚拟桌面）才提示一句，
+            // 避免用户以为程序没启动而反复双击。
+            if (!SingleInstanceGuard.ActivateExisting())
+            {
+                MessageBox.Show("衍天高手已在运行，请勿重复启动。", "衍天高手",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            Shutdown();
+            return;
+        }
+
         // 软件渲染（进程级）：游戏前台最大化时 iGPU 的 3D 队列被游戏打满（实测引擎占用
         // 87%、DWM 仅 3%），本程序任何窗口的 GPU 提交都排在游戏队列末尾——实测每帧等待
         // 0.5~3.9s，与窗口、表面积、提交频率均无关（键帽悬浮窗卡顿 / 启动渲染卡 5.5s 的根因）。
@@ -302,6 +318,8 @@ public partial class App : Application
     {
         // 兜底二次清理（正常路径走 ExitApp）。
         _trayIcon?.Dispose();
+        // 释放单实例互斥体（与 TryAcquire 同为 UI 线程，可安全 Release）。
+        SingleInstanceGuard.Release();
         base.OnExit(e);
     }
 }
