@@ -1,8 +1,78 @@
 # 衍天高手（The Celestial Diviner）开发进度交接
 
-更新：2026-10-11 — **发版 v1.7.9（主题语音方案：语音随主题整套切换 + 基础提示音分离随包分发）；双端 Release 已发布**
+更新：2026-10-13 — **发版 v1.8.0（单实例保护：命名互斥体 + 同名进程扫描，消除多开互删 DD 驱动服务引发的 1072 弹框）；双端 Release 已发布**
 
-## 本次变更（发版 v1.7.9）
+## 本次变更（发版 v1.8.0）
+- 📋 用户需求：按老规矩发版 1.8.0；一句话总结公告；Gitee 令牌由用户提供
+- ✅ 起因（用户反馈的现场证据链）：v1.7.6 用户在游戏内弹 DD 的「DD install error. / 驱动安装错误.」模态框。
+  **反汇编 drivers/dd63330.dll**（安装例程 = 函数 RVA `3430`..`3f1b`，`DD install error.` / `DD start error.`
+  各只有一处引用）确定该框**只在安装阶段**弹：`OpenSCManagerW` 失败（err=5 → 内部文案"没有权限访问服务控制"）
+  或 `CreateServiceW` 失败且 err≠1073（1072 → "驱动已经标记为删除"；1073 被容忍不弹框）。
+  「DD start error.」（驱动启动错误）才是第二段 `OpenServiceW`/`StartServiceW` 失败——**HVCI / 内核签名策略 /
+  服务被禁用(1058) 都归这里**；免费版在线认证是设备打开后 `DeviceIoControl(0x2224A4)` 返回码分支
+  （另一组标题为"提示"的框）。→ 文件缺失、"目录里没看见 dd63330" 与本框**无关**（DD 释放 sys 到 %TEMP% 的
+  `CreateFileW`/`WriteFile` 失败不检查、`CreateServiceW` 也不校验文件存在）；且 1.7.3 起发布包本就不带驱动，
+  dll 正确位置是 `%APPDATA%\TheCelestialDiviner\drivers\`
+- ✅ 根因（本机日志实证 = 多实例）：
+  - `config.json.tmp 正由另一进程使用` 在 **09-05 / 09-06 / 09-11 / 10-11 四天**都出现；
+  - `app-20261011.log` 19:39 出现**两组完全相同的退出三连**（"已停止所有连发任务（退出）/ 低级钩子已卸载 /
+    定时器分辨率已恢复"，相隔 1.4 s）= 两个进程先后退出；
+  - `app-20260905.log` 22:09 的 `服务被禁用(1058) → 恢复失败(1072) → 删除重建仍 1072 → 交由 DD`，
+    随后 DD_btn 连续 3 次 `ret=-1`，直到另一实例 22:09:46 退出后**第 4 次重试成功**。
+  - 机制：两进程都调 `DD_btn(0)`，DD 的服务项被反复 `DeleteService`/`CreateServiceW` → 一方撞 **1072**
+    → CreateServiceW 失败 → DD 弹框（它对 1072 不重试）。附带伤害：两进程都装低级钩子 → **按键注入两次**
+    （EchoGuard 是进程内的，消不掉跨进程回环）、`config.json` 互相覆盖、DD 重试期 **UI 冻结**
+    （`EnsureReady` 在 UI 线程，5 次退避最长约 6 s）
+- ✅ 单实例保护（commit `c33a192`，2 文件）：
+  - 新增 `Helpers/SingleInstanceGuard.cs`：命名互斥体 `Local\TheCelestialDiviner.SingleInstance` 为主判据
+    （`WaitOne(0)` + 捕获 `AbandonedMutexException` 接管被强杀/崩溃的上一个实例）；**另加同名进程扫描**
+    兜住**不带本保护的旧版本**（旧版本不持互斥体，而"两个目录各开一份"正是多开最常见形态），
+    扫描命中先等 2.5 s 再判，避免"关掉再立刻开"被误拦
+  - 激活已有实例：`EnumWindows` 按 PID 找顶层窗口，**优先标题 == "衍天高手"**（键帽悬浮窗标题是
+    `KeycapOverlay`，无标题窗口跳过），`ShowWindow(SW_RESTORE)` + `SetForegroundWindow`；窗口已在前台
+    则不打扰（不弹提示），窗口确实找不到才提示一句「已在运行」
+  - `App.xaml.cs`：`OnStartup` 最前接 `TryAcquire()`（false → 激活/提示 → `Shutdown(); return`），
+    `OnExit` 接 `Release()`
+  - P/Invoke 用 `CharSet.Unicode` + **不带 W 后缀**的函数名（带 W 后缀且 ExactSpelling=false 会被解析成
+    `xxxWW` 而找不到——静默失效类陷阱）
+- ✅ 测试暴露并修掉一个**真 bug**：拒绝启动的分支没有 `Release()` 已取得的互斥体 → 进程退出时互斥体被遗弃
+  → 下一次启动收到 `AbandonedMutexException` 并打出**误导性**的"上一个实例崩溃退出，本次接管"日志。已修
+- ✅ 验证（独立 harness `%TEMP%\sig-test\`，**直接编译产品源码里的同名文件、不改一行**）6 用例全过：
+  T1 单独启动 → True；T2 互斥体被持有 → False；T3 同名旧版本不持互斥体 → False（耗时 3065 ms ≈ 2.5 s 等待）；
+  T5 上一步拒绝后无残留 → True 且**无**接管 WARN（验证上面的修复）；T4 所有者 FailFast + 句柄被他人持有
+  → True 且**有**接管 WARN（遗弃分支真能走通）；T6 已有实例带真窗口 → False + 找到 hwnd +
+  `ActivateExisting()` True（证明 EnumWindows 回调、标题匹配、SetForegroundWindow 全链路可用）
+- ✅ 版本：csproj `Version` / `FileVersion` 1.7.9 → **1.8.0**；编译 0 警告 0 错误（Debug + Release）
+- ✅ CHANGELOG：v1.8.0 详录（新增 · 单实例保护 / 修复 · 多开引发的 DD 驱动冲突 / 发布包）
+- ✅ 公告：Notice.md / Notice2.md 首行 → 一句话总结（1.8.0 单实例保护，提示尽快更新）；按老规矩在
+  **publish 之前**改好，并对 exe 做字节扫描验证内嵌公告 = 1.8.0 新行（旧 1.7.9 / 1.7.8 行与 "±20%" 抖动
+  文案均已不在；首行 228 B、UTF-8 无 BOM）
+- ✅ 发布包：`dist/TheCelestialDiviner-1.8.0-win64.zip`（**20 项**与 1.7.9 一致 = exe + 依赖 dll + 7zr.exe +
+  配置 + 8 段候选提示音；不含闭源 DD 驱动；exe 956,928 B；zip 1,670,820 B；SHA256 `90467fc6…429a`）
+- ✅ 发布说明：`dist/v1.8.0-release-notes.md`（双端 Release 正文同一份）
+- ✅ 提交与标签：`c33a192`（单实例保护）→ `b1f5570`（v1.8.0 发版）；注释标签 `v1.8.0`
+  （对象 `db03651b` → b1f5570）
+- ✅ **Gitee 已发布**：git push（main + 标签）成功；Release id **1200986** + 附件 id 3374971（1,670,820 B）
+  - ⚠️ **Gitee 标签重写坑第 2 次复发**（1.7.8 时首次）：Release API 把已推上去的注释标签改成**轻量标签**
+    （ls-remote 只剩提交行、无 `^{}` 剥离行）→ 用 `git push gitee v1.8.0 --force` 把注释对象推回，
+    复核 `db03651b` + `^{}` = b1f5570，与 GitHub 完全一致；Release 与附件**未受影响**
+    （force 更新引用不同于 DELETE —— 后者会把 Release 变 draft）
+- ✅ **GitHub 已发布（`gh-api-release.ps1`）**：两笔提交逐字节复刻（tree / commit 均 MATCH）+
+  main → b1f5570 + Release id **410884045** + 附件 1,670,820 B（API `state=uploaded`，
+  `digest=sha256:90467fc6…429a` 与本地一致）
+  - ⚠️ **标签缺陷第 4 次复发**（`POST /git/tags` 返回 sha 空 → refs 落轻量标签直指提交）——照例按本地标签
+    对象逐字节重建（`db03651b` MATCH，tagger 日期一致）+ `PATCH /git/refs/tags/v1.8.0`（type: tag）。
+    脚本该缺陷仍待根因排查
+- ✅ 三端一致核对：本地 = Gitee main = GitHub main = `b1f5570`；标签 `v1.8.0` 两端均为注释对象 `db03651b`
+  （剥离 → b1f5570）；Gitee raw/main 的 Notice.md / Notice2.md 与本地**逐字节一致**；
+  双端附件 size / SHA256 与本地一致（GitHub 用 API `digest` 比对，无需下载）
+- ℹ️ 待用户实测：本地双击两次验证单实例保护（应切回已运行窗口、不出现第二个进程；
+  日志留 "单实例保护：找到运行中实例的主窗口（hwnd=0x…）"）
+- ⚠️ 遗留未做：`EnsureKernelService` 最终未就绪（err=1058/1072）时仍会"交由 DD 自行安装" → DD 弹框并冻结 UI。
+  单实例保护只消掉了"多开"这一诱因；安全软件 / 游戏反作弊禁用服务那类仍走老路。建议改为预置失败即判定
+  DD 不可用 + 回退普通模式 + 可读提示（改动集中在 `EnsureKernelService` / `EnsureReady`）
+
+## 上次变更（发版 v1.7.9）
 - 📋 用户需求：三段内嵌默认音频分离出程序（命名「高松灯启动 / 停止 / 切换」）加入语音设置备选，
   默认绑定默认主题与衍天高手主题；每个主题绑定语音方案、随主题切换而切换（四档位绑不同主题，
   切换按键方案时同步换肤 + 换声）；语音设置中提供主题配套的语音方案设置
