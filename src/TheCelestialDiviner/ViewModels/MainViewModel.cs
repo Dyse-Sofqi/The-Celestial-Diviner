@@ -1091,12 +1091,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         try
         {
             AddLog("正在检查更新（Gitee Release）…");
-            var check = await UpdateService.FetchLatestAsync();
-            if (check is null)
+            var probe = await UpdateService.FetchLatestAsync();
+            if (probe.Check is not { } check)
             {
-                AddLog("检查更新：Gitee 上没有可用的 Release 或网络不可用。");
+                AddLog($"检查更新失败：{probe.Failure}");
                 UpdateMessageRequested?.Invoke("检查更新",
-                    $"未能从 Gitee 获取新版本（可能暂无 Release / 附件缺失 / 网络不可用）。\n当前版本 v{UpdateService.CurrentVersion.ToString(3)}。");
+                    $"未能从 Gitee 获取新版本：{probe.Failure}。\n当前版本 v{UpdateService.CurrentVersion.ToString(3)}。");
                 return;
             }
             if (check.Version <= UpdateService.CurrentVersion)
@@ -1184,8 +1184,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     {
         try
         {
-            var check = await UpdateService.FetchLatestAsync();
-            if (check is { } c && c.Version > UpdateService.CurrentVersion)
+            var probe = await UpdateService.FetchLatestAsync();
+            if (probe.Check is { } c && c.Version > UpdateService.CurrentVersion)
             {
                 _latestUpdate = c;                            // 「有更新」按钮的数据源
                 UpdateDotVisibility = Visibility.Visible;
@@ -1195,7 +1195,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             {
                 _latestUpdate = null;
                 UpdateDotVisibility = Visibility.Collapsed;   // 已是最新 / 远端不可用：不亮红点
-                AddLog("启动更新预检：没有更新的版本。");
+                AddLog(probe.Failure is { } failure
+                    ? $"启动更新预检：远端不可用（{failure}）。"
+                    : "启动更新预检：没有更新的版本。");
             }
         }
         catch (Exception ex)
