@@ -4,6 +4,20 @@
 下载安装包：[Gitee Releases](https://gitee.com/sofqi/The-Celestial-Diviner/releases/latest) ·
 [GitHub Releases](https://github.com/Dyse-Sofqi/The-Celestial-Diviner/releases)
 
+## v1.8.5 — 2026-10-24
+
+### 修复 · 检查更新更可靠（限流不再被误报为"暂无 Release"）
+
+- **失败原因明示**：Gitee 接口限流（403）/ 暂无 Release（404）/ 网络超时 / 返回异常现在分开展示，
+  限流时明确提示"稍后再试或到 Release 页手动下载"，不再一律笼统的"可能暂无 Release / 附件缺失 / 网络不可用"
+- **备用通道**：Release API 被限流 / 无响应时，自动改从 Gitee raw 的 CHANGELOG.md 读取最新版本号，
+  并按发版命名约定直连 zip 下载（raw 静态分发不在 API 限流体系内）——API 挂了也能发现并安装更新；
+  经备用通道获取的更新会在确认框注明
+- **附件按名字匹配**：更新包必须形如 `TheCelestialDiviner-x.y.z-win64.zip`，不再按"第一个 .zip"
+  挑选——Gitee 会自动给 Release 附上源码包（如 `v1.8.4.zip`），旧逻辑靠附件排序侥幸避开了它，
+  一旦顺序变化就会把源码包当更新包（解包后没有 exe，报"更新包内容异常"）
+- 启动更新预检失败原因写入日志，便于远程排查
+
 ## v1.8.4 — 2026-10-24
 
 ### 改进 · 注释区公告支持加粗
