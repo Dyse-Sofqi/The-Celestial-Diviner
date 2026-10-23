@@ -1,8 +1,48 @@
 ﻿# 衍天高手（The Celestial Diviner）开发进度交接
 
-更新：2026-10-24 — **发版 v1.8.2（界面顺滑：鼠标检测改 Raw Input + 切模式不重建列表 + 激励器按需；管理方案左键再点取消；切换方案热键默认 F10）；双端 Release 已发布**
+更新：2026-10-24 — **发版 v1.8.3（注释区文本可选中复制 + 公告内容更新）；双端 Release 已发布**
 
-## 本次变更（发版 v1.8.2）
+## 本次变更（发版 v1.8.3）
+
+- 📋 用户需求（连续三轮）：Notice.md 公告更新先推送；注释区文本改成可选中复制（方便复制群号）；
+  按老规矩发版 1.8.3
+- ✅ 注释区可选中复制（Views/MainWindow.xaml + .xaml.cs）：
+  - 公告默认内容 `DefaultComment`：TextBlock → **只读 RichTextBox**（IsReadOnly + IsDocumentEnabled）——
+    只读富文本下超链接**直接点击**打开（不需要 Ctrl+Click），全文可划选 / Ctrl+C / 右键"复制 / 全选"；
+    渲染从 Inlines+LineBreak 改为逐行 Paragraph（Margin=0、LineHeight=20，排版与旧版一致），
+    AppendNoticeLine / AppendPlainTextWithUrls / AppendHyperlink 改为接收 InlineCollection（不再直连控件）
+  - 悬停说明 `CommentText`：TextBlock → 只读 TextBox（ShowComment / RestoreComment / SyncDdFetchStatus
+    全部免改，Text 读写与可见性切换语义不变）；DD 获取进度等状态照常实时刷新
+  - 选区高亮：SelectionBrush=AccentPrimary（随日 / 夜换肤）+ SelectionOpacity=0.3；两控件
+    Background=Transparent、BorderThickness=0、Padding=0（TextBox 走全局圆角模板，零边框透明后无外观痕迹）；
+    RichTextBox 垂直滚动条 Hidden（超出时滚轮仍可滚——旧版 TextBlock 是被 Border ClipToBounds 直接裁掉）
+  - 动机：公告新增了玩家群号，TextBlock 不可选中，用户复制群号只能手抄
+- ✅ 公告 Notice.md（用户编辑，收编进发版提交）：去 Obsidian frontmatter（避免程序里显示 aliases/tags 行）+
+  登龙句微调；此前 `145c9f8` 推过带 frontmatter 的版本，本次推送后 Gitee raw 即为最终干净版
+  （旧版本程序启动远端同步拿到的也是干净内容）
+- ✅ 版本：csproj `Version` / `FileVersion` 1.8.2 → **1.8.3**；编译 0 警告 0 错误（Debug + Release）
+- ✅ CHANGELOG：v1.8.3 详录（改进 · 注释区文本可选中复制 / 公告 · 内容更新）
+- ✅ 发布包：`dist/TheCelestialDiviner-1.8.3-win64.zip`（**20 项**与 1.8.2 一致 = exe + 依赖 dll + 7zr.exe +
+  配置 + 8 段候选提示音；不含闭源 DD 驱动；exe 1,019,904 B；zip 1,703,262 B；SHA256 `f777ee28…5ba08e`）
+  - ⚠️ 打包坑（新）：`drivers/7zr.exe` 是 7-Zip 独立精简版，**只支持 7z 格式**——`7zr a xxx.zip`
+    产出的是 7z 文件（zipfile 校验报 BadZipFile）；改用 Python zipfile 打包（非 ASCII 文件名自动置
+    UTF-8 标志位，资源管理器 / 解压工具均可识别）
+- ✅ 发布说明：`docs/release-notes/v1.8.3-release-notes.md`（双端 Release 正文同一份）
+- ✅ 提交与标签：`9c27ab7`（注释区可选中）→ `244ad44`（v1.8.3 发版，含最终版 Notice.md）；
+  注释标签 `v1.8.3`（对象 `5bab2fa4` → 244ad44）
+- ✅ 双端已发布：Gitee Release id **1235113** + 附件 id 3478482（1,703,262 B）；
+  GitHub Release id **422215011** + 附件（API `digest=sha256:f777ee28…5ba08e` 与本地一致，`state=uploaded`）
+  - ℹ️ Gitee 发布用的私人令牌从 **Windows 凭据管理器**（`git credential fill`，username=oauth2）现取现用，
+    环境变量里没有 GITEE_TOKEN；本次 API 全程可用（建 Release + 传附件一次成功）
+- ✅ 三端一致核对：本地 = Gitee main = GitHub main = `244ad44`；标签 `v1.8.3` 两端均为注释对象 `5bab2fa`
+  （剥离 → 244ad44）；Gitee raw/main 的 Notice.md 与本地逐字节一致
+  （⚠️ raw 端点对 curl 返回防盗链 HTML 壳，须 `-L` 跟到 raw.giteeusercontent.com 再比对）；
+  **Gitee 标签重写坑本次未复发**（Release 创建后标签仍为注释对象）
+- ⚠️ 未做运行时验证：注释区划选 / 复制 / 超链接点击的实际表现仅编译验证（只读 + IsDocumentEnabled 的
+  超链接直点与右键复制菜单是 WPF 内建行为）；待用户实测
+- ℹ️ 程序内更新链路：「选项 → 检查更新」/ 底栏「有更新」应能发现 1.8.3（双端 Release 均带 tag + 附件）
+
+## 历史变更（发版 v1.8.2）
 
 - 📋 用户需求（连续反馈 + 发版）：界面"不跟手"要查到底；管理方案习惯"再点一次取消"；
   切换方案热键默认改 F10（不覆盖已自定义）；公告去掉首行 `---`；按老规矩发 1.8.2
