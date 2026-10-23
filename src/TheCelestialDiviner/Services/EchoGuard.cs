@@ -39,10 +39,24 @@ public static class EchoGuard
     /// 超出丢弃最旧名额，防止回环系统性丢失（钩子失效）时名额无限累积。</summary>
     private const int MaxPendingPerVk = 256;
 
+    /// <summary>
+    /// 一次注入的待决回环名额：登记时刻 + DD_key 调用耗时（调用返回后回填）。
+    /// 耗时单列出来是为了把"到达延迟"拆成两段——延迟里含 DD_key 调用本身的阻塞时间，
+    /// 只看总数会把驱动卡顿误判成 win32k 队列积压。
+    /// </summary>
+    public sealed class InjectionNote
+    {
+        /// <summary>登记时刻（Environment.TickCount，与 KBDLLHOOKSTRUCT.time 同时基）。</summary>
+        public readonly int Stamp = Environment.TickCount;
+
+        /// <summary>DD_key 调用耗时（毫秒）；-1 = 调用尚未返回（回环先到了）。</summary>
+        public int CostMs = -1;
+    }
+
     private sealed class VkState
     {
-        public readonly List<int> PendingDown = new();
-        public readonly List<int> PendingUp = new();
+        public readonly List<InjectionNote> PendingDown = new();
+        public readonly List<InjectionNote> PendingUp = new();
     }
 
     private static readonly object Gate = new();
@@ -52,28 +66,28 @@ public static class EchoGuard
     /// <summary>
     /// 预登记待决回环名额（注入线程调用，必须在 DD_key 之前——
     /// 回环事件可能在注入调用返回之前就到达钩子）。
-    /// 返回名额时间戳，供注入失败时 <see cref="CancelNote"/> 撤销。
+    /// 返回名额对象，供注入失败时 <see cref="CancelNote"/> 撤销、并在调用返回后回填耗时。
     /// </summary>
-    public static int NoteInjection(int vk, bool down)
+    public static InjectionNote NoteInjection(int vk, bool down)
     {
         lock (Gate)
         {
             var state = GetOrCreate(vk);
             var list = down ? state.PendingDown : state.PendingUp;
             if (list.Count >= MaxPendingPerVk) list.RemoveAt(0);
-            var stamp = Environment.TickCount;
-            list.Add(stamp);
-            return stamp;
+            var note = new InjectionNote();
+            list.Add(note);
+            return note;
         }
     }
 
     /// <summary>注入失败时撤销预登记的名额（注入线程调用）。</summary>
-    public static void CancelNote(int vk, bool down, int stamp)
+    public static void CancelNote(int vk, bool down, InjectionNote note)
     {
         lock (Gate)
         {
             if (!States.TryGetValue(vk, out var state)) return;
-            (down ? state.PendingDown : state.PendingUp).Remove(stamp);
+            (down ? state.PendingDown : state.PendingUp).Remove(note);
         }
     }
 
@@ -93,20 +107,24 @@ public static class EchoGuard
             if (list.Count == 0) return false;
 
             // 惰性过期：回环真丢失的名额到期释放，避免陈旧名额吞掉物理事件。
-            list.RemoveAll(t => unchecked(eventTime - t) > ExpiryMs);
+            list.RemoveAll(n => unchecked(eventTime - n.Stamp) > ExpiryMs);
             if (list.Count == 0) return false;
 
             // FIFO 按序消除：同键同方向事件在输入管线内保序，注入名额与回环
             // 事件一一对应；不限到达延迟（时间窗硬门槛会在延迟尖峰下漏判）。
-            // 诊断埋点：名额登记（注入时刻）→ 回环到达（钩子）的管线延迟，
-            // 与游戏收到的输入走同一条 win32k 队列——延迟大即"按键到达游戏慢"。
-            var stamp = list[0];
+            // 诊断埋点：名额登记（注入时刻）→ 回环到达（钩子）的管线延迟。
+            // 这段延迟 = DD_key 调用阻塞 + win32k 投递排队，两者必须分开报，
+            // 否则"驱动卡 1.8 秒"会被读成"输入队列积压 1.8 秒"，把排查引向错误方向。
+            var note = list[0];
             list.RemoveAt(0);
-            var latency = unchecked(eventTime - stamp);
+            var latency = unchecked(eventTime - note.Stamp);
             if (latency > 100 && unchecked(Environment.TickCount - _lastEchoLatencyLogTick) > 2000)
             {
                 _lastEchoLatencyLogTick = Environment.TickCount;
-                Logger.Warn($"注入输入到达延迟 {latency}ms（vk=0x{vk:X2}, down={down}；win32k 输入队列积压）。");
+                var split = note.CostMs < 0
+                    ? "DD_key 尚未返回（回环先到）"
+                    : $"其中 DD_key 调用 {note.CostMs}ms、win32k 投递 {latency - note.CostMs}ms";
+                Logger.Warn($"注入输入到达延迟 {latency}ms（vk=0x{vk:X2}, down={down}；{split}）。");
             }
             return true;
         }

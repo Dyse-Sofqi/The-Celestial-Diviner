@@ -259,6 +259,7 @@ public partial class MainWindow : Window
         //（菜单点击 / 导入配置 / DD 就绪检查回退）。
         // 注释区公告：初渲染（内嵌兜底或已同步的远端缓存）；随 VM.NoticeContent 更新刷新。
         RenderDefaultComment(_vm.NoticeContent);
+        SyncDdFetchStatus();   // 启动早期已产生的驱动获取 / 不可用提示（如有）补显示到注释区
         // 方案档位按钮：初值回填；后续随 VM.ActiveProfile 变更同步选中态。
         // 不用 IsChecked 双向绑定：同组互斥取消选中会破坏绑定（WPF 已知问题）。
         // 设置菜单选中标记：键盘注入 / 键帽配色 / 键帽可视化 随 VM 状态同步
@@ -275,6 +276,8 @@ public partial class MainWindow : Window
                 Dispatcher.BeginInvoke(UpdateCycleKeyPickingComment);   // 进入/退出切换方案热键录入 → 注释区联动
             else if (args.PropertyName == nameof(MainViewModel.NoticeContent))
                 Dispatcher.BeginInvoke(() => RenderDefaultComment(_vm.NoticeContent));   // 公告远端更新 → 默认内容刷新
+            else if (args.PropertyName == nameof(MainViewModel.DdFetchStatus))
+                Dispatcher.BeginInvoke(SyncDdFetchStatus);   // DD 驱动获取进度 → 注释区（下载中 / 重试 / 结果）
             else if (args.PropertyName is nameof(MainViewModel.KeyboardMode)
                      or nameof(MainViewModel.KeycapSchemeName)
                      or nameof(MainViewModel.VisualizerModeIndex))
@@ -293,6 +296,8 @@ public partial class MainWindow : Window
         _vm.VoiceSettingsRequested += ShowVoiceSettings;
         // 方案定制：「选项」菜单首项 → 模态框（四个档位命名 + 主题绑定 + 默认主题外观定制）。
         _vm.ProfileCustomizeRequested += ShowProfileCustomize;
+        // 更新日志：「选项 → 更新日志」→ 模态窗展示全部历史版本（内嵌 CHANGELOG.md）。
+        _vm.ChangelogRequested += ShowChangelog;
 
         // 钩子事件 → 钩子线程直通处理：连发启停路径（调度器，自身加锁线程安全）不再
         // 排队等 UI 线程，高负载下松键即停；仅 UI 动作（总开关 / 档位切换 / 键位录入）
@@ -315,7 +320,7 @@ public partial class MainWindow : Window
             _vm.DeleteCheckedSchemes();
         };
 
-        // 检查更新：确认框（列出远端版本与发布说明）→ 结果消息框（无图标无提示音）→ 重启退出。
+        // 检查更新 / 底栏「有更新」：确认框（列出远端版本与发布说明）→ 结果消息框 → 重启退出。
         _vm.UpdateConfirmRequested += check =>
         {
             var notes = check.Notes?.Trim() ?? "";
@@ -323,7 +328,8 @@ public partial class MainWindow : Window
             return MessageBox.Show(this,
                 $"发现新版本 {check.TagName}（当前 v{UpdateService.CurrentVersion.ToString(3)}），是否下载并安装？"
                 + "\n\n确认后程序将自动下载更新包并重启完成安装。"
-                + (notes.Length > 0 ? "\n\n—— 发布说明 ——\n" + notes : ""),
+                + (notes.Length > 0 ? "\n\n—— 更新日志 ——\n" + notes : "")
+                + "\n\n（完整历史更新见「选项 → 更新日志」）",
                 "检查更新 — 衍天高手", MessageBoxButton.YesNo, MessageBoxImage.Question)
                 == MessageBoxResult.Yes;
         };
@@ -379,7 +385,8 @@ public partial class MainWindow : Window
         DefaultComment.Visibility = Visibility.Collapsed;
     }
 
-    /// <summary>恢复注释区默认内容（诗句 + 链接）。切换方案热键录入期间保持录入说明（其他悬停说明离开后也回到录入说明）。</summary>
+    /// <summary>恢复注释区默认内容（诗句 + 链接）。切换方案热键录入期间保持录入说明（其他悬停说明离开后也回到录入说明）；
+    /// DD 驱动获取进行中则回到获取状态（下载百分比 / 第几次重试），而不是公告。</summary>
     private void RestoreComment()
     {
         if (_vm.PickingKind == PickKind.SetCycleKey)
@@ -387,9 +394,42 @@ public partial class MainWindow : Window
             ShowComment(CycleKeyComment);
             return;
         }
+        if (_vm.DdFetchStatus is { Length: > 0 } status)
+        {
+            _ddStatusShown = status;
+            ShowComment(status);
+            return;
+        }
+        _ddStatusShown = null;
         CommentText.Text = "";
         CommentText.Visibility = Visibility.Collapsed;
         DefaultComment.Visibility = Visibility.Visible;
+    }
+
+    // ---------- DD 驱动获取状态 → 注释区 ----------
+    /// <summary>注释区当前展示的驱动获取状态文本（用于区分"状态"与"悬停说明"）。</summary>
+    private string? _ddStatusShown;
+
+    /// <summary>
+    /// 驱动获取状态同步到注释区（订阅 VM.DdFetchStatus）：下载百分比、第几次失败、几秒后重试、
+    /// 成功或终止都在这里显示 —— 注释区是窗口内唯一常驻文本位（原来的日志区已不再展示 Logs）。
+    /// 悬停说明优先：用户正悬停某个标签时不被状态抢占，离开后由 <see cref="RestoreComment"/> 接上最新状态。
+    /// </summary>
+    private void SyncDdFetchStatus()
+    {
+        var status = _vm.DdFetchStatus;
+        var showingStatus = CommentText.Visibility == Visibility.Visible
+                            && _ddStatusShown is not null
+                            && string.Equals(CommentText.Text, _ddStatusShown, StringComparison.Ordinal);
+        if (status is not { Length: > 0 })
+        {
+            if (showingStatus) RestoreComment();   // 状态结束（VM 定时清除）→ 回到公告
+            return;
+        }
+        // 悬停说明正占用注释区（当前文本不是我们写的状态）：让位，离开时会补上
+        if (CommentText.Visibility == Visibility.Visible && !showingStatus) return;
+        _ddStatusShown = status;
+        ShowComment(status);
     }
 
     // ---------- 切换方案热键 → 注释区联动 ----------
@@ -423,14 +463,25 @@ public partial class MainWindow : Window
     private static readonly Dictionary<string, string> MenuComments = new()
     {
         ["方案定制"] = "方案定制：给四个方案档位命名，并为每个档位绑定主题（默认主题 / 衍天高手 / 莫问高手）；绑定「默认主题」时还可定制应用图标、应用名（窗口名，版本号不变）、键帽配色与开关 / 按压 / 双宏三种配色。切换档位即整套换肤。",
-        ["键盘注入"] = "游戏内键盘连发不生效时逐个尝试：扫描码模式 → 消息模式 → DD 驱动模式。消息模式仅游戏在前台时有效；DD 驱动模式为物理级注入（需 dd63330.dll + 管理员权限）。",
+        ["键盘注入"] = "游戏内键盘连发不生效时逐个尝试：扫描码模式 → 消息模式 → DD 驱动模式。消息模式仅游戏在前台时有效；DD 驱动模式为物理级注入（需 dd63330.dll + 管理员权限）。未检测到 DD 驱动时该项灰显不可选，用下方「获取 DD 驱动…」安装后自动可选。",
+        ["获取 DD 驱动…"] = "从 DD 官方发布渠道下载并安装 dd63330.dll（约 3.7MB，仅首次）：确认后全程自动（下载 → 解包 → 安装），官方渠道网络不稳定时会自动重试直至成功；装好后自动启用 DD 驱动模式。程序只做下载器，不二次分发闭源驱动。",
         ["键帽配色"] = "可视化键帽配色方案（复刻自 keyviz 预设），切换实时生效并落盘。",
         ["键帽可视化"] = "键帽可视化方案：全部 = 所有键位；修饰键和自定义键 = 修饰键与方案内键位；自定义键 = 仅方案内键位（均受单键开关约束）。",
         ["导入配置"] = "从 JSON 文件导入配置：整份配置（方案档位 + 热键 + 各项设置）被覆盖并立即生效，用于恢复备份或使用他人分享的方案。",
         ["导出配置"] = "把当前整份配置（方案档位 + 热键 + 各项设置）导出为 JSON 文件，用于备份或分享。",
-        ["检查更新"] = "查询 Gitee 上的最新 Release：发现新版本时经确认自动下载安装并重启；没有更新或网络不可用会以普通消息提示。" +
-                      "启动时后台预检，发现新版本会先在本项右上角亮红点提醒。",
+        // 更新相关：注释区不再承载版本号 / 更新提醒（公告区已移除那行），
+        // 这两条只说明"点了会发生什么"，具体版本与日志由「更新日志」窗口和「有更新」按钮承担。
+        ["更新日志"] = "查看全部历史版本的更新日志（与仓库 CHANGELOG.md 同源），点开可翻阅每个版本改了什么。",
     };
+
+    /// <summary>「检查更新」的悬停说明。单独用常量 + 专用处理器：该项 Header 是自绘 Grid
+    /// （文本 + 红点），按 Header 文本查 <see cref="MenuComments"/> 会落空，注释区一直显示不出来。</summary>
+    private const string CheckUpdateComment =
+        "查询是否有新版本：发现后经确认自动下载安装并重启；没有更新或网络不可用会以普通消息提示。";
+
+    /// <summary>悬停「检查更新」（Header 非纯文本，走专用处理器）。</summary>
+    private void OnCheckUpdateCommentEnter(object sender, System.Windows.Input.MouseEventArgs e)
+        => ShowComment(CheckUpdateComment);
 
     /// <summary>悬停菜单项：在注释区展示所属分组的说明文本（分组项取自身标题，叶子项取父分组标题）。</summary>
     private void OnMenuCommentEnter(object sender, System.Windows.Input.MouseEventArgs e)
@@ -458,9 +509,11 @@ public partial class MainWindow : Window
         ["DivinerVoiceButton"] = "成为衍天/莫问高手（文案随主题预设）：激活后总开关启动的语音播报改为对应主题的启动音" +
                                 "（衍天高手 →「衍天高手启动」；莫问高手 →「莫问糕手启动」）；关闭播报不变（仍为「停止」）。",
         ["VoiceSettingsButton"] = "语音设置：为总开关开启 / 关闭与方案切换导入自定义提示音（可试听 / 重置回默认）。",
+        ["UpdateAvailableButton"] = "检测到新版本：点击查看新版本号与更新日志，确认后自动下载安装并重启；" +
+                                    "不想现在更新可以直接忽略（按钮会一直留着）。完整历史见「选项 → 更新日志」。",
     };
 
-    /// <summary>悬停底栏元素（状态提醒 / 全局开关热键设置 / 调整可视化位置 / 成为衍天高手 / 语音设置）：
+    /// <summary>悬停底栏元素（状态提醒 / 全局开关热键设置 / 调整可视化位置 / 成为衍天高手 / 语音设置 / 有更新）：
     /// 注释区显示对应说明。</summary>
     private void OnBottomBarCommentEnter(object sender, System.Windows.Input.MouseEventArgs e)
     {
@@ -647,8 +700,13 @@ public partial class MainWindow : Window
             item.IsChecked = int.TryParse(item.Tag?.ToString(), out var index) && index == current;
     }
 
-    /// <summary>设置菜单任一级展开：子项容器此时已生成，补同步 ● 选中标记。</summary>
-    private void OnSettingsMenuSubmenuOpened(object sender, RoutedEventArgs e) => SyncSettingsMenu();
+    /// <summary>设置菜单任一级展开：子项容器此时已生成，补同步 ● 选中标记；
+    /// 同时重算 DD 驱动可用态（用户可能刚手动把 dd63330.dll 放进程序目录）。</summary>
+    private void OnSettingsMenuSubmenuOpened(object sender, RoutedEventArgs e)
+    {
+        _vm.RefreshDdDriverState();
+        SyncSettingsMenu();
+    }
 
     /// <summary>档位外观：窗口标题（应用名 + 版本号）与标题栏 / 任务栏图标一并切换。</summary>
     private void ApplySectChrome(ResolvedAppearance look)
@@ -759,6 +817,13 @@ public partial class MainWindow : Window
     private void ShowProfileCustomize()
     {
         var dlg = new ProfileCustomizeWindow(_vm) { Owner = this };
+        dlg.ShowDialog();
+    }
+
+    /// <summary>打开更新日志模态框（「选项 → 更新日志」：全部历史版本的更新内容，可滚动 / 复制）。</summary>
+    private void ShowChangelog()
+    {
+        var dlg = new ChangelogWindow { Owner = this };
         dlg.ShowDialog();
     }
 

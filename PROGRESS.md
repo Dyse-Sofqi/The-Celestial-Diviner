@@ -1,8 +1,36 @@
 # 衍天高手（The Celestial Diviner）开发进度交接
 
-更新：2026-10-13 — **发版 v1.8.0（单实例保护：命名互斥体 + 同名进程扫描，消除多开互删 DD 驱动服务引发的 1072 弹框）；双端 Release 已发布**
+更新：2026-10-23 — **发版 v1.8.1（DD 驱动可用性判定与获取反馈、更新入口重组、红点默认值修复）；双端 Release 已发布**
 
-## 本次变更（发版 v1.8.0）
+## 本次变更（发版 v1.8.1）
+
+- 📋 用户需求（一轮连续反馈，六项）：驱动没下成功时 DD 模式应灰显；下载过程要有进度、失败重试要可感知；
+  手动放入 `dd63330.dll` 为什么没用；已是最新版不该挂红点；注释区不再放版本更新提示，
+  更新日志收进菜单、底栏加「有更新」按钮；方案管理按钮改文案 + 随模式换色 + 光标默认
+- ✅ 灰显判定（`DdDriverService.IsAvailable`）：**只查文件头不加载 DLL**，判据 = 候选 x64 `dd63330.dll` 在位；
+  「在位但初始化失败」仍保持可选（有原因可看、有重试价值）。灰显后补「获取 DD 驱动…」入口，
+  否则菜单里就没有重新发起下载的地方
+- ✅ 位数坑（本轮最关键的实证）：下载官方包（`2026.DD.EV.HVCI.63xxx.7z`，3,745,599 B）解出——
+  `1.simple\dd63330.dll`（3,860,008 B，= 程序用的那份）与 `2.hid\ddhid.63340.dll`（2,241,576 B）+
+  `drv\ddhid63340.{sys,inf,cat}` + `install.bat`。**两个 DLL 导出完全相同的 7 个函数**
+  （DD_btn/DD_key/DD_mov/DD_movR/DD_str/DD_todc/DD_whl）→ HID 变体 API 层可直接替换，
+  成本主要在装它的 HID 驱动。用户手动放的是 32 位那份 → `LoadLibrary` err=193，而原代码只写日志文件，
+  界面一声不吭。现加 `ReadPeMachine` 预检 + 明确文案 + 注释区显示；32 位占位文件也不再挡自动获取
+- ✅ 获取反馈：`DdDriverService.AutoFetchProgress`（Downloading/Installing/Retrying/Succeeded/Failed）+
+  流式分块下载报百分比（300ms 限频）；VM `DdFetchStatus` → 左下注释区（悬停说明优先），
+  成功 8s / 硬性失败 20s 自动消退
+- ✅ 红点：`_updateDotVisibility` 未初始化 → `Visibility.Visible == 0` → **默认就亮**；
+  预检只点亮不熄灭。改为默认 Collapsed + 预检明确二分
+- ✅ 更新入口重组：`CHANGELOG.md` 内嵌（`TheCelestialDiviner.CHANGELOG.md`）+ `ChangelogService` +
+  `ChangelogWindow`（手写 Markdown 子集 → FlowDocument，跳过「未发布」段）；「选项 → 更新日志」；
+  底栏「有更新」按钮（`Visibility` 绑 `UpdateDotVisibility`，与红点同源），点击 → `InstallKnownUpdateAsync`
+  → 抽出共用的 `ConfirmAndInstallAsync`（确认框 → 下载 → 重启）
+- ✅ 注释区：`Notice.md` / `Notice2.md` 首行版本提示删除；`检查更新` 悬停说明只留功能描述
+  （顺带修：该项 Header 是自绘 Grid，按文本查 `MenuComments` 永远落空，说明此前一直没显示）
+- ✅ 方案面板按钮：`SchemeManageButtonStyle`（紫/金随 `SelectedMode`、白字 SemiBold、光标 Arrow）
+- ⚠️ 未做运行时验证：注释区/窗口排版、灰显与「有更新」按钮的实际出现时机均只做了编译验证
+
+## 历史变更（发版 v1.8.0）
 - 📋 用户需求：按老规矩发版 1.8.0；一句话总结公告；Gitee 令牌由用户提供
 - ✅ 起因（用户反馈的现场证据链）：v1.7.6 用户在游戏内弹 DD 的「DD install error. / 驱动安装错误.」模态框。
   **反汇编 drivers/dd63330.dll**（安装例程 = 函数 RVA `3430`..`3f1b`，`DD install error.` / `DD start error.`

@@ -116,6 +116,30 @@ public static class DdDriverService
     /// <summary>DD 驱动是否已加载并初始化成功。</summary>
     public static bool IsReady { get { lock (Gate) return _ddKey is not null && _initialized; } }
 
+    /// <summary>
+    /// 可加载的 x64 驱动文件（dd63330.dll）是否在位 —— 只读文件头、不加载 DLL、不初始化虚拟设备，
+    /// 供 UI 判断「键盘注入 → DD 驱动」是否可选（下载没成功 / 位数不对 = 灰显不可选）。
+    /// 驱动在位但初始化失败（如免费版在线认证未过）仍算可用：点选时由 <see cref="EnsureReady"/>
+    /// 给出具体原因并回退普通模式，是用户可感知、可重试的路径。
+    /// Change box 的 DD64.dll 是 32 位时间锁版（x64 进程必加载失败），不计入可用。
+    /// </summary>
+    public static bool IsAvailable => ProbeDll(out _) is not null;
+
+    /// <summary>候选 x64 驱动文件路径：exe 目录 → %APPDATA% drivers → Change box 安装目录。</summary>
+    private static IEnumerable<string> X64DllCandidates
+    {
+        get
+        {
+            yield return Path.Combine(AppContext.BaseDirectory, "dd63330.dll");
+            yield return Path.Combine(AppDataDriversDir, "dd63330.dll");
+            yield return Path.Combine(ChangeBoxDllDir, "dd63330.dll");
+        }
+    }
+
+    /// <summary>Change box（第三方 DD 部署）的 DLL 目录；32 位系统上为空目录，探测自然落空。</summary>
+    private static string ChangeBoxDllDir => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Change Box", "DLL");
+
     private static bool _initialized;
 
     /// <summary>最近一次初始化失败的原因（供 UI 日志展示）。</summary>
@@ -137,10 +161,13 @@ public static class DdDriverService
             if (_ddKey is not null && _initialized) return true;
             LastError = null;
 
-            var path = ProbeDll();
+            var path = ProbeDll(out var wrongArch);
             if (path is null)
             {
-                LastError = "未找到 dd63330.dll（请将其放到程序目录，或使用官方 2026 x64 版）";
+                LastError = wrongArch is null
+                    ? "未找到 dd63330.dll（已查找：程序目录、%APPDATA%\\TheCelestialDiviner\\drivers、Change Box\\DLL）"
+                    : $"{Path.GetFileName(wrongArch)} 是 32 位（x86）DLL，本程序是 64 位进程，无法加载。"
+                      + "请换用 64 位（x64）版本的 dd63330.dll（官方 2026 版约 3.7 MB）";
                 return false;
             }
 
@@ -151,7 +178,10 @@ public static class DdDriverService
                 _dllHandle = LoadLibraryW(path);
                 if (_dllHandle == IntPtr.Zero)
                 {
-                    LastError = $"加载 {Path.GetFileName(path)} 失败（err={Marshal.GetLastWin32Error()}）";
+                    var err = Marshal.GetLastWin32Error();
+                    LastError = err == ErrorBadExeFormat
+                        ? $"加载 {Path.GetFileName(path)} 失败：位数不匹配（32 位 DLL 不能用于 64 位进程），请换用 x64 版"
+                        : $"加载 {Path.GetFileName(path)} 失败（err={err}）";
                     return false;
                 }
                 _loadedPath = path;
@@ -406,6 +436,38 @@ public static class DdDriverService
     /// </summary>
     public static event Action? AutoFetchCompleted;
 
+    /// <summary>自动获取阶段（供 UI 区分"进行中"与"已结束"，结束态才需要定时清除提示）。</summary>
+    public enum DdFetchStage
+    {
+        /// <summary>下载中（Message 内含百分比 / 已下载字节）。</summary>
+        Downloading,
+        /// <summary>下载完成，正在解包 / 安装。</summary>
+        Installing,
+        /// <summary>某次尝试失败，等待自动重试（Message 内含原因与等待秒数）。</summary>
+        Retrying,
+        /// <summary>安装成功。</summary>
+        Succeeded,
+        /// <summary>硬性失败（重试无意义），已终止。</summary>
+        Failed
+    }
+
+    /// <summary>一次进度快照（后台线程触发）。</summary>
+    public readonly record struct DdFetchProgress(DdFetchStage Stage, int Attempt, string Message);
+
+    /// <summary>
+    /// 自动获取进度（后台线程触发，无订阅者安全）：开始 / 下载百分比 / 解包 / 每次重试 / 结果。
+    /// 供 UI 展示"正在下载、第几次失败、还要等多久"，避免用户在长达数分钟的重试期里
+    /// 完全看不出程序在干什么。UI 侧必须自行封送线程。
+    /// </summary>
+    public static event Action<DdFetchProgress>? AutoFetchProgress;
+
+    /// <summary>触发进度（无订阅者时为空操作）。</summary>
+    private static void ReportProgress(DdFetchStage stage, int attempt, string message)
+    {
+        try { AutoFetchProgress?.Invoke(new DdFetchProgress(stage, attempt, message)); }
+        catch (Exception ex) { Logger.Warn($"DD 驱动进度回调异常（忽略）：{ex.Message}"); }
+    }
+
     /// <summary>
     /// 后台单飞启动"自动获取 DD 驱动"：探测 exe / APPDATA 目录无 dd63330.dll 时，
     /// 从 DD 官方发布渠道（github.com/ddxoft，作者自己的发布页，下载器性质不做二次分发）
@@ -417,6 +479,8 @@ public static class DdDriverService
     {
         if (Interlocked.CompareExchange(ref _autoFetchRunning, 1, 0) != 0) return;
         Logger.Info("DD 驱动缺失：开始自动获取（官方发布渠道 github.com/ddxoft）...");
+        // 首条状态立刻上报：解析最新 Release 最多要等 10s，否则这段时间里界面毫无动静。
+        ReportProgress(DdFetchStage.Downloading, 0, "DD 驱动获取中：正在连接官方发布渠道…");
         _ = Task.Run(() =>
         {
             try
@@ -439,13 +503,16 @@ public static class DdDriverService
     /// DD 官方渠道在 GitHub，国内可达性波动大，重试是常态而非异常。</summary>
     private static void RunAutoFetch()
     {
-        // 只认可加载的 x64 版 dd63330.dll（exe / APPDATA）；Change Box 的 DD64.dll 是
-        // 32 位时间锁版（x64 必加载失败），不算"已有驱动"，命中它反而正需要自动获取。
-        if (File.Exists(Path.Combine(AppContext.BaseDirectory, "dd63330.dll"))
-            || File.Exists(Path.Combine(AppDataDriversDir, "dd63330.dll")))
+        // 只认可加载的 x64 版 dd63330.dll：位数不符（用户手动从官网拿到 32 位那份）时
+        // 不算"已有驱动"——否则自动获取会直接跳过，用户永远卡在一个加载不了的文件上。
+        if (ProbeDll(out var wrongArch) is not null)
         {
-            Logger.Info("DD 驱动自动获取：探测到已有 dd63330.dll，跳过下载。");
+            Logger.Info("DD 驱动自动获取：探测到可用的 x64 dd63330.dll，跳过下载。");
             return;
+        }
+        if (wrongArch is not null)
+        {
+            Logger.Warn($"DD 驱动自动获取：{wrongArch} 不是 x64 版（无法加载），将由官方 x64 版覆盖安装。");
         }
 
         var workDir = Path.Combine(AppDataDriversDir, "fetch-" + Environment.TickCount.ToString("x"));
@@ -458,8 +525,10 @@ public static class DdDriverService
                 attempt++;
                 try
                 {
-                    FetchOnce(workDir);
+                    FetchOnce(workDir, attempt);
                     Logger.Info($"DD 驱动自动获取成功（第 {attempt} 次尝试），已安装到 %APPDATA%\\TheCelestialDiviner\\drivers。");
+                    ReportProgress(DdFetchStage.Succeeded, attempt,
+                        $"DD 驱动已安装（第 {attempt} 次尝试成功），正在启用 DD 驱动模式…");
                     return;
                 }
                 catch (NoRetryException ex)
@@ -467,6 +536,8 @@ public static class DdDriverService
                     // 重试也无济于事的硬性失败（缺解包工具 / 上游内容变化）：终止并留痕，
                     // 用户可稍后在「选项」菜单重试或手动下载。
                     Logger.Error($"DD 驱动自动获取终止：{ex.Message}");
+                    ReportProgress(DdFetchStage.Failed, attempt,
+                        $"DD 驱动获取失败：{ex.Message}。可在「选项 → 键盘注入 → 获取 DD 驱动…」重试。");
                     throw;
                 }
                 catch (Exception ex)
@@ -474,6 +545,8 @@ public static class DdDriverService
                     // 积极重试：间隔 5s 起步线性递增，上限 60s，直至成功。
                     var delaySec = Math.Min(5 * attempt, 60);
                     Logger.Warn($"DD 驱动自动获取第 {attempt} 次尝试失败：{ex.Message}；{delaySec}s 后自动重试（直至成功）。");
+                    ReportProgress(DdFetchStage.Retrying, attempt,
+                        $"DD 驱动获取第 {attempt} 次尝试失败：{DescribeFetchFailure(ex)}，{delaySec} 秒后自动重试（会一直重试到成功）。");
                     Thread.Sleep(delaySec * 1000);
                 }
             }
@@ -486,25 +559,49 @@ public static class DdDriverService
 
     /// <summary>单次获取尝试：解析官方直链 → 下载 7z → 解包 → 安装到 %APPDATA% drivers。
     /// 抛 <see cref="NoRetryException"/> 表示重试无意义的硬性失败；其余异常由重试循环处理。</summary>
-    private static void FetchOnce(string workDir)
+    private static void FetchOnce(string workDir, int attempt)
     {
         // 1. 解析官方资产直链：优先 GitHub API 拿最新 Release，失败退回硬编码直链。
         var assetUrl = ResolveLatestAssetUrl() ?? DdFallbackAssetUrl;
 
-        // 2. 下载官方 7z 包（约 3.7MB，3 分钟超时兜底）。
+        // 2. 下载官方 7z 包（约 3.7MB，3 分钟超时兜底）。流式读 + 分块报进度：
+        //    一次 ReadAsByteArrayAsync 拿不到任何中间状态，用户在整个下载期看不到反馈。
         var archivePath = Path.Combine(workDir, "dd.7z");
         using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3)))
         using (var response = AutoFetchHttp.GetAsync(assetUrl, cts.Token).ConfigureAwait(false).GetAwaiter().GetResult())
         {
             response.EnsureSuccessStatusCode();
-            File.WriteAllBytes(archivePath,
-                response.Content.ReadAsByteArrayAsync().ConfigureAwait(false).GetAwaiter().GetResult());
+            var total = response.Content.Headers.ContentLength;   // 可能为 null（分块传输）
+            ReportProgress(DdFetchStage.Downloading, attempt,
+                $"DD 驱动获取中：正在下载官方安装包（{(total is > 0 ? $"{total / 1024.0 / 1024.0:0.0} MB" : "约 3.7 MB")}）…");
+            // net48 的 HttpContent.ReadAsStreamAsync 没有 CancellationToken 重载：
+            // 取消由下面的分块 ReadAsync(token) 生效（3 分钟总超时兜底）。
+            using var stream = response.Content.ReadAsStreamAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+            using var file = File.Create(archivePath);
+            var buffer = new byte[81920];
+            long received = 0;
+            var lastTick = Environment.TickCount;
+            while (true)
+            {
+                var read = stream.ReadAsync(buffer, 0, buffer.Length, cts.Token)
+                    .ConfigureAwait(false).GetAwaiter().GetResult();
+                if (read <= 0) break;
+                file.Write(buffer, 0, read);
+                received += read;
+                // 限频（300ms）：3.7MB 在快网络下几百毫秒就完，逐块上报会刷屏。
+                if (Environment.TickCount - lastTick < 300) continue;
+                lastTick = Environment.TickCount;
+                ReportProgress(DdFetchStage.Downloading, attempt, total is > 0
+                    ? $"DD 驱动获取中：正在下载 {received * 100 / total}%（{received / 1024.0 / 1024.0:0.0} / {total / 1024.0 / 1024.0:0.0} MB）…"
+                    : $"DD 驱动获取中：正在下载（已 {received / 1024.0 / 1024.0:0.0} MB）…");
+            }
         }
 
         // 3. 解包：随包 7zr.exe（7-Zip 独立版，LGPL）。缺失视为安装包不完整（重试无意义）。
         var sevenZip = Path.Combine(AppContext.BaseDirectory, "7zr.exe");
         if (!File.Exists(sevenZip))
             throw new NoRetryException("缺少 7zr.exe 解包工具（请从官方发布包完整安装）");
+        ReportProgress(DdFetchStage.Installing, attempt, "DD 驱动获取中：下载完成，正在解包安装…");
         var extractDir = Path.Combine(workDir, "x");
         if (Directory.Exists(extractDir)) Directory.Delete(extractDir, true);   // 重试前清理上次残留
         using (var proc = Process.Start(new ProcessStartInfo
@@ -541,6 +638,16 @@ public static class DdDriverService
     {
         public NoRetryException(string message) : base(message) { }
     }
+
+    /// <summary>
+    /// 把一次尝试的异常转成一句用户能读的失败原因（UI 注释区直接展示）：
+    /// 超时单独说明，其余去掉英文句末标点，避免"…success: 404 (Not Found).，5 秒后"这种拼接。
+    /// </summary>
+    private static string DescribeFetchFailure(Exception ex) => ex switch
+    {
+        OperationCanceledException => "下载超时（3 分钟未完成）",
+        _ => ex.Message.TrimEnd('。', '.', ' ')
+    };
 
     /// <summary>
     /// 查询 DD 官方最新 Release 的 7z 资产直链（GitHub API 匿名限流 / 网络失败返回 null，
@@ -592,19 +699,20 @@ public static class DdDriverService
 
             // 预登记待决回环名额（必须在注入调用之前：回环事件可能在
             // DD_key 返回前就到达钩子）；注入失败则撤销（见 EchoGuard）。
-            var stamp = EchoGuard.NoteInjection(vk, down);
+            var note = EchoGuard.NoteInjection(vk, down);
             // 诊断埋点：DD_key 内核注入耗时限频告警（>50ms = 驱动 / 系统侧拥堵，
             // 所有任务线程在 Gate 上串行等待，连发节奏与启停响应都会被拖慢）。
             var ddStart = Stopwatch.GetTimestamp();
             var ret = SafeCall(_ddKey, MakeKeyArgs(code, down), out var seh);
             var ddMs = (Stopwatch.GetTimestamp() - ddStart) * 1000.0 / Stopwatch.Frequency;
+            note.CostMs = (int)Math.Round(ddMs);   // 回填到名额：延迟日志据此把两段拆开
             if (ddMs > 50 && unchecked(Environment.TickCount - _lastDdLatencyLogTick) > 2000)
             {
                 _lastDdLatencyLogTick = Environment.TickCount;
                 Logger.Warn($"DD_key 注入耗时 {ddMs:0}ms（vk=0x{vk:X2}, down={down}）。");
             }
             if (!seh && ret == 0) return true;
-            EchoGuard.CancelNote(vk, down, stamp);
+            EchoGuard.CancelNote(vk, down, note);
             return false;
         }
     }
@@ -655,27 +763,59 @@ public static class DdDriverService
     }
 
     /// <summary>
-    /// 探测可用 DD DLL（返回绝对路径）：
+    /// 探测可用 DD DLL（返回绝对路径；只认 **x64** 且导出可用的候选）：
     /// 1. exe 目录 dd63330.dll（官方 x64）
     /// 2. %APPDATA%\TheCelestialDiviner\drivers\dd63330.dll（自动获取的安装位置）
-    /// 3. Change box 目录 DD64.dll（32 位时间锁版 —— x64 进程加载必失败，仅列为探测目标，
-    ///    加载失败时 LastError 会提示替换为 x64 版）
+    /// 3. Change box 目录 DD64.dll（32 位时间锁版 —— x64 进程加载必失败）
+    ///
+    /// <paramref name="wrongArch"/> 回传"文件在位但位数不对"的那个路径：DD 官方按位数分包，
+    /// 用户手动从官网下载时很容易拿到 32 位那份，放进程目录里 LoadLibrary 必失败（err=193）。
+    /// 这里提前读 PE 头判掉，调用方才能给出"你放的是 32 位版本"这种能让人看懂的提示，
+    /// 而不是一句 err=193。
     /// </summary>
-    private static string? ProbeDll()
+    private static string? ProbeDll(out string? wrongArch)
     {
-        var candidates = new List<string>
+        wrongArch = null;
+        var candidates = new List<string>(X64DllCandidates)
         {
-            Path.Combine(AppContext.BaseDirectory, "dd63330.dll"),
-            Path.Combine(AppDataDriversDir, "dd63330.dll")
+            // 路径必须由目录拼（早前用 dll 全路径 + ".." 拼出的是非法路径，此分支实际从未命中）。
+            Path.Combine(ChangeBoxDllDir, "DD64.dll")
         };
 
-        var changeBox = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-            "Change Box", "DLL", "dd63330.dll");
-        candidates.Add(changeBox);
-        candidates.Add(Path.Combine(changeBox, "..", "DD64.dll"));
+        foreach (var path in candidates)
+        {
+            if (!File.Exists(path)) continue;
+            if (ReadPeMachine(path) == MachineAmd64) return path;
+            wrongArch ??= path;   // 记住第一个位数不符的，供 LastError 说明
+        }
+        return null;
+    }
 
-        return candidates.FirstOrDefault(File.Exists);
+    private const ushort MachineAmd64 = 0x8664;      // IMAGE_FILE_MACHINE_AMD64
+    private const int ErrorBadExeFormat = 193;       // 32 位 DLL 塞进 64 位进程
+
+    /// <summary>
+    /// 读 PE 头里的 Machine 字段判断位数（0x8664 = x64）；不是有效 PE / 读不到返回 null。
+    /// 只读文件前几百字节，不加载模块，开销可忽略（菜单展开时会被调用）。
+    /// </summary>
+    private static ushort? ReadPeMachine(string path)
+    {
+        try
+        {
+            using var fs = File.OpenRead(path);
+            using var br = new BinaryReader(fs);
+            if (br.ReadUInt16() != 0x5A4D) return null;          // 'MZ'
+            fs.Position = 0x3C;
+            var peOffset = br.ReadInt32();
+            if (peOffset <= 0 || peOffset > fs.Length - 6) return null;
+            fs.Position = peOffset;
+            if (br.ReadUInt32() != 0x00004550) return null;      // 'PE\0\0'
+            return br.ReadUInt16();
+        }
+        catch
+        {
+            return null;   // 被占用 / 无权限 / 被截断：当作不可用，由 EnsureReady 报加载失败
+        }
     }
 
     /// <summary>%APPDATA%\TheCelestialDiviner\drivers（自动获取驱动的安装位置；用户目录可写，无需管理员）。</summary>

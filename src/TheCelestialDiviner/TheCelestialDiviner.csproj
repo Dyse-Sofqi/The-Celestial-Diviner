@@ -17,8 +17,8 @@
     <!-- 管理员权限 + PerMonitorV2 DPI 声明 -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Resources\app.ico</ApplicationIcon>
-    <Version>1.8.0</Version>
-    <FileVersion>1.8.0.0</FileVersion>
+    <Version>1.8.1</Version>
+    <FileVersion>1.8.1.0</FileVersion>
     <AssemblyTitle>衍天高手</AssemblyTitle>
     <Product>衍天高手 (The Celestial Diviner)</Product>
     <Description>键盘 / 鼠标连发工具（全局钩子 + SendInput，.NET Framework 4.8）</Description>
@@ -61,6 +61,8 @@
     <EmbeddedResource Include="..\..\Notice.md" Link="Notice.md" LogicalName="TheCelestialDiviner.Notice.md" />
     <!-- 门派主题「莫问高手」的注释区公告（仓库根目录 Notice2.md，同 Notice.md 的同步策略） -->
     <EmbeddedResource Include="..\..\Notice2.md" Link="Notice2.md" LogicalName="TheCelestialDiviner.Notice2.md" />
+    <!-- 更新日志（仓库根目录 CHANGELOG.md）：内嵌供「选项 → 更新日志」窗口展示全部历史版本 -->
+    <EmbeddedResource Include="..\..\CHANGELOG.md" Link="CHANGELOG.md" LogicalName="TheCelestialDiviner.CHANGELOG.md" />
   </ItemGroup>
 
   <!-- DD 驱动模式依赖：官方 DD 虚拟驱动 x64 DLL（原生库，无法内嵌单文件，随目录分发）。

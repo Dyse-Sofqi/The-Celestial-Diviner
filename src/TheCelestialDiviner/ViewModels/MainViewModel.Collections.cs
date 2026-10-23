@@ -205,7 +205,7 @@ public sealed partial class MainViewModel
 
     // ---------- 方案面板：录入选择态与连发键管理 ----------
 
-    private const string s_defaultHint = "点击“从左侧键盘管理方案”进入管理模式：左键键位添加方案，右键键位取消方案";
+    private const string s_defaultHint = "点击“从左侧键盘增删按键方案”进入管理模式：左键键位添加方案，右键键位取消方案";
 
     // 选择态提示条文案（管理模式的操作说明；双宏成对录入有独立文案，成对完成 / 放弃第 1 键后回到此处）。
     private const string s_managePrompt =

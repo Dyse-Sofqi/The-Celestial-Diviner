@@ -16,7 +16,7 @@ public enum PickKind
     /// <summary>未处于选择态。</summary>
     None,
 
-    /// <summary>管理连发键方案（“从左侧键盘管理方案”按钮）：左键添加 / 右键取消，直至显式退出。</summary>
+    /// <summary>管理连发键方案（“从左侧键盘增删按键方案”按钮）：左键添加 / 右键取消，直至显式退出。</summary>
     AddScheme,
 
     /// <summary>设置全局开关热键（方案面板顶部的热键设置项）。</summary>
@@ -55,6 +55,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private bool _globalVisualEnabled = true;          // 键位可视化总开关（默认开启；关闭时仅禁用显示，各键开关状态保留）
     private int _keyboardMode; // 键盘注入模式：0 普通 / 1 扫描码 / 2 消息
     private bool _ddAutoActivate;   // DD 缺驱动自动回退后挂起：自动获取完成时升回 DD 模式（用户手动切换即取消）
+    private string? _ddFetchStatus;  // DD 驱动获取进度提示（注释区展示；null = 无进行中/刚结束的提示）
+    private readonly System.Windows.Threading.DispatcherTimer _ddStatusTimer = new(); // 获取状态提示自动消退
     private int _activeProfile;                        // 方案面板当前档位（0/1/2 ↔ ①②③）
     private bool _pickingActive;                       // 键位录入选择态
     private PickKind _pickingKind = PickKind.None;     // 键位录入选择态用途
@@ -245,11 +247,23 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         OpenVoiceSettingsCommand = RelayCommand.Create(() => VoiceSettingsRequested?.Invoke());
         CustomizeProfilesCommand = RelayCommand.Create(() => ProfileCustomizeRequested?.Invoke());
         CheckUpdateCommand = RelayCommand.Create(() => _ = RunCheckUpdateAsync());
+        // 底栏「有更新」按钮（仅检测到新版本时可见）：直接弹确认框（版本 + 更新日志）。
+        UpdateAvailableCommand = RelayCommand.Create(() => _ = InstallKnownUpdateAsync());
+        // 「选项 → 更新日志」：弹出窗口展示全部历史版本（数据源 = 内嵌 CHANGELOG.md）。
+        ShowChangelogCommand = RelayCommand.Create(() => ChangelogRequested?.Invoke());
         // 底栏设置菜单（键盘注入 / 键帽配色 / 键帽可视化）：参数沿用原下拉框语义，
         // 点击选项即热生效 + 落盘。
         SetKeyboardModeCommand = new RelayCommand(o =>
         {
             if (int.TryParse(o?.ToString(), out var mode)) KeyboardMode = mode;
+        });
+        // DD 驱动缺失时「键盘注入」里的获取入口：DD 模式项此时已灰显不可选，
+        // 下载确认只能从这里发起（确认后后台获取，结束经 AutoFetchCompleted 重算可用态）。
+        FetchDdDriverCommand = RelayCommand.Create(() =>
+        {
+            _ddAutoActivate = true;   // 主动点「获取 DD 驱动」= 期望 DD 模式：装好即自动启用（拒绝时内部会清掉）
+            RequestDdDriverFetch();
+            RefreshDdDriverState();   // 确认后 IsAutoFetchRunning 已置位 → 入口转「获取中…」并禁用
         });
         SetKeycapSchemeCommand = new RelayCommand(o =>
         {
@@ -315,6 +329,50 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         }
         InputSimulatorService.KeyboardMode = _keyboardMode;
         DdDriverService.AutoFetchCompleted += OnDdAutoFetchCompleted;
+        DdDriverService.AutoFetchProgress += OnDdAutoFetchProgress;
+
+        // 获取状态提示自动消退（成功 8s / 硬性失败 20s）：注释区是公告的展示位，
+        // 不该被一条过期的状态长期顶掉；重试期间不消退（状态本身会不断刷新）。
+        _ddStatusTimer.Tick += (_, _) =>
+        {
+            _ddStatusTimer.Stop();
+            DdFetchStatus = null;
+        };
+    }
+
+    /// <summary>
+    /// DD 驱动获取进度回调（后台线程触发，封送 UI 线程）：写入 <see cref="DdFetchStatus"/>，
+    /// 由 View 显示在左下注释区 —— 下载百分比、第几次失败、多久后重试都在这里，
+    /// 解决"确认下载后界面长时间毫无动静、失败与重试完全不可感知"的问题。
+    /// </summary>
+    private void OnDdAutoFetchProgress(DdDriverService.DdFetchProgress progress)
+    {
+        Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            DdFetchStatus = progress.Message;
+            RefreshDdDriverState();   // 「获取 DD 驱动…」入口的 获取中 / 可重试 状态同步
+            if (progress.Stage is DdDriverService.DdFetchStage.Succeeded
+                or DdDriverService.DdFetchStage.Failed)
+            {
+                ScheduleDdStatusClear(TimeSpan.FromSeconds(
+                    progress.Stage == DdDriverService.DdFetchStage.Succeeded ? 8 : 20));
+            }
+        });
+    }
+
+    /// <summary>安排注释区获取状态在指定延时后清除（重复调用以最后一次为准）。</summary>
+    private void ScheduleDdStatusClear(TimeSpan delay)
+    {
+        _ddStatusTimer.Stop();
+        _ddStatusTimer.Interval = delay;
+        _ddStatusTimer.Start();
+    }
+
+    /// <summary>写入获取流程的终态提示（成功 / 失败的最后一句）并安排自动消退。</summary>
+    private void FinishDdFetchStatus(string message, int seconds)
+    {
+        DdFetchStatus = message;
+        ScheduleDdStatusClear(TimeSpan.FromSeconds(seconds));
     }
 
     /// <summary>
@@ -324,14 +382,19 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// </summary>
     private void RequestDdDriverFetch()
     {
+        // 带上具体原因：手动把驱动放进目录却仍不可用时（最常见的是拿到了 32 位版本），
+        // 用户必须在这里看到"为什么"，否则只会觉得"放了没用"。
+        var reason = DdDriverService.LastError is { Length: > 0 } err ? $"\n\n具体原因：{err}" : "";
         var confirmed = DdDriverFetchConfirmRequested?.Invoke(
-            "本软件的键盘连发功能完全依赖 DD 驱动运作，当前未找到 DD 驱动（dd63330.dll），"
-            + "未安装驱动时连发可能被多数游戏过滤而无效。\n\n"
+            "本软件的键盘连发功能完全依赖 DD 驱动运作，当前未找到可用的 DD 驱动（dd63330.dll），"
+            + "未安装驱动时连发可能被多数游戏过滤而无效。"
+            + reason + "\n\n"
             + "DD 驱动虽由作者免费提供，但它是闭源软件，我们无权将其打包分发，"
             + "所以这一步需要由您来完成：\n\n"
             + "是否自动从 DD 官方发布渠道下载并安装（约 3.7MB，仅首次）？\n"
             + "确认后全程自动完成并启用 DD 驱动模式；官方渠道网络不稳定，"
-            + "下载失败会自动重试直至成功。") == true;
+            + "下载失败会自动重试直至成功。\n\n"
+            + "下载与重试进度显示在窗口左下的注释区，也可在「选项 → 键盘注入」查看获取状态。") == true;
         if (confirmed)
         {
             DdDriverService.StartAutoFetch();
@@ -339,8 +402,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         }
         _ddAutoActivate = false;
         AddLog("已保持普通模式。DD 驱动是连发功能的核心依赖，建议尽快获取："
-               + "可从 ddxoft 官网（www.ddxoft.com）下载 dd63330.dll 放到程序目录后重启，"
-               + "或稍后在「选项」菜单重试 DD 模式。");
+               + "可从 ddxoft 官网（www.ddxoft.com）下载 64 位（x64）版 dd63330.dll 放到程序目录后重启，"
+               + "或稍后在「选项」→「键盘注入」→「获取 DD 驱动…」重新发起。");
+        // 确认框关掉后原因仍留在注释区，便于对照着改文件。
+        if (DdDriverService.LastError is { Length: > 0 } kept)
+            FinishDdFetchStatus($"DD 驱动不可用：{kept}", 30);
     }
 
     /// <summary>
@@ -353,14 +419,25 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     {
         Application.Current?.Dispatcher.BeginInvoke(() =>
         {
-            if (!_ddAutoActivate) return;
+            // 获取流程结束（成功 / 失败均会触发）：先重算菜单可用态 —— 装成功则 DD 项由灰转可选，
+            // 失败则继续保持灰显（后台仍在自动重试）。
+            RefreshDdDriverState();
+            if (!_ddAutoActivate)
+            {
+                // 用户没在等 DD 模式（例如手动点了获取但当前用的是普通模式）：明确告知装好了、去哪儿切。
+                if (DdDriverService.IsAvailable)
+                    FinishDdFetchStatus("DD 驱动已安装，可在「选项 → 键盘注入」里选择 DD 驱动模式。", 8);
+                return;
+            }
             _ddAutoActivate = false;
             if (!DdDriverService.EnsureReady())
             {
-                AddLog($"DD 驱动自动获取后初始化失败，可稍后在「选项」菜单重试 DD 模式：{DdDriverService.LastError}");
+                AddLog($"DD 驱动自动获取后初始化失败，可在「选项」→「键盘注入」再点一次 DD 驱动模式重试：{DdDriverService.LastError}");
+                FinishDdFetchStatus($"DD 驱动已安装但初始化失败：{DdDriverService.LastError}", 20);
                 return;
             }
             KeyboardMode = 3;
+            FinishDdFetchStatus("DD 驱动已就绪：已启用 DD 驱动模式（物理级注入）。", 8);
         });
     }
 
@@ -926,6 +1003,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     // ---------- 检查更新（Gitee Release：检查 → 确认 → 下载安装自动重启） ----------
     private bool _checkingUpdate;
 
+    /// <summary>已确认到的新版本（启动预检 / 手动检查写入）：底栏「有更新」按钮据此直接弹确认框，
+    /// 不必重新查询远端；确认无更新时置 null。</summary>
+    private UpdateCheck? _latestUpdate;
+
     /// <summary>检查 / 下载更新进行中（按钮禁用并显示“检查中…”）。</summary>
     public bool CheckingUpdate
     {
@@ -933,10 +1014,13 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         private set => Set(ref _checkingUpdate, value);
     }
 
-    private Visibility _updateDotVisibility;
+    // 默认熄灭：Visibility.Visible == 0，写成无初始化的字段会默认"亮着"，
+    // 于是即使已是最新版、启动预检也没发现更新，小红点照样挂在那里（只有手动检查一次才灭）。
+    private Visibility _updateDotVisibility = Visibility.Collapsed;
 
-    /// <summary>「检查更新」菜单项的小红点可见性：启动后台预检发现新版本时亮起，
-    /// 手动检查确认已是最新后熄灭（更新安装重启后远端 = 当前，自然不再亮）。</summary>
+    /// <summary>「检查更新」菜单项的小红点可见性：仅当**确认存在**更新的版本时才亮起
+    /// （启动后台预检 / 手动检查发现新版 → Visible；已是最新 / 远端不可用 → Collapsed）。
+    /// 更新安装重启后远端 = 当前，自然不再亮。</summary>
     public Visibility UpdateDotVisibility
     {
         get => _updateDotVisibility;
@@ -975,27 +1059,17 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             if (check.Version <= UpdateService.CurrentVersion)
             {
                 AddLog($"检查更新：已是最新版本（远端 {check.TagName}）。");
-                UpdateDotVisibility = Visibility.Collapsed;   // 确认无更新：熄灭小红点
+                _latestUpdate = null;
+                UpdateDotVisibility = Visibility.Collapsed;   // 确认无更新：熄灭小红点 / 收起「有更新」
                 UpdateMessageRequested?.Invoke("检查更新",
                     $"当前已是最新版本 v{UpdateService.CurrentVersion.ToString(3)}。");
                 return;
             }
 
-            // 有新版本 → 保持 / 点亮小红点（用户取消安装时仍提醒待更新），弹框确认。
+            // 有新版本 → 记录（底栏「有更新」按钮的数据源）+ 点亮小红点，弹框确认。
+            _latestUpdate = check;
             UpdateDotVisibility = Visibility.Visible;
-            AddLog($"发现新版本 {check.TagName}。");
-            if (UpdateConfirmRequested?.Invoke(check) != true)
-            {
-                AddLog("已取消更新。");
-                return;
-            }
-
-            // 下载 + 解包校验 + 启动自更新脚本，随后走正常退出（脚本在进程退出后覆盖并重启）。
-            AddLog($"开始下载更新包 {check.AssetName}…");
-            var zip = await UpdateService.DownloadAsync(check);
-            AddLog("更新包就绪，程序将退出并自动完成安装重启。");
-            UpdateService.PrepareAndLaunchUpdater(zip);
-            UpdateRestartRequested?.Invoke();
+            await ConfirmAndInstallAsync(check);
         }
         catch (Exception ex)
         {
@@ -1009,8 +1083,59 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// 底栏「有更新」按钮：用已确认到的版本直接走"确认 → 下载 → 重启"，
+    /// 不重新查询远端（启动预检 / 检查更新已经拿到版本与更新日志）。
+    /// 极端情况下没有缓存的版本（例如按钮刚出现就被点），退回完整检查流程。
+    /// </summary>
+    private async Task InstallKnownUpdateAsync()
+    {
+        if (CheckingUpdate) return;
+        if (_latestUpdate is not { } check)
+        {
+            await RunCheckUpdateAsync();
+            return;
+        }
+        CheckingUpdate = true;
+        try
+        {
+            await ConfirmAndInstallAsync(check);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("安装更新失败。", ex);
+            UpdateMessageRequested?.Invoke("检查更新", $"更新失败：{ex.Message}");
+        }
+        finally
+        {
+            CheckingUpdate = false;
+        }
+    }
+
+    /// <summary>
+    /// 确认并安装更新（检查更新 / 底栏「有更新」共用）：确认框（版本 + 更新日志）→
+    /// 下载 + 解包校验 → 启动自更新脚本 → 请求退出（脚本在进程退出后覆盖并重启）。
+    /// 不含 CheckingUpdate 守卫与异常兜底，由调用方负责。
+    /// </summary>
+    private async Task ConfirmAndInstallAsync(UpdateCheck check)
+    {
+        AddLog($"发现新版本 {check.TagName}。");
+        if (UpdateConfirmRequested?.Invoke(check) != true)
+        {
+            AddLog("已取消更新。");   // 取消后红点 / 「有更新」按钮保留，用户可稍后再装
+            return;
+        }
+
+        AddLog($"开始下载更新包 {check.AssetName}…");
+        var zip = await UpdateService.DownloadAsync(check);
+        AddLog("更新包就绪，程序将退出并自动完成安装重启。");
+        UpdateService.PrepareAndLaunchUpdater(zip);
+        UpdateRestartRequested?.Invoke();
+    }
+
+    /// <summary>
     /// 启动后台更新预检（不打扰用户，不弹窗）：发现 Gitee 有比当前更新的 Release 时
-    /// 点亮「选项 → 检查更新」的小红点提醒；无更新 / 网络不可用一律静默跳过。
+    /// 点亮「选项 → 检查更新」的小红点提醒；无更新 / 网络不可用一律静默，并且**明确熄灭**红点——
+    /// 红点必须由"确认有新版本"点亮，不能靠默认值亮着（那样已是最新版也会挂一个点）。
     /// </summary>
     private async Task CheckUpdateDotAsync()
     {
@@ -1019,13 +1144,21 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             var check = await UpdateService.FetchLatestAsync();
             if (check is { } c && c.Version > UpdateService.CurrentVersion)
             {
+                _latestUpdate = c;                            // 「有更新」按钮的数据源
                 UpdateDotVisibility = Visibility.Visible;
-                AddLog($"发现新版本 {c.TagName}：「选项 → 检查更新」已亮红点提醒。");
+                AddLog($"发现新版本 {c.TagName}：「检查更新」红点与底栏「有更新」已亮。");
+            }
+            else
+            {
+                _latestUpdate = null;
+                UpdateDotVisibility = Visibility.Collapsed;   // 已是最新 / 远端不可用：不亮红点
+                AddLog("启动更新预检：没有更新的版本。");
             }
         }
         catch (Exception ex)
         {
             // 双保险静默（FetchLatestAsync 内部已兜底）：启动预检任何失败不得影响主流程。
+            UpdateDotVisibility = Visibility.Collapsed;
             Logger.Info($"启动更新预检失败（不影响使用）：{ex.Message}");
         }
     }
@@ -1156,7 +1289,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             //（确认后后台下载安装，完成自动升回 DD 模式）。
             if (value == 3 && !DdDriverService.EnsureReady())
             {
-                AddLog($"DD 驱动模式暂不可用（{DdDriverService.LastError}），已先回退普通模式。");
+                var reason = DdDriverService.LastError ?? "未知原因";
+                AddLog($"DD 驱动模式暂不可用（{reason}），已先回退普通模式。");
+                // 同一句原因送到注释区：手动放错文件（如放了 32 位版）时用户必须能看到为什么，
+                // AddLog 走的 Logs 集合界面上没有绑定，等于没提示。
+                FinishDdFetchStatus($"DD 驱动模式不可用：{reason}", 20);
                 value = 0;
                 Set(ref _keyboardMode, 0);
                 _ddAutoActivate = true;
@@ -1179,6 +1316,33 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
                 _ => "键盘注入已切换：普通模式（SendInput）。"
             });
         }
+    }
+
+    /// <summary>
+    /// DD 驱动是否可用（可加载的 x64 dd63330.dll 在位）：决定「键盘注入 → DD 驱动」能否点选。
+    /// 只查文件、不初始化设备——驱动在位但初始化失败时仍允许点选，由 EnsureReady 说明原因；
+    /// 文件不在位（从未下载 / 下载失败 / 被删除）则灰显，避免"看着能选、点了却弹窗回退"。
+    /// </summary>
+    public bool IsDdDriverAvailable => DdDriverService.IsAvailable;
+
+    /// <summary>DD 驱动是否正在后台获取（获取期间「获取 DD 驱动…」显示进度并禁用）。</summary>
+    public bool IsDdDriverFetching => DdDriverService.IsAutoFetchRunning;
+
+    /// <summary>
+    /// DD 驱动获取进度提示（注释区展示）：null = 无提示（平时 / 结束后自动消退）。
+    /// 下载百分比、第 N 次失败、几秒后重试、成功或终止，全部走这一条文本。
+    /// </summary>
+    public string? DdFetchStatus
+    {
+        get => _ddFetchStatus;
+        private set => Set(ref _ddFetchStatus, value);
+    }
+
+    /// <summary>重算 DD 驱动可用 / 获取中状态并通知 UI（菜单展开、获取开始 / 结束时调用）。</summary>
+    public void RefreshDdDriverState()
+    {
+        OnPropertyChanged(nameof(IsDdDriverAvailable));
+        OnPropertyChanged(nameof(IsDdDriverFetching));
     }
 
     /// <summary>把当前配置应用到连发调度器（方案变更后调用）。</summary>
@@ -1299,8 +1463,20 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// <summary>检查更新命令（Gitee Release：检查 → 确认 → 下载安装并自动重启）。</summary>
     public ICommand CheckUpdateCommand { get; }
 
+    /// <summary>更新日志命令（「选项 → 更新日志」：弹窗展示全部历史版本的更新内容）。</summary>
+    public ICommand ShowChangelogCommand { get; }
+
+    /// <summary>底栏「有更新」按钮：确认并安装已检测到的新版本（版本号 + 更新日志 → 下载 → 重启）。</summary>
+    public ICommand UpdateAvailableCommand { get; }
+
+    /// <summary>更新日志窗口请求（View 接线后订阅；打开模态窗）。</summary>
+    public event Action? ChangelogRequested;
+
     /// <summary>底栏设置菜单：切换键盘注入模式（参数 = 模式索引 0 普通 / 1 扫描码 / 2 消息 / 3 DD 驱动）。</summary>
     public ICommand SetKeyboardModeCommand { get; }
+
+    /// <summary>底栏设置菜单：获取 DD 驱动（缺失时出现的下载安装入口，用户确认后从官方渠道获取）。</summary>
+    public ICommand FetchDdDriverCommand { get; }
 
     /// <summary>底栏设置菜单：切换键帽配色方案（参数 = KeycapSchemes.All 中的方案名）。</summary>
     public ICommand SetKeycapSchemeCommand { get; }

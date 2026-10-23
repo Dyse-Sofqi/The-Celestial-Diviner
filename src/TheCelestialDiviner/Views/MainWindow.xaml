@@ -202,6 +202,50 @@
             </Setter>
         </Style>
 
+        <!-- 方案管理按钮（面板底部「从左侧键盘增删按键方案」）：底色随当前模式 ——
+             开关模式 = 主题紫、按压模式 = 主题金，与模式滑块同一组色；
+             白字 + 恒定加粗（同开关 / 按压模式标签）。
+             不复用 IconButtonStyle：它的悬停 / 按下触发器会把底色换成灰色，压掉主题色，
+             这里改用整体透明度做反馈，保证颜色始终是"当前模式色" -->
+        <Style x:Key="SchemeManageButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="{DynamicResource AccentPrimary}"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <!-- 光标保持默认箭头：这枚按钮是"进入管理态"的开关，不是链接式跳转，
+                 悬停变手型与面板内其他控件不一致 -->
+            <Setter Property="Cursor" Value="Arrow"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome" Background="{TemplateBinding Background}" CornerRadius="4">
+                            <ContentPresenter Margin="8,0" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Opacity" Value="0.88"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Chrome" Property="Opacity" Value="0.75"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Chrome" Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 底栏「有更新」按钮：与面板「增删按键方案」按钮同观感（主题紫底白字加粗），
+             仅差光标——底栏是跳转/触发式动作，保留手型 -->
+        <Style x:Key="UpdateButtonStyle" TargetType="Button" BasedOn="{StaticResource SchemeManageButtonStyle}">
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+
         <!-- ===== 底栏设置菜单（菜单键 + 二级级联子菜单）=====
              自绘模板：系统默认 MenuItem 在夜间模式下为白底黑字不可用，改用主题资源；
              选中标记为自绘 ●（规避系统勾选符号硬编码配色），IsCheckable=False +
@@ -341,6 +385,12 @@
                                  不用绑定式 DataTrigger（模板实例化期求值不可靠） -->
                             <Trigger Property="Tag" Value="action">
                                 <Setter TargetName="CheckMark" Property="Visibility" Value="Collapsed"/>
+                            </Trigger>
+                            <!-- 不可用（如 DD 驱动未安装）：整行压暗 40%——文字 / ● / 箭头一并变灰，
+                                 与"可选但点了会回退"区分开；置最后，压过悬停 / 选中配色
+                                 （IsEnabled=False 由绑定决定，禁用项也不再收到悬停高亮） -->
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bg" Property="Opacity" Value="0.4"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -723,9 +773,32 @@
                             <MenuItem Header="消息（PostMessage）" Tag="2" Style="{StaticResource MenuSubStyle}"
                                       Command="{Binding SetKeyboardModeCommand}"
                                       CommandParameter="{Binding RelativeSource={RelativeSource Self}, Path=Tag}"/>
+                            <!-- DD 驱动项：可加载的 x64 dd63330.dll 不在位时灰显不可选（IsEnabled 绑 IsDdDriverAvailable）。
+                                 否则"可选却选不上"——点它会回退普通模式再弹下载确认；缺失时由下方获取入口负责安装 -->
                             <MenuItem Header="DD 驱动（物理级）" Tag="3" Style="{StaticResource MenuSubStyle}"
                                       Command="{Binding SetKeyboardModeCommand}"
-                                      CommandParameter="{Binding RelativeSource={RelativeSource Self}, Path=Tag}"/>
+                                      CommandParameter="{Binding RelativeSource={RelativeSource Self}, Path=Tag}"
+                                      IsEnabled="{Binding IsDdDriverAvailable}"/>
+                            <!-- 获取 DD 驱动（动作项 Tag = action，折叠 ● 占位列与同级左对齐）：仅驱动缺失时出现，
+                                 用户确认后从官方渠道下载安装，装好自动启用 DD 模式；
+                                 获取期间整体替换 Header 并禁用（同「检查更新」的「检查中…」） -->
+                            <MenuItem Tag="action" Command="{Binding FetchDdDriverCommand}">
+                                <MenuItem.Style>
+                                    <Style TargetType="MenuItem" BasedOn="{StaticResource MenuSubStyle}">
+                                        <Setter Property="Header" Value="获取 DD 驱动…"/>
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsDdDriverAvailable}" Value="False">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsDdDriverFetching}" Value="True">
+                                                <Setter Property="Header" Value="获取中…（失败自动重试）"/>
+                                                <Setter Property="IsEnabled" Value="False"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </MenuItem.Style>
+                            </MenuItem>
                         </MenuItem>
                         <MenuItem x:Name="KeycapSchemeMenu" Header="键帽配色" Style="{StaticResource MenuSubStyle}"
                                   ItemsSource="{Binding KeycapSchemeNames}"
@@ -771,7 +844,7 @@
                              手动检查确认已是最新后熄灭；检查 / 下载期间禁用并显示“检查中…”
                              （DataTrigger 整体替换 Header，红点随 Grid 一起消失）；悬停说明走注释区（MenuComments） -->
                         <MenuItem Tag="action" Command="{Binding CheckUpdateCommand}"
-                                  MouseEnter="OnMenuCommentEnter" MouseLeave="OnMenuCommentLeave">
+                                  MouseEnter="OnCheckUpdateCommentEnter" MouseLeave="OnMenuCommentLeave">
                             <MenuItem.Header>
                                 <Grid>
                                     <TextBlock Text="检查更新" Margin="0,0,9,0"/>
@@ -791,6 +864,11 @@
                                 </Style>
                             </MenuItem.Style>
                         </MenuItem>
+                        <!-- 更新日志（动作项，紧跟检查更新）：弹出窗口展示全部历史版本（内嵌 CHANGELOG.md），
+                             版本与更新内容从此集中在这里，注释区不再承载 -->
+                        <MenuItem Header="更新日志" Tag="action" Style="{StaticResource MenuSubStyle}"
+                                  Command="{Binding ShowChangelogCommand}"
+                                  MouseEnter="OnMenuCommentEnter" MouseLeave="OnMenuCommentLeave"/>
                     </MenuItem>
                 </Menu>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -827,6 +905,15 @@
                     <Button x:Name="VoiceSettingsButton" Content="语音设置" Style="{StaticResource IconButtonStyle}"
                             Height="26" Padding="8,0" Margin="8,0,0,0"
                             Command="{Binding OpenVoiceSettingsCommand}"
+                            MouseEnter="OnBottomBarCommentEnter" MouseLeave="OnCommentMouseLeave"/>
+                    <!-- 有更新（语音设置右侧）：启动预检 / 检查更新确认到新版本时出现，
+                         与「选项 → 检查更新」的小红点同一状态源（UpdateDotVisibility，一起亮一起灭）。
+                         点击弹出确认框展示最新版本号与更新日志，确认后下载安装并自动重启；
+                         取消则保留按钮，稍后可再点。主题紫底白字，作为底栏唯一的强调色提示 -->
+                    <Button x:Name="UpdateAvailableButton" Content="有更新" Height="26" Padding="10,0" Margin="8,0,0,0"
+                            Style="{StaticResource UpdateButtonStyle}"
+                            Command="{Binding UpdateAvailableCommand}"
+                            Visibility="{Binding UpdateDotVisibility}"
                             MouseEnter="OnBottomBarCommentEnter" MouseLeave="OnCommentMouseLeave"/>
                 </StackPanel>
             </DockPanel>
@@ -960,7 +1047,7 @@
             </Border>
 
             <!-- 右列：连发键方案面板（最顶：方案档位①②③④ → 连发时序档位 → 模式分段条 →
-                 方案列表 → 分区子标签 → 最底：「从左侧键盘管理方案」按钮）-->
+                 方案列表 → 分区子标签 → 最底：「从左侧键盘增删按键方案」按钮）-->
             <Border Grid.Column="1" Grid.Row="0" Grid.RowSpan="2" Width="262" Margin="0,4,10,4"
                     Background="{DynamicResource ThemePanel}"
                     BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1"
@@ -996,17 +1083,23 @@
                     </Border>
 
                     <!-- 导入 / 导出配置：已移至「选项」菜单（作用于整份配置）。
-                         原位置改放「从左侧键盘管理方案」按钮：DockPanel 内声明在分区标签 Border 之后、
+                         原位置改放「从左侧键盘增删按键方案」按钮：DockPanel 内声明在分区标签 Border 之后、
                          停靠 Bottom → 位于分区标签下方、面板最底部。
+                         底色随当前模式（开关 = 主题紫 / 按压 = 主题金，见 SchemeManageButtonStyle），
+                         白字加粗，与模式滑块同观感。
                          空闲 = 进入方案管理（左键添加 / 右键取消，持续到退出）；
                          管理中 = 显示“退出管理方案”。点击退出经钩子空白路径处理
                          （WPF 侧由 StartPicking 的 PickingActive 守卫 + 退出冷却防陈旧点击重进）-->
                     <Button DockPanel.Dock="Bottom" Height="30"
                             Command="{Binding StartPickingCommand}">
                         <Button.Style>
-                            <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
-                                <Setter Property="Content" Value="从左侧键盘管理方案"/>
+                            <Style TargetType="Button" BasedOn="{StaticResource SchemeManageButtonStyle}">
+                                <Setter Property="Content" Value="从左侧键盘增删按键方案"/>
                                 <Style.Triggers>
+                                    <!-- 按压模式 → 主题金（开关模式走样式默认的主题紫） -->
+                                    <DataTrigger Binding="{Binding SelectedMode}" Value="Hold">
+                                        <Setter Property="Background" Value="{DynamicResource AccentGold}"/>
+                                    </DataTrigger>
                                     <DataTrigger Binding="{Binding PickingKind}" Value="AddScheme">
                                         <Setter Property="Content" Value="退出管理方案"/>
                                     </DataTrigger>
@@ -1162,7 +1255,7 @@
                     <!-- 方案列表（ItemContainerStyle 重写模板：无默认蓝色选中 / 悬停底色）。
                          滚动条浮动：自绘 ListBox 模板内接 OverlayScrollViewerStyle，
                          满溢时滚轴悬浮于行右缘、行内容不被挤压；
-                         底部 8px 缝隙让被裁切的最后一行 / 滚轴与「从左侧键盘管理方案」按钮保持间隔 -->
+                         底部 8px 缝隙让被裁切的最后一行 / 滚轴与「从左侧键盘增删按键方案」按钮保持间隔 -->
                     <ListBox ItemsSource="{Binding SchemeRows}"
                              BorderThickness="0" Background="Transparent" Focusable="False"
                              HorizontalContentAlignment="Stretch"
