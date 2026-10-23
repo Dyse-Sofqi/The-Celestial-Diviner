@@ -1035,16 +1035,26 @@
                     Background="{DynamicResource ThemePanel}" ClipToBounds="True"
                     CornerRadius="4" Padding="10,8">
                 <Grid>
-                    <!-- 悬停注释文本（默认 Collapsed；显示时同时隐藏默认文本防重叠） -->
-                    <TextBlock x:Name="CommentText" Visibility="Collapsed"
-                               FontSize="12" TextWrapping="Wrap"
-                               Foreground="{DynamicResource ThemeFg}"/>
+                    <!-- 注释区文本一律可选中复制（群号 / 链接等）：只读输入控件自带选区高亮、
+                         Ctrl+C 与右键"复制 / 全选"菜单；选区用主题色半透明，随日 / 夜换肤。
+                         悬停注释文本（默认 Collapsed；显示时同时隐藏默认内容防重叠） -->
+                    <TextBox x:Name="CommentText" Visibility="Collapsed"
+                             IsReadOnly="True" TextWrapping="Wrap"
+                             Background="Transparent" BorderThickness="0" Padding="0"
+                             FontSize="12"
+                             SelectionBrush="{DynamicResource AccentPrimary}" SelectionOpacity="0.3"
+                             Foreground="{DynamicResource ThemeFg}"/>
                     <!-- 默认内容：注释区公告（仓库根目录 Notice.md 内嵌兜底 + Gitee 远端更新，
-                         由 code-behind 渲染，支持 [文本](链接) 与裸 URL 超链接） -->
-                    <TextBlock x:Name="DefaultComment" FontSize="12" TextWrapping="Wrap"
-                               HorizontalAlignment="Left" VerticalAlignment="Top"
-                               LineHeight="20"
-                               Foreground="{DynamicResource ThemeFg}"/>
+                         由 code-behind 渲染为只读 RichTextBox，支持 [文本](链接) 与裸 URL 超链接；
+                         只读 + IsDocumentEnabled 下超链接直接点击打开，文本亦可选中复制。
+                         隐藏滚动条（超出时滚轮仍可滚，外观与旧 TextBlock 版一致） -->
+                    <RichTextBox x:Name="DefaultComment"
+                                 IsReadOnly="True" IsDocumentEnabled="True"
+                                 Background="Transparent" BorderThickness="0" Padding="0"
+                                 FontSize="12"
+                                 VerticalScrollBarVisibility="Hidden"
+                                 SelectionBrush="{DynamicResource AccentPrimary}" SelectionOpacity="0.3"
+                                 Foreground="{DynamicResource ThemeFg}"/>
                 </Grid>
             </Border>
 

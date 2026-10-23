@@ -605,59 +605,64 @@ public partial class MainWindow : Window
     /// <summary>裸 URL 识别（中文全角标点/括号收尾不算 URL 的一部分）。</summary>
     private static readonly Regex s_noticeUrlRegex = new(@"https?://[^\s（）【】<>，。；、]+");
 
-    /// <summary>把公告文本渲染进注释区默认内容（按行拆分；链接标记与裸 URL 渲染为可点击超链接）。</summary>
+    /// <summary>把公告文本渲染进注释区默认内容（按行拆分为段落；链接标记与裸 URL 渲染为可点击超链接）。
+    /// 每行一个 Paragraph（行高 20、段间距 0），与旧 TextBlock + LineBreak 的排版一致。</summary>
     private void RenderDefaultComment(string content)
     {
-        DefaultComment.Inlines.Clear();
-        if (string.IsNullOrEmpty(content)) return;
-        var lines = content.Replace("\r\n", "\n").Split('\n');
-        for (var i = 0; i < lines.Length; i++)
+        var doc = new FlowDocument { PagePadding = new Thickness(0) };
+        if (!string.IsNullOrEmpty(content))
         {
-            if (i > 0) DefaultComment.Inlines.Add(new LineBreak());
-            AppendNoticeLine(lines[i]);
+            var lines = content.Replace("\r\n", "\n").Split('\n');
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var para = new Paragraph { Margin = new Thickness(0), LineHeight = 20 };
+                AppendNoticeLine(para.Inlines, lines[i]);
+                doc.Blocks.Add(para);
+            }
         }
+        DefaultComment.Document = doc;
     }
 
     /// <summary>渲染一行公告：链接标记之外的部分再扫描裸 URL，其余按纯文本输出。</summary>
-    private void AppendNoticeLine(string line)
+    private void AppendNoticeLine(InlineCollection inlines, string line)
     {
         var index = 0;
         foreach (Match link in s_noticeLinkRegex.Matches(line))
         {
-            AppendPlainTextWithUrls(line.Substring(index, link.Index - index));
-            AppendHyperlink(link.Groups[1].Value, link.Groups[2].Value);
+            AppendPlainTextWithUrls(inlines, line.Substring(index, link.Index - index));
+            AppendHyperlink(inlines, link.Groups[1].Value, link.Groups[2].Value);
             index = link.Index + link.Length;
         }
-        AppendPlainTextWithUrls(line.Substring(index));
+        AppendPlainTextWithUrls(inlines, line.Substring(index));
     }
 
     /// <summary>纯文本中再识别裸 URL（其余直接输出；空片段跳过）。</summary>
-    private void AppendPlainTextWithUrls(string text)
+    private void AppendPlainTextWithUrls(InlineCollection inlines, string text)
     {
         var index = 0;
         foreach (Match url in s_noticeUrlRegex.Matches(text))
         {
-            if (url.Index > index) DefaultComment.Inlines.Add(new Run(text.Substring(index, url.Index - index)));
-            AppendHyperlink(url.Value, url.Value);
+            if (url.Index > index) inlines.Add(new Run(text.Substring(index, url.Index - index)));
+            AppendHyperlink(inlines, url.Value, url.Value);
             index = url.Index + url.Length;
         }
-        if (index < text.Length) DefaultComment.Inlines.Add(new Run(text.Substring(index)));
+        if (index < text.Length) inlines.Add(new Run(text.Substring(index)));
     }
 
     /// <summary>插入可点击超链接（主题紫随日/夜切换；非法 URL 退化为纯文本）。</summary>
-    private void AppendHyperlink(string text, string url)
+    private void AppendHyperlink(InlineCollection inlines, string text, string url)
     {
         if (text.Length == 0) return;
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
         {
-            DefaultComment.Inlines.Add(new Run(text));
+            inlines.Add(new Run(text));
             return;
         }
         var link = new Hyperlink { NavigateUri = uri };
         link.Inlines.Add(new Run(text));
         link.SetResourceReference(Hyperlink.ForegroundProperty, "AccentPrimary");
         link.RequestNavigate += OnCommentLinkClick;
-        DefaultComment.Inlines.Add(link);
+        inlines.Add(link);
     }
 
     /// <summary>方案档位按钮选中态同步（仅驱动选中项，不回写 VM）。</summary>
