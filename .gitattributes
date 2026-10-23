@@ -1,0 +1,2 @@
+# autocrlf=true 会把检出文件统一成 CRLF，bash 无法执行 CRLF 脚本，shell 脚本必须保持 LF
+*.sh text eol=lf
