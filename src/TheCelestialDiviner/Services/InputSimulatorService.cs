@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using System.Threading;
 using TheCelestialDiviner.Helpers;
 using TheCelestialDiviner.Models;

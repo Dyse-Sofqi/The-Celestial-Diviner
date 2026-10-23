@@ -490,6 +490,8 @@
         </Style>
     </Window.Resources>
 
+    <!-- 注：曾试过 CacheMode="BitmapCache" 整窗缓存，实测拖动时进程 CPU 只有 5~6%，
+         说明瓶颈不在重绘，已移除（避免无谓的显存占用与跨适配器上传）。 -->
     <DockPanel>
         <!-- ===== 全局开关横幅（常驻：关闭=金色 / 开启=主题紫）===== -->
         <Border DockPanel.Dock="Top" Height="32" Margin="10,6,10,4" CornerRadius="4">
@@ -1052,8 +1054,12 @@
                     Background="{DynamicResource ThemePanel}"
                     BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1"
                     CornerRadius="4" Padding="10,8">
-                <!-- IsSharedSizeScope：表头与方案行的列宽经 SharedSizeGroup 对齐 -->
-                <DockPanel Grid.IsSharedSizeScope="True">
+                <!-- 表头与方案行的列宽**不再走 SharedSizeGroup**：所有 Auto 列的内容宽度都是固定值
+                     （勾选框固定、数字框 40、eye/✕ 22、"+" / "ms" 文本），各行独立测量得到的列宽完全一致，
+                     视觉对齐不变。而 SharedSizeGroup 会让整棵列表参与"共享尺寸注册表"的收敛测量——
+                     29 行 × 8 个共享列时，每次列表重建都要反复重算到稳定，实测把 UI 线程卡到 1.6 秒。
+                     （排查记录：虚拟化开启后 realized 仍是 29/29，说明瓶颈不在实例化数量，而在布局收敛。） -->
+                <DockPanel>
                     <!-- 方案档位切换（①②③④ 各存一套按键方案；选中=紫底白字，随切换实时落盘；
                          移至面板最顶部：DockPanel 首个子元素 + Dock=Top，位于连发时序档位之上。
                          选中态由 code-behind 随 VM.ActiveProfile 同步（避开 RadioButton 组内互斥取消选中
@@ -1190,7 +1196,7 @@
                                    Text="{Binding PickingPromptText}"/>
                     </Border>
 
-                    <!-- 方案列表表头（列宽经 SharedSizeGroup 与行模板对齐）：
+                    <!-- 方案列表表头（列宽为固定值，与行模板逐列一致）：
                          勾选框 = 一键启用/停用全部；eye = 可视化总开关（自底栏迁入）；
                          ✕ = 删除全部勾选的连发键；底部边框线与列表内容分隔 -->
                     <Border DockPanel.Dock="Top" BorderBrush="{DynamicResource ThemeBorder}"
@@ -1199,14 +1205,16 @@
                                          不再覆盖行尾 eye/✕ 按钮；与列表行 ItemsPresenter 的右让量一致，列对齐不变 -->
                                     <Grid Margin="0,0,8,3">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColCheck"/>
+                            <!-- 固定列宽（不再用 SharedSizeGroup）：各行内容宽度本就固定，
+                                 显式给值即可保证表头与行、行与行完全对齐，且不触发共享尺寸收敛测量 -->
+                            <ColumnDefinition Width="15"/>
                             <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColHold"/>
-                            <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColPlus"/>
-                            <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColInterval"/>
-                            <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColMs2"/>
-                            <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColEye"/>
-                            <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColDel"/>
+                            <ColumnDefinition Width="42"/>
+                            <ColumnDefinition Width="12"/>
+                            <ColumnDefinition Width="42"/>
+                            <ColumnDefinition Width="20"/>
+                            <ColumnDefinition Width="26"/>
+                            <ColumnDefinition Width="22"/>
                         </Grid.ColumnDefinitions>
                         <CheckBox IsChecked="{Binding SchemesAllEnabled}"
                                   Style="{StaticResource RoundCheckStyle}"
@@ -1255,10 +1263,22 @@
                     <!-- 方案列表（ItemContainerStyle 重写模板：无默认蓝色选中 / 悬停底色）。
                          滚动条浮动：自绘 ListBox 模板内接 OverlayScrollViewerStyle，
                          满溢时滚轴悬浮于行右缘、行内容不被挤压；
-                         底部 8px 缝隙让被裁切的最后一行 / 滚轴与「从左侧键盘增删按键方案」按钮保持间隔 -->
-                    <ListBox ItemsSource="{Binding SchemeRows}"
+                         底部 8px 缝隙让被裁切的最后一行 / 滚轴与「从左侧键盘增删按键方案」按钮保持间隔。
+
+                         ⚠ CanContentScroll 必须为 True：WPF 只在"按项滚动"时启用
+                         VirtualizingStackPanel 的虚拟化。自绘模板里的 ScrollViewer 默认是
+                         CanContentScroll=False（按像素滚动）→ 面板被以无限高度测量 →
+                         **全部行都被实例化**。30+ 个方案时每行二十来个元素、还带 SharedSizeGroup
+                         联动测量，一次列表重建 / 每次拖动窗口重绘都要几百毫秒到 1.5 秒
+                         （实测 UI 线程卡顿 259~1573ms）。开启后只实现视口内的十来行。 -->
+                    <ListBox x:Name="SchemeList" ItemsSource="{Binding SchemeRows}"
                              BorderThickness="0" Background="Transparent" Focusable="False"
                              HorizontalContentAlignment="Stretch"
+                             ScrollViewer.CanContentScroll="True"
+                             VirtualizingPanel.ScrollUnit="Pixel"
+                             VirtualizingStackPanel.IsVirtualizing="True"
+                             VirtualizingStackPanel.VirtualizationMode="Recycling"
+                             ScrollViewer.IsDeferredScrollingEnabled="False"
                              Margin="0,0,0,8">
                         <ListBox.Template>
                             <ControlTemplate TargetType="ListBox">
@@ -1267,6 +1287,7 @@
                                         BorderThickness="{TemplateBinding BorderThickness}">
                                     <ScrollViewer Style="{StaticResource OverlayScrollViewerStyle}"
                                                   Focusable="False"
+                                                  CanContentScroll="True"
                                                   HorizontalScrollBarVisibility="Disabled"
                                                   VerticalScrollBarVisibility="Auto">
                                         <!-- 行内容右让 8px 给悬浮滚轴（与表头 Grid 右让量一致） -->
@@ -1275,6 +1296,12 @@
                                 </Border>
                             </ControlTemplate>
                         </ListBox.Template>
+                        <ListBox.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <!-- 显式指定虚拟化面板：不依赖模板里的 ScrollViewer 是否成功挂上 IScrollInfo -->
+                                <VirtualizingStackPanel/>
+                            </ItemsPanelTemplate>
+                        </ListBox.ItemsPanel>
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
                                 <Setter Property="Template">
@@ -1288,21 +1315,23 @@
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <Grid Margin="0,1">
+                                <!-- 可见性由 VM 控制（隐藏而非移除）：切换模式只翻这个开关，不重建行 -->
+                                <Grid Margin="0,1"
+                                      Visibility="{Binding IsVisible, Converter={StaticResource BoolToVis}}">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
                                     <Grid.ColumnDefinitions>
-                                        <!-- SharedSizeGroup：与表头列宽对齐（作用域在方案面板 DockPanel） -->
-                                        <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColCheck"/>
+                                        <!-- 与表头同一组固定列宽（表头 / 行 / 行与行逐列对齐，无共享尺寸收敛） -->
+                                        <ColumnDefinition Width="15"/>
                                         <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColHold"/>
-                                        <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColPlus"/>
-                                        <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColInterval"/>
-                                        <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColMs2"/>
-                                        <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColEye"/>
-                                        <ColumnDefinition Width="Auto" SharedSizeGroup="SchemeColDel"/>
+                                        <ColumnDefinition Width="42"/>
+                                        <ColumnDefinition Width="12"/>
+                                        <ColumnDefinition Width="42"/>
+                                        <ColumnDefinition Width="20"/>
+                                        <ColumnDefinition Width="26"/>
+                                        <ColumnDefinition Width="22"/>
                                     </Grid.ColumnDefinitions>
                                     <CheckBox IsChecked="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}"
                                               Style="{StaticResource RoundCheckStyle}"

@@ -1,4 +1,4 @@
-using System.Text.Json.Serialization;
+﻿using System.Text.Json.Serialization;
 using TheCelestialDiviner.Helpers;
 
 namespace TheCelestialDiviner.Models;
@@ -228,24 +228,32 @@ public sealed class GlobalSwitchConfig
     };
 }
 
-/// <summary>切换方案热键配置（按下按顺序切换非空方案档位；默认未设置 = 缺省）。</summary>
+/// <summary>切换方案热键配置（按下按顺序切换非空方案档位；默认 F10，可在面板顶部自定义 / 清除）。</summary>
 public sealed class ProfileCycleConfig
 {
-    /// <summary>是否已设置切换方案热键（默认 false = 缺省未设置）。</summary>
-    public bool HasKey { get; set; }
+    /// <summary>是否已设置切换方案热键（默认 true = 已设 F10）。</summary>
+    public bool HasKey { get; set; } = true;
 
-    /// <summary>切换方案热键虚拟键码（HasKey = true 时有效）。</summary>
-    public int VirtualKey { get; set; }
+    /// <summary>切换方案热键虚拟键码（HasKey = true 时有效，默认 F10 = 0x79）。</summary>
+    public int VirtualKey { get; set; } = Constants.DefaultCycleKeyVk;
 
     /// <summary>切换方案热键扩展键标志。</summary>
     public bool Extended { get; set; }
+
+    /// <summary>
+    /// 默认值迁移标记（v1.8.2 起默认 F10）：首次载入旧配置时，若用户**从未设置**过
+    /// 切换方案热键，则填入 F10；已经自定义过键位的保持原样。置位后不再迁移，
+    /// 这样用户日后手动清空热键也不会被再次填回。
+    /// </summary>
+    public bool DefaultApplied { get; set; }
 
     /// <summary>创建当前实例的副本。</summary>
     public ProfileCycleConfig Clone() => new()
     {
         HasKey = HasKey,
         VirtualKey = VirtualKey,
-        Extended = Extended
+        Extended = Extended,
+        DefaultApplied = DefaultApplied
     };
 }
 

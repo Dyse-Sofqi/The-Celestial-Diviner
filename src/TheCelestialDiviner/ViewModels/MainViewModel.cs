@@ -1,5 +1,6 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
@@ -57,6 +58,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private bool _ddAutoActivate;   // DD 缺驱动自动回退后挂起：自动获取完成时升回 DD 模式（用户手动切换即取消）
     private string? _ddFetchStatus;  // DD 驱动获取进度提示（注释区展示；null = 无进行中/刚结束的提示）
     private readonly System.Windows.Threading.DispatcherTimer _ddStatusTimer = new(); // 获取状态提示自动消退
+    // UI 线程卡顿探针：200ms 定时器，实际间隔明显超时即说明 UI 线程被占（点击 / 拖动会同时变迟钝）。
+    // 与输入管线探针互补——那个测"事件送达晚多少"，这个测"UI 线程本身有没有被堵住"。
+    private readonly System.Windows.Threading.DispatcherTimer _uiProbeTimer = new() { Interval = TimeSpan.FromMilliseconds(200) };
+    private readonly Stopwatch _uiProbeSw = new();
+    private int _lastUiStallLogTick;
     private int _activeProfile;                        // 方案面板当前档位（0/1/2 ↔ ①②③）
     private bool _pickingActive;                       // 键位录入选择态
     private PickKind _pickingKind = PickKind.None;     // 键位录入选择态用途
@@ -189,6 +195,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _visualizer.AttachScheduler(_scheduler);   // 连发目标键脉冲 → 键帽可视化
 
         _config = _configService.Load();
+        MigrateProfileCycleDefault();   // v1.8.2：切换方案热键默认值改为 F10（不覆盖已自定义的）
         SyncProfileRuntime();
         // 主题：手动切换过夜间/白天则固定，否则跟随系统深浅；强调色随当前档位的方案定制外观。
         var themeDark = _config.NightMode || (_config.ThemeFollowSystem && ThemeHelper.IsDarkMode());
@@ -338,6 +345,19 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             _ddStatusTimer.Stop();
             DdFetchStatus = null;
         };
+
+        // UI 线程卡顿探针：定时器实际间隔比设定值多出 >250ms 即记录（限频 2s）。
+        // 只要这个数值大，就说明界面线程在等锁 / 等 GC / 渲染积压，而不是"输入没送到"。
+        _uiProbeTimer.Tick += (_, _) =>
+        {
+            var late = _uiProbeSw.ElapsedMilliseconds - 200;
+            _uiProbeSw.Restart();
+            if (late > 250 && unchecked(Environment.TickCount - _lastUiStallLogTick) > 2000)
+            {
+                _lastUiStallLogTick = Environment.TickCount;
+                Logger.Warn($"UI 线程卡顿 {late}ms（此时点击 / 拖动会明显迟滞）。");
+            }
+        };
     }
 
     /// <summary>
@@ -464,7 +484,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// <summary>导出配置。</summary>
     public ICommand ExportCommand { get; }
 
-    /// <summary>进入 / 退出方案管理模式（左键键位添加、右键键位取消，Esc / 空白处 / 按钮自身退出）。</summary>
+    /// <summary>进入 / 退出方案管理模式（左键键位添加、再点一次取消（右键同样），Esc / 空白处 / 按钮自身退出）。</summary>
     public ICommand StartPickingCommand { get; }
 
     /// <summary>进入总开关键录入选择态（单次录入即完成并退出，与方案管理模式不同）。</summary>
@@ -624,8 +644,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         {
             if (Set(ref _selectedMode, value))
             {
+                // 诊断埋点：切换开关 / 按压模式只翻可见性（不重建行），正常应在几毫秒内；
+                // >30ms 说明仍有布局层面的额外开销。限频记录供定位。
+                var sw = Stopwatch.StartNew();
                 OnPropertyChanged(nameof(SectionTabsVisible));
-                RefreshSchemeList();
+                ApplySchemeFilter();
+                sw.Stop();
+                if (sw.ElapsedMilliseconds > 30)
+                    Logger.Warn($"切换模式耗时 {sw.ElapsedMilliseconds}ms（{SchemeRows.Count} 行，仅切换可见性）。");
             }
         }
     }
@@ -640,12 +666,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         get => _selectedSection;
         set
         {
-            if (Set(ref _selectedSection, value)) RefreshSchemeList();
+            if (Set(ref _selectedSection, value)) ApplySchemeFilter();   // 同上：只翻可见性
         }
     }
 
-    /// <summary>当前模式是否存在连发键（控制空态提示显隐）。</summary>
-    public bool HasSchemeRows => SchemeRows.Count > 0;
+    /// <summary>当前模式 / 分区下是否有可见的连发键（控制空态提示显隐）。</summary>
+    public bool HasSchemeRows => SchemeRows.Any(r => r.IsVisible);
 
     /// <summary>当前全局开关键对应的输入源（未设置返回 null）。</summary>
     public InputSource? GlobalSwitchSource => _config.GlobalSwitch.HasKey
@@ -677,8 +703,18 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         IsAdmin = isAdmin;
         PermissionText = isAdmin ? "权限：管理员" : "权限：非管理员（功能受限）";
 
-        // 顶部定时器状态栏已移除，但 1ms 分辨率仍是 Sleep(1) 级连发间隔的功能基础，保留提升。
-        _timerResolution.Start();
+        // 定时器分辨率**按需持有**：只有真正在连发时才把系统定时器提到 1ms。
+        // 常驻 1ms 会让整机按约 1000Hz 出定时器中断——空闲时没有任何 Sleep(1) 级需求，
+        // 白白烧 CPU / 耗电，界面与其它程序的调度也会跟着变钝。
+        _scheduler.FiringChanged += firing =>
+        {
+            if (firing) _timerResolution.Start();
+            else _timerResolution.Stop();   // 回到系统默认分辨率（重复调用安全）
+        };
+
+        // UI 卡顿探针随运行时启动（诊断用，200ms 一次，开销可忽略）。
+        _uiProbeSw.Restart();
+        _uiProbeTimer.Start();
 
         HookInstalled = _hookService.Install();
         HookStatusText = HookInstalled
@@ -756,6 +792,13 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     {
         // 镜像早到兜底（进/出选择态瞬间穿越的钩子事件）：以 UI 线程权威态为准。
         if (!PickingActive) return;
+
+        // 注：曾加过"吞掉进入选择态那一次点击"的保护，是误判——WPF 的 Button.Click 在**抬起**时触发，
+        // 进入时的按下早已在管理态生效之前处理完，不存在晚到；那个保护只会吞掉用户**下一次**按下
+        // （进入后很快点空白就不退出）。已移除。
+        if (source.Kind == InputKind.Mouse)
+            Logger.Info($"管理态收到鼠标按下（{source.Mouse}）。");
+
         if (source.Kind == InputKind.Keyboard)
         {
             if (source.VirtualKey == 0x1B) TryExitPicking();

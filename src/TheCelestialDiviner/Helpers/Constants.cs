@@ -1,4 +1,4 @@
-namespace TheCelestialDiviner.Helpers;
+﻿namespace TheCelestialDiviner.Helpers;
 
 /// <summary>全局常量（尺寸、默认值、路径等）。</summary>
 public static class Constants
@@ -67,6 +67,10 @@ public static class Constants
 
     /// <summary>全局开关键默认虚拟键码（F9 = 0x78）。</summary>
     public const int DefaultMasterKeyVk = 0x78;
+
+    /// <summary>切换方案热键默认值：F10（0x79）。v1.8.2 起由"未设置"改为默认 F10，
+    /// 迁移只对从未设置过的用户生效，不覆盖已自定义的键位。</summary>
+    public const int DefaultCycleKeyVk = 0x79;
 
     /// <summary>方案档位自定义名称长度上限（字符）：档位标签四等分宽度与切换提示键帽宽度所限，过长会挤压排版。</summary>
     public const int MaxProfileNameLength = 12;

@@ -24,6 +24,9 @@ public sealed class TimerResolutionService : IDisposable
         Logger.Info(_started ? "定时器分辨率已提升至 1ms。" : "timeBeginPeriod(1) 调用失败。");
     }
 
+    /// <summary>恢复定时器分辨率（连发结束 / 退出时调用）。重复调用安全。</summary>
+    public void Stop() => Dispose();
+
     /// <summary>恢复定时器分辨率。重复调用安全。</summary>
     public void Dispose()
     {

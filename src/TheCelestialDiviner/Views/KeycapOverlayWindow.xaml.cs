@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -232,24 +232,50 @@ public sealed partial class KeycapOverlayWindow : Window
         // 软件渲染已在 App.OnStartup 进程级启用（RenderOptions.ProcessRenderMode）：
         // 键帽呈现走内存位图 + UpdateLayeredWindow，不进被游戏打满的 GPU 3D 队列。
 
-        // 诊断埋点：渲染滞后。UpdateKeys / HoldPulse 更新视觉时打 _lastInvalidateTick 基准，
-        // CompositionTarget.Rendering 在帧真正渲染前触发——两者之差即"更新请求 → 实际渲染"
-        // 的管线滞后（分层窗口上传 + DWM 争抢）；每帧渲染后推进基准，动画连帧时即帧间隔。
-        CompositionTarget.Rendering += (_, _) =>
-        {
-            var now = Environment.TickCount;
-            var lag = unchecked(now - _lastInvalidateTick);
-            _lastInvalidateTick = now;
-            if (lag > 500 && unchecked(now - _lastRenderLagLogTick) > 2000)
-            {
-                _lastRenderLagLogTick = now;
-                Logger.Warn($"键帽渲染滞后 {lag}ms（分层窗口上传/DWM 争抢）。");
-            }
-        };
+        // 诊断埋点：渲染滞后（**按需挂接**）。UpdateKeys / HoldPulse 更新视觉时打基准并挂上
+        // CompositionTarget.Rendering；连续若干帧没有新的重绘请求就自动摘除。
+        // 常驻订阅的代价不是回调本身（每帧几微秒），而是它让 WPF 渲染循环**永不空转**——
+        // 空闲时也在按刷新率持续出帧，整个界面（含主窗口）的调度都被拖钝，笔记本还费电。
+        // 空闲时不该有它。
     }
 
-    private int _lastInvalidateTick = Environment.TickCount;   // 渲染失效基准（渲染滞后探针）
+    private int _lastVisualUpdateTick = Environment.TickCount;   // 最近一次重绘请求时刻（渲染滞后基准）
     private int _lastRenderLagLogTick;
+    private bool _renderProbeHooked;
+
+    /// <summary>标记"视觉已更新、等待下一帧"，并按需挂上渲染滞后探针（已挂则空操作）。</summary>
+    private void MarkVisualUpdated()
+    {
+        _lastVisualUpdateTick = Environment.TickCount;
+        if (_renderProbeHooked) return;
+        _renderProbeHooked = true;
+        CompositionTarget.Rendering += OnRendering;
+    }
+
+    /// <summary>
+    /// 渲染滞后探针回调：测"重绘请求 → 实际渲染"的滞后（分层窗口上传 + DWM 争抢）。
+    /// 连续 60ms 没有新的重绘请求即摘除订阅——那一刻这一轮出帧已经结束，
+    /// 继续挂着只会让渲染循环空转。
+    /// </summary>
+    private void OnRendering(object? sender, EventArgs e)
+    {
+        var now = Environment.TickCount;
+        var lag = unchecked(now - _lastVisualUpdateTick);
+        if (lag > 500 && unchecked(now - _lastRenderLagLogTick) > 2000)
+        {
+            _lastRenderLagLogTick = now;
+            Logger.Warn($"键帽渲染滞后 {lag}ms（分层窗口上传/DWM 争抢）。");
+        }
+        if (lag > 60) UnhookRenderProbe();
+    }
+
+    /// <summary>摘除渲染探针（回到空闲渲染，不再每帧出帧）。</summary>
+    private void UnhookRenderProbe()
+    {
+        if (!_renderProbeHooked) return;
+        _renderProbeHooked = false;
+        CompositionTarget.Rendering -= OnRendering;
+    }
 
     /// <summary>应用配色方案（悬浮窗与键帽控件均为静态引用；重建当前显示以立即生效）。</summary>
     public static void ApplyScheme(KeycapScheme scheme)
@@ -521,9 +547,21 @@ public sealed partial class KeycapOverlayWindow : Window
     // 成本：每秒 60 次 1×1 像素合成，可忽略。
     private Window? _pacer;
 
-    /// <summary>创建渲染时钟激励器（悬浮窗线程调用；随悬浮窗生命周期常驻）。</summary>
+    /// <summary>
+    /// 销毁渲染时钟激励器（键帽全部回收、悬浮层隐藏时调用）。那个 16ms 无限循环动画
+    /// 会让整个进程以 60fps 永不停歇地重绘——空闲时必须关掉，否则拖窗口都要和它抢合成带宽。
+    /// </summary>
+    private void DestroyPacer()
+    {
+        if (_pacer is null) return;
+        try { _pacer.Close(); } catch { /* 已关闭 / 线程退出：忽略 */ }
+        _pacer = null;
+    }
+
+    /// <summary>创建渲染时钟激励器（悬浮窗线程调用；**按需**：只在有键帽要显示时存在）。</summary>
     public void CreatePacer()
     {
+        if (_pacer is not null) return;
         try
         {
             var rect = new System.Windows.Shapes.Rectangle
@@ -559,7 +597,9 @@ public sealed partial class KeycapOverlayWindow : Window
                 Top = work.Bottom - 1,
                 Content = rect
             };
-            RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;   // 进程级已在 App 启用，此处冗余兜底
+            // 不再设置 ProcessRenderMode：它是**进程级**的，会把主窗口也拖进 CPU 光栅化
+            // （拖动发涩）。本窗口 AllowsTransparency=True，本身就是离屏位图 + UpdateLayeredWindow，
+            // 与进程渲染模式无关。
             pacer.SourceInitialized += (_, _) => MakeClickThrough(
                 new System.Windows.Interop.WindowInteropHelper(pacer).Handle);
             pacer.Show();
@@ -575,6 +615,8 @@ public sealed partial class KeycapOverlayWindow : Window
     /// 已可见时直接返回——预显示后窗口常驻，本方法实际只在首次 / 调整模式恢复时执行。</summary>
     private void ShowOverlay()
     {
+        // 先确保激励器在：预显示（Preshow）过的话 IsVisible 已经是 true，不能指望下面的早退分支。
+        CreatePacer();
         if (IsVisible) return;
         PositionToSaved();
         // 诊断埋点：Show + 置顶声明的窗口管理器调用耗时（游戏前台最大化时与 DWM
@@ -735,7 +777,7 @@ public sealed partial class KeycapOverlayWindow : Window
                 if (bumps.TryGetValue(cap.Label, out var n))
                     for (var i = 0; i < n; i++) cap.BumpPressCount();
 
-        _lastInvalidateTick = Environment.TickCount;   // 渲染滞后探针基准：视觉已更新，等待下一帧渲染
+        MarkVisualUpdated();   // 渲染滞后探针基准：视觉已更新，等待下一帧渲染（按需挂接探针）
         ShowOverlay();   // 位置在显示瞬间应用（见 ShowOverlay）；已可见时不再重复定位
     }
 
@@ -758,7 +800,7 @@ public sealed partial class KeycapOverlayWindow : Window
         for (var i = 0; i < repeat; i++)
             cap.BumpPressCount();
 
-        _lastInvalidateTick = Environment.TickCount;   // 渲染滞后探针基准：视觉已更新，等待下一帧渲染
+        MarkVisualUpdated();   // 渲染滞后探针基准：视觉已更新，等待下一帧渲染（按需挂接探针）
         ShowOverlay();   // 位置在显示瞬间应用（见 ShowOverlay）；已可见时不再重复定位
     }
 
@@ -798,7 +840,14 @@ public sealed partial class KeycapOverlayWindow : Window
             {
                 _host.Children.Remove(cap);
                 _caps.Remove(cap);
-                // 不 Hide：窗口保持显示（空内容 = 全透明），避免 Show/Hide 的 DWM 阻塞。
+                // 空了就隐藏 + 关掉渲染时钟激励器：**可见的空分层窗口照样占呈现管线**，
+                // 而激励器的 60fps 无限动画更是空闲时的主要白烧（拖动窗口会与合成器抢带宽）。
+                // 下次有键帽时由 ShowOverlay 再显示并重建激励器。
+                if (_caps.Count == 0 && _adjustWindow is null)
+                {
+                    DestroyPacer();
+                    Hide();
+                }
             });
         }
     }

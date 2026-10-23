@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using TheCelestialDiviner.Helpers;
 
 namespace TheCelestialDiviner.Services;
@@ -55,12 +56,15 @@ public static class EchoGuard
 
     private sealed class VkState
     {
+        /// <summary>每个虚拟键独立的锁：钩子线程处理某个键时，不必排在别的键的注入后面。</summary>
+        public readonly object Gate = new();
         public readonly List<InjectionNote> PendingDown = new();
         public readonly List<InjectionNote> PendingUp = new();
     }
 
-    private static readonly object Gate = new();
-    private static readonly Dictionary<int, VkState> States = new();
+    // 按 VK 分片而非一把全局锁：原先"钩子线程处理任意按键"与"所有注入线程"共用一把锁，
+    // 多任务连发（30+ 任务 ≈ 600 次注入/秒）时输入路径被锁住，表现为点击迟滞 / 拖窗口发涩。
+    private static readonly ConcurrentDictionary<int, VkState> States = new();
     private static int _lastEchoLatencyLogTick;   // 回环到达延迟告警限频（Environment.TickCount）
 
     /// <summary>
@@ -70,9 +74,9 @@ public static class EchoGuard
     /// </summary>
     public static InjectionNote NoteInjection(int vk, bool down)
     {
-        lock (Gate)
+        var state = States.GetOrAdd(vk, _ => new VkState());
+        lock (state.Gate)
         {
-            var state = GetOrCreate(vk);
             var list = down ? state.PendingDown : state.PendingUp;
             if (list.Count >= MaxPendingPerVk) list.RemoveAt(0);
             var note = new InjectionNote();
@@ -84,9 +88,9 @@ public static class EchoGuard
     /// <summary>注入失败时撤销预登记的名额（注入线程调用）。</summary>
     public static void CancelNote(int vk, bool down, InjectionNote note)
     {
-        lock (Gate)
+        if (!States.TryGetValue(vk, out var state)) return;
+        lock (state.Gate)
         {
-            if (!States.TryGetValue(vk, out var state)) return;
             (down ? state.PendingDown : state.PendingUp).Remove(note);
         }
     }
@@ -100,9 +104,9 @@ public static class EchoGuard
     /// <param name="eventTime">KBDLLHOOKSTRUCT.time（事件生成时刻，毫秒时基与 Environment.TickCount 一致）。</param>
     public static bool TryConsume(int vk, bool down, int eventTime)
     {
-        lock (Gate)
+        if (!States.TryGetValue(vk, out var state)) return false;   // 该键没有待决名额：不建状态、不取锁
+        lock (state.Gate)
         {
-            if (!States.TryGetValue(vk, out var state)) return false;
             var list = down ? state.PendingDown : state.PendingUp;
             if (list.Count == 0) return false;
 
@@ -131,15 +135,5 @@ public static class EchoGuard
     }
 
     /// <summary>清空全部状态（DD 驱动重新初始化时调用，防止跨会话陈旧名额）。</summary>
-    public static void Reset()
-    {
-        lock (Gate) States.Clear();
-    }
-
-    private static VkState GetOrCreate(int vk)
-    {
-        if (!States.TryGetValue(vk, out var state))
-            States[vk] = state = new VkState();
-        return state;
-    }
+    public static void Reset() => States.Clear();
 }

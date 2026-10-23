@@ -140,6 +140,126 @@ public static class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 
+    // ---------- Raw Input（鼠标检测用；不进输入路径，不会像低级钩子那样节流系统输入） ----------
+
+    public const int WM_INPUT = 0x00FF;
+    public const uint RID_INPUT = 0x10000003;
+    public const uint RIM_TYPEMOUSE = 0;
+    public const uint RIDEV_INPUTSINK = 0x00000100;   // 本程序不在前台也接收
+    public const int HWND_MESSAGE = -3;               // 消息专用窗口的父句柄
+    public const uint WS_POPUP = 0x80000000;          // 隐藏接收窗口用（不 Show 即不可见）
+
+    public const ushort HID_USAGE_PAGE_GENERIC = 0x01;
+    public const ushort HID_USAGE_GENERIC_MOUSE = 0x02;
+
+    public const ushort RI_MOUSE_LEFT_BUTTON_DOWN = 0x0001;
+    public const ushort RI_MOUSE_LEFT_BUTTON_UP = 0x0002;
+    public const ushort RI_MOUSE_RIGHT_BUTTON_DOWN = 0x0004;
+    public const ushort RI_MOUSE_RIGHT_BUTTON_UP = 0x0008;
+    public const ushort RI_MOUSE_MIDDLE_BUTTON_DOWN = 0x0010;
+    public const ushort RI_MOUSE_MIDDLE_BUTTON_UP = 0x0020;
+    public const ushort RI_MOUSE_BUTTON_4_DOWN = 0x0040;
+    public const ushort RI_MOUSE_BUTTON_4_UP = 0x0080;
+    public const ushort RI_MOUSE_BUTTON_5_DOWN = 0x0100;
+    public const ushort RI_MOUSE_BUTTON_5_UP = 0x0200;
+    public const ushort RI_MOUSE_WHEEL = 0x0400;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RAWINPUTDEVICE
+    {
+        public ushort usUsagePage;
+        public ushort usUsage;
+        public uint dwFlags;
+        public IntPtr hwndTarget;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RAWINPUTHEADER
+    {
+        public uint dwType;
+        public uint dwSize;
+        public IntPtr hDevice;
+        public IntPtr wParam;
+    }
+
+    /// <summary>
+    /// RAWMOUSE（Win32 布局）：usFlags, {ulButtons | usButtonFlags+usButtonData}, ulRawButtons,
+    /// lLastX, lLastY, ulExtraInformation。
+    /// ⚠ **usFlags 后面有 2 字节填充**：那个匿名 union 含 ULONG，整体按 4 字节对齐，
+    /// 所以 usButtonFlags 在偏移 4（不是 2）。少了这个填充字段会读到填充字节，
+    /// 表现为"能收到 WM_INPUT 但按钮事件恒为 0"。
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RAWMOUSE
+    {
+        public ushort usFlags;
+        public ushort _padding;         // 对齐 union（见上）
+        public ushort usButtonFlags;
+        public ushort usButtonData;
+        public uint ulRawButtons;
+        public int lLastX;
+        public int lLastY;
+        /// <summary>SendInput 的 dwExtraInfo 会原样带到这里（Windows 8+）——
+        /// 本程序注入的鼠标事件靠它与物理输入区分，避免自触发。</summary>
+        public uint ulExtraInformation;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RAWINPUT
+    {
+        public RAWINPUTHEADER header;
+        public RAWMOUSE mouse;          // 键盘输入时复用同一块内存，本程序只注册了鼠标
+    }
+
+    /// <summary>注册原始输入设备（鼠标）。返回是否成功。</summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool RegisterRawInputDevices(RAWINPUTDEVICE[] pRawInputDevices, uint uiNumDevices, int cbSize);
+
+    /// <summary>取一条原始输入数据（先用空缓冲问大小，再取内容）。</summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern uint GetRawInputData(IntPtr hRawInput, uint uiCommand, IntPtr pData,
+        ref uint pcbSize, int cbSizeHeader);
+
+    // ---------- 消息专用窗口（Raw Input 的接收窗口；普通 Win32 窗口，不经 WPF） ----------
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct WNDCLASSEX
+    {
+        public uint cbSize;
+        public uint style;
+        public IntPtr lpfnWndProc;
+        public int cbClsExtra;
+        public int cbWndExtra;
+        public IntPtr hInstance;
+        public IntPtr hIcon;
+        public IntPtr hCursor;
+        public IntPtr hbrBackground;
+        [MarshalAs(UnmanagedType.LPWStr)] public string? lpszMenuName;
+        [MarshalAs(UnmanagedType.LPWStr)] public string lpszClassName;
+        public IntPtr hIconSm;
+    }
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern ushort RegisterClassEx(ref WNDCLASSEX lpwcx);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern IntPtr CreateWindowEx(uint dwExStyle, string lpClassName, string lpWindowName,
+        uint dwStyle, int x, int y, int nWidth, int nHeight,
+        IntPtr hWndParent, IntPtr hMenu, IntPtr hInstance, IntPtr lpParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool DestroyWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr DefWindowProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern bool TranslateMessage(ref NativeMessage lpMsg);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr DispatchMessage(ref NativeMessage lpMsg);
+
     /// <summary>虚拟键码 → 扫描码转换（MAPVK_VK_TO_VSC）。</summary>
     [DllImport("user32.dll")]
     public static extern uint MapVirtualKey(uint uCode, uint uMapType);

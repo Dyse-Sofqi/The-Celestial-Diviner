@@ -54,15 +54,37 @@ public partial class App : Application
             return;
         }
 
-        // 软件渲染（进程级）：游戏前台最大化时 iGPU 的 3D 队列被游戏打满（实测引擎占用
-        // 87%、DWM 仅 3%），本程序任何窗口的 GPU 提交都排在游戏队列末尾——实测每帧等待
-        // 0.5~3.9s，与窗口、表面积、提交频率均无关（键帽悬浮窗卡顿 / 启动渲染卡 5.5s 的根因）。
-        // 本程序窗口都很小且简单（键帽 = 圆角矩形 + 文本，主窗口低频交互），CPU 光栅化代价
-        // 可忽略；键帽悬浮窗由此经内存位图 + UpdateLayeredWindow 上传（copy 引擎空闲），
-        // 呈现完全脱离被游戏占满的 GPU 队列。
-        System.Windows.Media.RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
+        // 渲染模式：**不要**在进程级强制 SoftwareOnly。
+        // 键帽悬浮层是 AllowsTransparency=True 的分层窗口，WPF 对它本身就是"离屏位图 +
+        // UpdateLayeredWindow 上传"，与进程渲染模式无关——那条 0.5~3.9s 的 GPU 排队问题
+        // 由它自己的透明窗口路径解决。
+        // 而进程级 SoftwareOnly 会把**主窗口**也拖进 CPU 光栅化：1000×620 的窗口每次拖动 /
+        // 重绘都在 CPU 上合成，表现就是"拖动发涩、界面不跟手"（用户实测反馈）。
+        // 取舍：主窗口回到 GPU 渲染（流畅）；代价是游戏前台把 GPU 队列打满时主窗口会排队——
+        // 但那时用户并不在操作界面（连发跑起来后不需要看窗口），优先级明确。
+        // （历史：曾在此处设 ProcessRenderMode = SoftwareOnly，现已移除。）
 
-            // 服务组装（手动 DI，规模小无需容器）。
+        // 诊断开关（排查"拖动发涩"用，正常运行不要带）：
+        //   --no-mouse-hook → 不安装 WH_MOUSE_LL（鼠标类方案不可用）
+        //   --no-overlay    → 不创建键帽悬浮层（含渲染时钟激励器）
+        //   --no-dd         → 不加载 DD 驱动（判断是否 DD 内核驱动引入拖动延迟）
+        var args = Environment.GetCommandLineArgs();
+        if (args.Any(a => string.Equals(a, "--no-mouse-hook", StringComparison.OrdinalIgnoreCase)))
+            InputHookService.SuppressMouseHook = true;
+        // 注：曾临时默认置 SuppressMouseHook=true 验证"拖动发涩是否由 WH_MOUSE_LL 引入"，
+        // 结论：是。鼠标检测已改为 Raw Input（见 InputHookService），不再需要这个开关。
+        if (args.Any(a => string.Equals(a, "--no-overlay", StringComparison.OrdinalIgnoreCase)))
+            KeyVisualizerService.SuppressOverlay = true;
+        if (args.Any(a => string.Equals(a, "--no-dd", StringComparison.OrdinalIgnoreCase)))
+            DdDriverService.SuppressDriver = true;
+
+        // 渲染能力（一次性记录）：Tier 0 = 没有硬件加速（WPF 全程软件光栅化，拖动必然发涩）。
+        // 混合显卡 / 4K / 远程桌面等环境容易落到 Tier 0，排查拖动问题时先看这一行。
+        Logger.Info($"WPF 渲染能力：Tier={System.Windows.Media.RenderCapability.Tier >> 16}，"
+                    + $"ProcessRenderMode={System.Windows.Media.RenderOptions.ProcessRenderMode}"
+                    + $"（Tier 0 = 无硬件加速；鼠标钩子={(!InputHookService.SuppressMouseHook ? "启用" : "已禁用")}）。");
+
+        // 服务组装（手动 DI，规模小无需容器）。
         _configService = new ConfigService();
         _hookService = new InputHookService();
         _scheduler = new TaskSchedulerService();

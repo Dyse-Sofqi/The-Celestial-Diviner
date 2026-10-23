@@ -111,9 +111,20 @@ public sealed class KeyVisualizerService
     /// 点任务栏/退出最大化立刻跟上"）。独立线程后这些阻塞只吃掉悬浮窗自己的呈现，
     /// 主线程、钩子线程、连发线程全部不受影响；悬浮窗视觉在最坏情况下短暂冻结属可接受代价。
     /// </summary>
+    /// <summary>
+    /// 诊断开关：不创建键帽悬浮层（含渲染时钟激励器）。由命令行 `--no-overlay` 置位，
+    /// 用于 A/B 判断"拖动发涩"是否由悬浮层（分层窗口 + 独立 UI 线程）引入。仅供诊断。
+    /// </summary>
+    public static bool SuppressOverlay { get; set; }
+
     public void AttachOverlay()
     {
         if (_overlay is not null) return;
+        if (SuppressOverlay)
+        {
+            Logger.Warn("诊断开关 --no-overlay 已生效：不创建键帽悬浮层。");
+            return;
+        }
         var ready = new ManualResetEventSlim(false);
         var thread = new Thread(() =>
         {
@@ -136,12 +147,15 @@ public sealed class KeyVisualizerService
                 // 启动即预创建 HWND（不显示）：置顶 / 穿透样式在本程序仍是前台时建立，
                 // 避免第一次按键时才在游戏前台创建分层窗口（首键卡顿 + 置顶序错位）。
                 overlay.PreloadHandle();
-                // 预显示（一次 Show，此后窗口常驻空透明）：运行期零 Show/Hide/SetWindowPos，
-                // 彻底消除与前台最大化游戏的 DWM 同步阻塞（实测 Show 6s / Hide 9s，键帽画面停滞根因）。
-                overlay.Preshow();
-                // 渲染时钟激励器：FSO 游戏前台时 DWM 合成事件驱动、时钟停摆，键帽更新
-                // 排队等合成（实测滞后 0.5~3s 且与表面积/频率无关）——1×1 心跳窗口持续激励合成时钟。
-                overlay.CreatePacer();
+                // **不再 Preshow**：预显示会在整个会话里挂着一个"置顶 + 分层 + 空透明"的窗口，
+                // DWM 每帧都要把它合成在其它窗口之上（250% 缩放下 1400×250 的带 alpha 表面），
+                // 拖动任何窗口时都要多混一层。改为首次有键帽时再 Show（ShowOverlay 统一处理）。
+                // 代价：游戏前台首次显示键帽时那一次 Show 可能偏慢（作者实测极端场景 6s）；
+                // 取舍是"空闲干净"优先——用户明确过这一点。
+                // 渲染时钟激励器**不再在启动时创建**：它是个带 `RepeatBehavior.Forever` 的 16ms 颜色
+                // 动画 + 置顶分层窗口，等于让整个进程以 60fps 永不停歇地重绘（每帧 UpdateLayeredWindow）。
+                // 空闲时纯属白烧，拖动窗口时还会和合成器抢带宽。改为"有键帽要显示时才建"，
+                // 见 KeycapOverlayWindow.ShowOverlay / 空内容回收时的 DestroyPacer。
                 RefreshReminder();
             }
             catch (Exception ex)

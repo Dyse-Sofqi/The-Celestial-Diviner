@@ -151,11 +151,22 @@ public static class DdDriverService
     // ---------- 初始化 / 释放 ----------
 
     /// <summary>
+    /// 诊断开关：不加载 DD 驱动（由命令行 `--no-dd` 置位）。用于判断"拖动发涩"是否由
+    /// DD 内核驱动（虚拟设备常驻）引入。置位后键盘注入自动走普通模式，仅供诊断。
+    /// </summary>
+    public static bool SuppressDriver { get; set; }
+
+    /// <summary>
     /// 加载 DD DLL 并初始化虚拟驱动（DD_btn(0)）。重复调用安全：已就绪时直接返回 true。
     /// 需要管理员权限；首次调用可能触发系统安装虚拟设备（自动完成，无需交互）。
     /// </summary>
     public static bool EnsureReady()
     {
+        if (SuppressDriver)
+        {
+            LastError = "诊断模式：已通过 --no-dd 禁用 DD 驱动";
+            return false;
+        }
         lock (Gate)
         {
             if (_ddKey is not null && _initialized) return true;

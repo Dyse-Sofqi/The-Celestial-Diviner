@@ -1,8 +1,10 @@
+﻿using System.Diagnostics;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using TheCelestialDiviner.Helpers;
@@ -344,8 +346,64 @@ public partial class MainWindow : Window
                     MessageBoxButton.YesNo, MessageBoxImage.Question)
             == MessageBoxResult.Yes;
 
+        // 拖动平滑度埋点：**只在真正的移动操作期间**统计（WM_ENTERSIZEMOVE → WM_EXITSIZEMOVE），
+        // 记录移动消息次数与最大间隔。之前用 LocationChanged 间隔判停顿是错的——
+        // "按住左键但没动"会被误判成停顿（实测把 2.8 秒的静止算成拖动卡顿）。
+        // 判读：1 秒拖动应收到约 60 次 WM_MOVING、最大间隔 20~30ms；若只有几次且间隔几百毫秒，
+        // 才是真的移动循环被拖住。
+        _moveHook = (System.Windows.Interop.HwndSource?)PresentationSource.FromVisual(this);
+        _moveHook?.AddHook(OnWindowMessage);
+
         // 运行时初始化（定时器分辨率提升 + 钩子安装 + 权限状态回填）。
         _vm.InitializeRuntime(IsElevated());
+    }
+
+    // ---------- 拖动平滑度埋点（WM_ENTERSIZEMOVE / WM_MOVING / WM_EXITSIZEMOVE） ----------
+    private System.Windows.Interop.HwndSource? _moveHook;
+    private int _moveStartTick;
+    private int _moveCount;
+    private int _moveMaxGap;
+    private int _lastMovingTick;
+    private TimeSpan _dragCpuStart;
+
+    /// <summary>窗口消息钩子：统计一次移动操作内的 WM_MOVING 次数与最大间隔。</summary>
+    private IntPtr OnWindowMessage(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        switch (msg)
+        {
+            case 0x0231:   // WM_ENTERSIZEMOVE
+                _moveStartTick = Environment.TickCount;
+                _lastMovingTick = _moveStartTick;
+                _moveCount = 0;
+                _moveMaxGap = 0;
+                _dragCpuStart = Process.GetCurrentProcess().TotalProcessorTime;
+                break;
+            case 0x0216:   // WM_MOVING
+            {
+                var now = Environment.TickCount;
+                var gap = unchecked(now - _lastMovingTick);
+                _lastMovingTick = now;
+                _moveCount++;
+                if (gap > _moveMaxGap) _moveMaxGap = gap;
+                break;
+            }
+            case 0x0232:   // WM_EXITSIZEMOVE
+            {
+                var total = unchecked(Environment.TickCount - _moveStartTick);
+                if (total >= 300)   // 只记真正的拖动（点一下标题栏不算）
+                {
+                    // CPU 占用率 = 本进程在这段拖动里烧掉的 CPU / 墙钟时间。
+                    // 接近 100% 说明每次移动都在重绘（渲染是瓶颈）；接近 0% 说明我们在空转等待。
+                    var cpuMs = (Process.GetCurrentProcess().TotalProcessorTime - _dragCpuStart).TotalMilliseconds;
+                    var util = total > 0 ? cpuMs * 100.0 / total : 0;
+                    Logger.Info($"拖动统计：{total}ms 内收到 {_moveCount} 次移动消息，"
+                                + $"最大间隔 {_moveMaxGap}ms，进程 CPU 占用 {util:0}%"
+                                + $"（正常应约 60 次/秒、间隔 20~30ms）。");
+                }
+                break;
+            }
+        }
+        return IntPtr.Zero;
     }
 
     // ---------- 注释区域（原日志区）：悬停标签显示说明，默认显示链接 ----------
@@ -635,6 +693,38 @@ public partial class MainWindow : Window
         if (_vm is null) return;
         if (sender is RadioButton { Tag: string tag })
             _vm.SelectedMode = tag == "Hold" ? TriggerMode.Hold : TriggerMode.Toggle;
+
+        // 行不再重建 → 滚动位置会保留，切模式后可能停在"半截"处：回到顶部更符合预期。
+        FindDescendant<ScrollViewer>(SchemeList)?.ScrollToTop();
+
+        // 诊断：从点击到布局完成的耗时（用户感知的就是这一段）。
+        // 只在超过 80ms（可感知）时记录——正常切换是十几毫秒，逐次记录只会把日志刷满。
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+        {
+            if (SchemeList is null) return;
+            var elapsed = sw.ElapsedMilliseconds;
+            if (elapsed <= 80) return;
+            var realized = 0;
+            for (var i = 0; i < SchemeList.Items.Count; i++)
+                if (SchemeList.ItemContainerGenerator.ContainerFromIndex(i) is not null) realized++;
+            var sv = FindDescendant<ScrollViewer>(SchemeList);
+            Logger.Warn($"方案列表切换偏慢：{elapsed}ms（{realized}/{SchemeList.Items.Count} 行已实现；"
+                        + $"视口={sv?.ViewportHeight:0}、范围={sv?.ExtentHeight:0}）。");
+        }));
+    }
+
+    /// <summary>在可视树里找第一个指定类型的后代（诊断用：读 ScrollViewer / 虚拟化面板的运行时状态）。</summary>
+    private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject
+    {
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match) return match;
+            if (FindDescendant<T>(child) is { } nested) return nested;
+        }
+        return null;
     }
 
     /// <summary>开关分区子标签切换（常规 / 轮转 / 双宏；同样需判空防 XAML 解析期触发）。</summary>
@@ -733,6 +823,7 @@ public partial class MainWindow : Window
     {
         var screen = System.Windows.Forms.Cursor.Position;
         var source = FindTileAt(KeyboardArea, screen) ?? FindTileAt(MouseArea, screen);
+        Logger.Info($"管理态命中测试：屏幕 ({screen.X},{screen.Y}) → {(source is null ? "空白（请求退出）" : source.ToString())}");
         if (source is null)
         {
             _vm.TryExitPicking();

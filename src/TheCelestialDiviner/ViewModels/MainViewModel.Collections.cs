@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using TheCelestialDiviner.Helpers;
 using TheCelestialDiviner.Models;
 using TheCelestialDiviner.Services;
@@ -205,13 +205,13 @@ public sealed partial class MainViewModel
 
     // ---------- 方案面板：录入选择态与连发键管理 ----------
 
-    private const string s_defaultHint = "点击“从左侧键盘增删按键方案”进入管理模式：左键键位添加方案，右键键位取消方案";
+    private const string s_defaultHint = "点击“从左侧键盘增删按键方案”进入管理模式：左键键位添加方案，再点一次即取消";
 
     // 选择态提示条文案（管理模式的操作说明；双宏成对录入有独立文案，成对完成 / 放弃第 1 键后回到此处）。
     private const string s_managePrompt =
-        "管理方案中：左键键位添加连发 · 右键键位取消方案 · Esc 或点击空白处退出";
+        "管理方案中：左键键位添加连发，再点一次即取消（右键同样可取消）· Esc 或点击空白处退出";
     private const string s_dualManagePrompt =
-        "双宏成对录入：左键选第 1 键，再左键选第 2 键（成对生效）· 右键键位取消整对 · Esc 或点击空白处退出";
+        "双宏成对录入：左键选第 1 键，再左键选第 2 键（成对生效）· 再左键点已有方案的第 1 键取消整对（右键同样）· Esc 或点击空白处退出";
 
     /// <summary>判断方案是否为"目标键 = 触发键自身"的连发方案（新版唯一方案形态）。</summary>
     private static bool IsSelfRepeatScheme(InputSource source, KeyScheme scheme)
@@ -259,7 +259,30 @@ public sealed partial class MainViewModel
 
     /// <summary>
     /// 迁移旧版方案：仅保留"按键自身连发"方案与合法双宏方案（模式 / 间隔沿用原值），
-    /// 其余（触发键 ≠ 目标键、多目标、修饰键组合）按新版交互移除并记录日志。
+    /// 其余（触发键 ≠ 目标键、多目标、修饰键组合）按新版交互移除并记录日志。    /// <summary>
+    /// 迁移：切换方案热键的默认值由"未设置"改为 **F10**（v1.8.2）。
+    /// **只对从未设置过的用户生效**——已经自定义过键位的用户保持原样，不会被覆盖；
+    /// 迁移后置 <see cref="ProfileCycleConfig.DefaultApplied"/>，用户日后手动清空也不会被再次填回。
+    /// </summary>
+    private void MigrateProfileCycleDefault()
+    {
+        if (_config.ProfileCycle.DefaultApplied) return;
+        var filled = false;
+        if (!_config.ProfileCycle.HasKey)
+        {
+            _config.ProfileCycle.HasKey = true;
+            _config.ProfileCycle.VirtualKey = Constants.DefaultCycleKeyVk;
+            _config.ProfileCycle.Extended = false;
+            filled = true;
+        }
+        _config.ProfileCycle.DefaultApplied = true;
+        SaveConfig();   // 迁移结果（含标记）立即落盘，避免下次启动重复判断
+        if (filled)
+            AddLog($"切换方案热键已设为默认 [{InputNameMapper.GetKeyName(Constants.DefaultCycleKeyVk, false)}]"
+                   + "（此前未设置；可在方案面板顶部自定义）。");
+    }
+
+
     /// </summary>
     private void MigrateLegacySchemes()
     {
@@ -292,7 +315,11 @@ public sealed partial class MainViewModel
             AddLog($"已保留 {kept} 个连发方案。");
     }
 
-    /// <summary>按当前标签模式与开关分区重建方案行列表。</summary>
+    /// <summary>
+    /// 按当前配置重建方案行列表：**两种模式 / 三个分区的行全部建出来**，只按当前模式 / 分区设置
+    /// <see cref="SchemeRowViewModel.IsVisible"/>。切换模式走 <see cref="ApplySchemeFilter"/>（不重建），
+    /// 这样行容器与绑定表达式只创建一次——那是切换卡顿的主要来源。
+    /// </summary>
     private void RefreshSchemeList()
     {
         SchemeRows.Clear();
@@ -305,8 +332,7 @@ public sealed partial class MainViewModel
             var captured = key;
             if (scheme.Section == ToggleSection.Dual)
             {
-                // 双宏开关：仅开关模式下、且选中双宏分区时显示；两行一体（启用勾选只显示在第 1 行）。
-                if (_selectedMode != TriggerMode.Toggle || _selectedSection != ToggleSection.Dual) continue;
+                // 双宏开关：两行一体（启用勾选只显示在第 1 行），仅开关模式 + 双宏分区可见。
                 if (!IsDualMacroScheme(source, scheme)) continue;
                 rows.Add((InputNameMapper.GetSourceName(source),
                     new SchemeRowViewModel(
@@ -331,15 +357,13 @@ public sealed partial class MainViewModel
                         onSecondIntervalChanged: ms => UpdateSchemeInterval(captured, ms, 1),
                         onSecondHoldChanged: ms => UpdateSchemeHold(captured, ms, 1),
                         secondVisualEnabled: scheme.Targets[1].VisualEnabled,
-                        onSecondVisualChanged: visible => SetTargetVisualEnabled(captured, 1, visible))));
+                        onSecondVisualChanged: visible => SetTargetVisualEnabled(captured, 1, visible),
+                        rowMode: TriggerMode.Toggle, rowSection: ToggleSection.Dual)));
                 continue;
             }
 
             if (!IsSelfRepeatScheme(source, scheme)) continue;
             var target = scheme.Targets[0];
-            if (target.Mode != _selectedMode) continue;
-            // 开关模式再按分区过滤（常规 / 轮转）。
-            if (_selectedMode == TriggerMode.Toggle && scheme.Section != _selectedSection) continue;
 
             rows.Add((InputNameMapper.GetSourceName(source),
                 new SchemeRowViewModel(
@@ -354,16 +378,32 @@ public sealed partial class MainViewModel
                     onIntervalChanged: ms => UpdateSchemeInterval(captured, ms),
                     onHoldChanged: ms => UpdateSchemeHold(captured, ms),
                     visualEnabled: GetVisualEnabled(captured),
-                    onVisualChanged: visible => SetVisualEnabled(captured, visible))));
+                    onVisualChanged: visible => SetVisualEnabled(captured, visible),
+                    rowMode: target.Mode, rowSection: scheme.Section)));
         }
         foreach (var (_, row) in rows.OrderBy(r => r.Name, StringComparer.CurrentCulture))
             SchemeRows.Add(row);
-        OnPropertyChanged(nameof(HasSchemeRows));
-        OnPropertyChanged(nameof(SchemesAllEnabled));   // 表头全选框随列表重建刷新
+        ApplySchemeFilter();   // 统一在此设置可见性（含 HasSchemeRows / 全选框刷新）
     }
 
     /// <summary>
-    /// 进入方案管理模式（原一次性录入改造）：左键键位添加方案、右键键位取消方案，
+    /// 只切换已有行的可见性，**不重建集合**（切换开关 / 按压模式、切换分区走这里）。
+    /// 行容器与绑定表达式因此只创建一次——重建时那部分开销实测 330ms 布局 + 约 500ms 渲染。
+    /// </summary>
+    private void ApplySchemeFilter()
+    {
+        var isToggle = _selectedMode == TriggerMode.Toggle;
+        foreach (var row in SchemeRows)
+        {
+            row.IsVisible = row.RowMode == _selectedMode
+                            && (!isToggle || row.RowSection == _selectedSection);
+        }
+        OnPropertyChanged(nameof(HasSchemeRows));
+        OnPropertyChanged(nameof(SchemesAllEnabled));   // 表头全选框随可见集合刷新
+    }
+
+    /// <summary>
+    /// 进入方案管理模式（原一次性录入改造）：左键键位添加方案、再点一次即取消（右键同样可取消），
     /// 模式持续保持，直至 Esc / 点击空白处 / “退出管理方案”按钮退出。
     /// </summary>
     public void StartPicking()
@@ -379,10 +419,10 @@ public sealed partial class MainViewModel
         _pickingSection = _selectedMode == TriggerMode.Toggle ? _selectedSection : ToggleSection.Normal;
         _dualFirstPick = null;
         PickingPromptText = _pickingSection == ToggleSection.Dual ? s_dualManagePrompt : s_managePrompt;
-        HintText = "正在管理连发键方案：左键键位添加，右键键位取消，Esc 或点击空白处退出";
+        HintText = "正在管理连发键方案：左键键位添加，再点一次取消，Esc 或点击空白处退出";
         AddLog($"进入方案管理（{_selectedMode switch { TriggerMode.Toggle => "开关模式", _ => "按压模式" }}"
                + $"{(_selectedMode == TriggerMode.Toggle ? " · " + SectionName(_selectedSection) : "")}）："
-               + "左键键位添加连发，右键键位取消方案，Esc 或点击空白处退出。");
+               + "左键键位添加连发、再点一次取消（右键同样可取消），Esc 或点击空白处退出。");
     }
 
     /// <summary>进入键位录入选择态（设置全局开关热键；单次录入即完成并退出）。</summary>
@@ -523,6 +563,15 @@ public sealed partial class MainViewModel
     {
         if (_dualFirstPick is null)
         {
+            // 左键再点一次 = 取消：该键已是双宏方案（开关键位）时整对删除，与右键等价。
+            var dualKey = TaskSchedulerService.BuildSourceKey(source);
+            if (_config.Schemes.TryGetValue(dualKey, out var existingDual)
+                && existingDual.Section == ToggleSection.Dual)
+            {
+                DeleteScheme(dualKey);
+                return;
+            }
+
             // 第 1 键（开关键位）：只校验 + 暂存，不落盘，继续选择第 2 键。
             if (ValidateDualPickKey(source, null, out var reason))
             {
@@ -646,6 +695,19 @@ public sealed partial class MainViewModel
         }
 
         var key = TaskSchedulerService.BuildSourceKey(source);
+
+        // 左键再点一次 = 取消（与右键等价，用户更习惯"再点一下取消"）。
+        // 只对**当前分区 / 模式**下已有的方案生效：别的分区里的方案不在列表里显示，
+        // 那种情况仍按"更新到当前分区"处理，避免误删看不见的方案。
+        if (_config.Schemes.TryGetValue(key, out var existing)
+            && existing.Section == _pickingSection
+            && existing.Targets.Count > 0
+            && existing.Targets[0].Mode == _selectedMode)
+        {
+            DeleteScheme(key);
+            return;
+        }
+
         var target = source.Kind switch
         {
             InputKind.Keyboard => new TargetKeyConfig

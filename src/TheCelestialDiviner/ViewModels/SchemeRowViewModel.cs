@@ -34,11 +34,14 @@ public sealed class SchemeRowViewModel : INotifyPropertyChanged
         bool firstKeyFiring = true, Action<bool>? onFirstKeyFiringChanged = null,
         int secondIntervalMs = 0, int secondHoldMs = 0,
         Action<int>? onSecondIntervalChanged = null, Action<int>? onSecondHoldChanged = null,
-        bool secondVisualEnabled = true, Action<bool>? onSecondVisualChanged = null)
+        bool secondVisualEnabled = true, Action<bool>? onSecondVisualChanged = null,
+        TriggerMode rowMode = TriggerMode.Toggle, ToggleSection rowSection = ToggleSection.Normal)
     {
         Source = source;
         KeyName = keyName;
         ModeName = modeName;
+        RowMode = rowMode;
+        RowSection = rowSection;
         _intervalMs = Compat.Clamp(intervalMs, Constants.MinIntervalMs, Constants.MaxIntervalMs);
         _intervalEdit = _intervalMs.ToString();
         _holdMs = Compat.Clamp(holdMs, Constants.MinHoldMs, Constants.MaxHoldMs);
@@ -252,6 +255,30 @@ public sealed class SchemeRowViewModel : INotifyPropertyChanged
 
     /// <summary>是否双宏开关（两行一体：第二行为辅键的时序 / 可视化控件）。</summary>
     public bool IsDual { get; }
+
+    /// <summary>该行所属的触发模式（开关 / 按压）：可见性过滤用。</summary>
+    public TriggerMode RowMode { get; }
+
+    /// <summary>该行所属的开关分区（常规 / 轮转 / 双宏）。</summary>
+    public ToggleSection RowSection { get; }
+
+    private bool _isVisible = true;
+
+    /// <summary>
+    /// 当前模式 / 分区下是否显示。**隐藏而不从集合里移除**：切换模式时重建全部行，
+    /// 每行二十来个绑定表达式 + 容器的创建是那次切换的主要开销（实测 330ms 布局 + 约 500ms 渲染）；
+    /// 只翻可见性则只需重新布局视口内的十来行。
+    /// </summary>
+    public bool IsVisible
+    {
+        get => _isVisible;
+        set
+        {
+            if (_isVisible == value) return;
+            _isVisible = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsVisible)));
+        }
+    }
 
     /// <summary>双宏辅键显示名（仅 IsDual 为 true 时有效）。</summary>
     public string SecondKeyName { get; }
