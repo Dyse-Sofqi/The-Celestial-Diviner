@@ -1045,7 +1045,7 @@
                              SelectionBrush="{DynamicResource AccentPrimary}" SelectionOpacity="0.3"
                              Foreground="{DynamicResource ThemeFg}"/>
                     <!-- 默认内容：注释区公告（仓库根目录 Notice.md 内嵌兜底 + Gitee 远端更新，
-                         由 code-behind 渲染为只读 RichTextBox，支持 [文本](链接) 与裸 URL 超链接；
+                         由 code-behind 渲染为只读 RichTextBox，支持 **加粗**、[文本](链接) 与裸 URL 超链接；
                          只读 + IsDocumentEnabled 下超链接直接点击打开，文本亦可选中复制。
                          隐藏滚动条（超出时滚轮仍可滚，外观与旧 TextBlock 版一致） -->
                     <RichTextBox x:Name="DefaultComment"

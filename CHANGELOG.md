@@ -4,6 +4,15 @@
 下载安装包：[Gitee Releases](https://gitee.com/sofqi/The-Celestial-Diviner/releases/latest) ·
 [GitHub Releases](https://github.com/Dyse-Sofqi/The-Celestial-Diviner/releases)
 
+## 未发布
+
+### 改进 · 注释区公告支持加粗
+
+- 公告里的 `**文本**` 现在渲染为**加粗**（此前原样显示星号）；加粗可以包裹超链接（`**[文本](链接)**`）
+- 其余规则不变：`[文本](链接)` 与裸 URL 仍渲染为可点击超链接；未闭合的 `**` 原样显示不误伤
+- 注意：公告由程序启动时远端同步渲染——**只有升级到含此渲染器的版本才能看到加粗**，
+  旧版本会把星号原样显示出来；写公告时请考虑旧版本的观感
+
 ## v1.8.3 — 2026-10-24
 
 ### 改进 · 注释区文本可选中复制

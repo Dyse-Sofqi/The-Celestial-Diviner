@@ -602,10 +602,13 @@ public partial class MainWindow : Window
     /// <summary>行内链接标记 [文本](URL) 识别。</summary>
     private static readonly Regex s_noticeLinkRegex = new(@"\[([^]\r\n]+)]\(([^)\r\n]+)\)");
 
+    /// <summary>行内加粗标记 **文本** 识别（非贪婪，允许内容含单个 *；未闭合不成对时原样显示）。</summary>
+    private static readonly Regex s_noticeBoldRegex = new(@"\*\*(.+?)\*\*");
+
     /// <summary>裸 URL 识别（中文全角标点/括号收尾不算 URL 的一部分）。</summary>
     private static readonly Regex s_noticeUrlRegex = new(@"https?://[^\s（）【】<>，。；、]+");
 
-    /// <summary>把公告文本渲染进注释区默认内容（按行拆分为段落；链接标记与裸 URL 渲染为可点击超链接）。
+    /// <summary>把公告文本渲染进注释区默认内容（按行拆分为段落；**加粗**、链接标记与裸 URL 按标记渲染）。
     /// 每行一个 Paragraph（行高 20、段间距 0），与旧 TextBlock + LineBreak 的排版一致。</summary>
     private void RenderDefaultComment(string content)
     {
@@ -623,46 +626,69 @@ public partial class MainWindow : Window
         DefaultComment.Document = doc;
     }
 
-    /// <summary>渲染一行公告：链接标记之外的部分再扫描裸 URL，其余按纯文本输出。</summary>
+    /// <summary>渲染一行公告：先按 **加粗** 切段（加粗段整段加粗），段内再走链接 / 裸 URL 识别
+    /// ——加粗在外层，**[链接](URL)** 这类"加粗包链接"可用；链接文字内嵌 ** 则不支持（按字面输出）。</summary>
     private void AppendNoticeLine(InlineCollection inlines, string line)
     {
         var index = 0;
-        foreach (Match link in s_noticeLinkRegex.Matches(line))
+        foreach (Match bold in s_noticeBoldRegex.Matches(line))
         {
-            AppendPlainTextWithUrls(inlines, line.Substring(index, link.Index - index));
-            AppendHyperlink(inlines, link.Groups[1].Value, link.Groups[2].Value);
+            AppendSegment(inlines, line.Substring(index, bold.Index - index), bold: false);
+            AppendSegment(inlines, bold.Groups[1].Value, bold: true);
+            index = bold.Index + bold.Length;
+        }
+        AppendSegment(inlines, line.Substring(index), bold: false);
+    }
+
+    /// <summary>渲染一段文本：链接标记之外的部分再扫描裸 URL，其余按纯文本输出（bold = 整段加粗）。</summary>
+    private void AppendSegment(InlineCollection inlines, string text, bool bold)
+    {
+        var index = 0;
+        foreach (Match link in s_noticeLinkRegex.Matches(text))
+        {
+            AppendPlainTextWithUrls(inlines, text.Substring(index, link.Index - index), bold);
+            AppendHyperlink(inlines, link.Groups[1].Value, link.Groups[2].Value, bold);
             index = link.Index + link.Length;
         }
-        AppendPlainTextWithUrls(inlines, line.Substring(index));
+        AppendPlainTextWithUrls(inlines, text.Substring(index), bold);
     }
 
     /// <summary>纯文本中再识别裸 URL（其余直接输出；空片段跳过）。</summary>
-    private void AppendPlainTextWithUrls(InlineCollection inlines, string text)
+    private void AppendPlainTextWithUrls(InlineCollection inlines, string text, bool bold)
     {
         var index = 0;
         foreach (Match url in s_noticeUrlRegex.Matches(text))
         {
-            if (url.Index > index) inlines.Add(new Run(text.Substring(index, url.Index - index)));
-            AppendHyperlink(inlines, url.Value, url.Value);
+            if (url.Index > index) inlines.Add(MakeNoticeRun(text.Substring(index, url.Index - index), bold));
+            AppendHyperlink(inlines, url.Value, url.Value, bold);
             index = url.Index + url.Length;
         }
-        if (index < text.Length) inlines.Add(new Run(text.Substring(index)));
+        if (index < text.Length) inlines.Add(MakeNoticeRun(text.Substring(index), bold));
     }
 
-    /// <summary>插入可点击超链接（主题紫随日/夜切换；非法 URL 退化为纯文本）。</summary>
-    private void AppendHyperlink(InlineCollection inlines, string text, string url)
+    /// <summary>插入可点击超链接（主题紫随日/夜切换；非法 URL 退化为纯文本；bold = 加粗）。</summary>
+    private void AppendHyperlink(InlineCollection inlines, string text, string url, bool bold)
     {
         if (text.Length == 0) return;
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
         {
-            inlines.Add(new Run(text));
+            inlines.Add(MakeNoticeRun(text, bold));
             return;
         }
         var link = new Hyperlink { NavigateUri = uri };
+        if (bold) link.FontWeight = FontWeights.Bold;
         link.Inlines.Add(new Run(text));
         link.SetResourceReference(Hyperlink.ForegroundProperty, "AccentPrimary");
         link.RequestNavigate += OnCommentLinkClick;
         inlines.Add(link);
+    }
+
+    /// <summary>公告纯文本 Run（bold = 加粗；正常文本不显式设字重，继承默认）。</summary>
+    private static Run MakeNoticeRun(string text, bool bold)
+    {
+        var run = new Run(text);
+        if (bold) run.FontWeight = FontWeights.Bold;
+        return run;
     }
 
     /// <summary>方案档位按钮选中态同步（仅驱动选中项，不回写 VM）。</summary>
