@@ -1,8 +1,42 @@
 ﻿# 衍天高手（The Celestial Diviner）开发进度交接
 
-更新：2026-10-24 — **发版 v1.8.4（注释区公告支持加粗 + 成为衍天/莫问高手激活态加粗）；双端 Release 已发布**
+更新：2026-10-24 — **发版 v1.8.5（检查更新加固：限流原因明示 + raw CHANGELOG 备用通道 + 附件按名匹配）；双端 Release 已发布**
 
-## 本次变更（发版 v1.8.4）
+## 本次变更（发版 v1.8.5）
+
+- 📋 用户反馈（v1.8.3 点「检查更新」提示"未能从 Gitee 获取新版本"）：诊断出**根因 = Gitee 匿名 API
+  按 IP 限流（403 "Rate Limit Exceeded"，0.24s 即拒）**，而 v1.8.4 Release 本身完好（带令牌 200 + 附件在位）；
+  旧客户端把非 2xx 静默当"暂无 Release"。用户拍板"修一下" → 随版发 1.8.5
+- ✅ 诊断取证（关键三点）：①带令牌请求同一接口 200、tag/附件全对；②匿名请求稳定 403（今天多次复核）；
+  ③当天日志无「检查更新失败」异常记录 → 证明走的是"非 2xx 静默返回 null"分支（仅异常路径写日志）
+- ✅ `UpdateService` 重构检查流程（返回值 `UpdateCheck?` → **`UpdateProbe`（Check/Failure 互斥）**）：
+  - **主通道** `FetchFromReleaseApiAsync`：失败原因分类——403 单独说明"接口限流（稍后再试或到 Release 页
+    手动下载）"、404"暂无 Release"、其他非 2xx 带状态码、超时/网络异常/解析失败各说各话
+  - **备用通道** `FetchFromRawChangelogAsync`：API 不可用时从 **Gitee raw 的 CHANGELOG.md** 取首个
+    `## vX.Y.Z` 标题（「未发布」段不以 v 开头天然跳过），按发版命名约定拼
+    `releases/download/{tag}/TheCelestialDiviner-x.y.z-win64.zip` 直链；raw 走 giteeusercontent 静态分发，
+    **不在 API 限流体系内**（限流期间实测可用）；确认框注明"经备用通道获取"
+  - **附件按名匹配** `^TheCelestialDiviner-.+-win64\.zip$`：替换旧的"第一个 .zip 结尾"——
+    Gitee 自动附带源码包（v1.8.4.zip / .tar.gz），旧逻辑靠附件排序侥幸避开，顺序一变就会误选
+    （解包无 exe → "更新包内容异常"）
+- ✅ 调用方接入：`RunCheckUpdateAsync` 弹窗带原因（`未能从 Gitee 获取新版本：{原因}`）；
+  `CheckUpdateDotAsync` 预检失败原因写日志（原"没有更新的版本"与"远端不可用"分开）
+- ✅ 验证：raw CHANGELOG 首标题解析 ✓、拼出直链 HEAD 200 且 Content-Length = zip 实际大小 ✓、
+  **限流持续期间**（API 匿名仍 403）备用通道端到端可用 ✓；编译 0 警告 0 错误；
+  exe 字节扫描注意——**C# 字符串字面量在程序集里是 UTF-16**（#US 堆），要按 utf-16-le 扫，
+  UTF-8 扫描只对内嵌资源（Notice/CHANGELOG）有效（本轮踩坑记录）
+- ✅ 版本 1.8.4 → **1.8.5**；CHANGELOG v1.8.5 详录；发布说明 `docs/release-notes/v1.8.5-release-notes.md`
+  （写明 **1.8.3/1.8.4 用户需手动覆盖安装一次**，旧版检查更新遇限流仍会失败）
+- ✅ 发布包：`dist/TheCelestialDiviner-1.8.5-win64.zip`（20 项；zip 1,707,000 B；SHA256 `e540c742…1f72`）；
+  提交 `93ab502`（加固）→ `09bc749`（发版）；注释标签 `v1.8.5`（对象 `d770ed09` → 09bc749）
+- ✅ 双端已发布：Gitee Release id **1235129** + 附件 id 3478527（1,707,000 B）；
+  GitHub Release id **422234581**（API digest 与本地一致）
+- ✅ 三端一致核对：本地 = 双端 main = `09bc749`；标签两端均为注释对象 `d770ed09`；raw CHANGELOG 首标题
+  已是 **v1.8.5**（备用通道数据源正确，1.8.5 客户端检查将得到"已是最新"）；**Gitee 标签重写坑连续第 3 次未复发**
+- ⚠️ 未做运行时验证：限流弹窗文案、备用通道确认框在真实 UI 的表现仅编译 + 端点验证，待用户实测
+- ℹ️ 用户升级路径：先手动下载 1.8.5 覆盖安装（一次性），此后检查更新自带限流提示 + 备用通道
+
+## 历史变更（发版 v1.8.4）
 
 - 📋 用户需求：公告渲染加粗（上轮已完成、未发版）+ 激活"成为衍天/莫问高手"按钮除变色外字体也加粗；
   按老规矩发版 1.8.4
