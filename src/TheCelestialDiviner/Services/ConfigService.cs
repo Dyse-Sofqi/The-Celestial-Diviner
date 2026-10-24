@@ -113,6 +113,13 @@ public sealed class ConfigService
             config.ThemeSounds =
                 [config.CustomSounds.Clone(), config.CustomSounds.Clone(), config.CustomSounds.Clone()];
         }
+        if (fromVersion < 19)
+        {
+            // v18 → v19：桌面悬浮层静音开关强制回默认关闭——该字段只被 v1.8.6 撤回前的
+            // 开发构建以其旧默认值 true 自动落盘，从未有用户主动开启的入口（用户明确要桌面键帽）。
+            // 迁移只执行一次；用户此后在 config.json 主动置 true 不受影响。
+            config.WebOverlayMuteDesktop = false;
+        }
 
         // v10：“成为衍天高手”语音按钮——字段有默认值（关闭），无需迁移动作。
         // v11：注释区公告缓存——字段有默认值（空 = 内嵌默认公告），无需迁移动作。

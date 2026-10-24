@@ -298,8 +298,9 @@ public sealed class AppConfig
     /// v11：注释区公告内容缓存；v12：键帽透明度；v13：自定义提示音；v14：门派主题 + 莫问公告缓存；
     /// v15：方案档位自定义名称；v16：方案档位外观定制（主题绑定 + 默认主题自定义，取代全局门派主题）；
     /// v17：主题语音方案（提示音按主题绑定，随主题切换；取代全局 CustomSounds）；
-    /// v18：键帽 Web 叠加源（OBS 浏览器源透明键帽）。</summary>
-    public const int CurrentVersion = 18;
+    /// v18：键帽 Web 叠加源（OBS 浏览器源透明键帽）；
+    /// v19：桌面悬浮层静音开关强制回默认关闭（历史值只由开发构建自动写入）。</summary>
+    public const int CurrentVersion = 19;
 
     /// <summary>配置文件版本号（预留迁移能力）。</summary>
     public int Version { get; set; } = CurrentVersion;

@@ -122,16 +122,17 @@ public sealed class WebOverlayService
         ClientCountChanged?.Invoke();
     }
 
-    /// <summary>按住键位快照更新（keys = 修饰键在前按按下顺序；bumps = 本轮各键连击增量）。</summary>
+    /// <summary>按住键位快照更新（keys = 修饰键在前按按下顺序；bumps = 本轮各键连击增量）。
+    /// t = 发送时刻（Environment.TickCount）：页面按 hello 校准时钟后实测端到端延迟（标题显示）。</summary>
     public void SetSnapshot(IReadOnlyList<string> keys, IReadOnlyDictionary<string, int> bumps)
     {
         lock (_gate) _lastKeys = keys.ToList();
-        Broadcast(JsonSerializer.Serialize(new { type = "snapshot", keys, bumps }));
+        Broadcast(JsonSerializer.Serialize(new { type = "snapshot", keys, bumps, t = Environment.TickCount }));
     }
 
     /// <summary>连发脉冲 / 方案切换键帽（label、按压时长、合并次数）。</summary>
     public void BroadcastPulse(string label, int holdMs, int repeat) =>
-        Broadcast(JsonSerializer.Serialize(new { type = "pulse", label, holdMs, count = repeat }));
+        Broadcast(JsonSerializer.Serialize(new { type = "pulse", label, holdMs, count = repeat, t = Environment.TickCount }));
 
     /// <summary>状态提醒键帽显隐。</summary>
     public void SetReminder(bool visible)
@@ -201,6 +202,7 @@ public sealed class WebOverlayService
             return JsonSerializer.Serialize(new
             {
                 type = "hello",
+                t = Environment.TickCount,   // 页面据此校准时钟偏移（后续消息实测端到端延迟）
                 scheme = new { face = _face, @base = _base, text = _text, border = _border },
                 opacity = _opacity,
                 reminder = _reminder,
@@ -342,8 +344,16 @@ public sealed class WebOverlayService
             try
             {
                 if (client.Socket.State != WebSocketState.Open) return;
+                var sw = System.Diagnostics.Stopwatch.StartNew();   // 发送耗时探针：定位延迟在服务端发送还是接收端
                 await client.Socket.SendAsync(new ArraySegment<byte>(bytes),
                     WebSocketMessageType.Text, true, CancellationToken.None);
+                sw.Stop();
+                if (sw.ElapsedMilliseconds > 100 &&
+                    unchecked(Environment.TickCount - _lastSlowSendLogTick) > 2000)
+                {
+                    _lastSlowSendLogTick = Environment.TickCount;
+                    Logger.Warn($"Web 叠加源发送耗时 {sw.ElapsedMilliseconds}ms（接收端读取慢或系统负载高）。");
+                }
             }
             finally
             {
@@ -355,6 +365,8 @@ public sealed class WebOverlayService
             // 发送失败（对端断开 / 关闭中）：连接由接收循环清理，此处吞掉保广播线程安全。
         }
     }
+
+    private static int _lastSlowSendLogTick;   // 发送耗时告警限频
 
     /// <summary>应用图标 → PNG 字节（按图标版本缓存；失败返回 null，客户端退化显示文字键帽）。</summary>
     private byte[]? IconPng()

@@ -74,6 +74,16 @@ const ICONS = {
 const caps = new Map();   // label -> {el, badge, count, retireTimer, fadeTimer, pulseTimer}
 let reminderEl = null;
 let iconRev = -1;
+let clockOffset = 0;   // Date.now() - 服务端 TickCount（hello 校准；后续消息实测端到端延迟）
+let lastDelayMs = 0;
+
+// 端到端延迟探针：标题实时显示（发送时刻 → 页面收到）。排除浏览器渲染耗时，
+// 纯数据链路延迟（进程 → WS → CEF/浏览器 JS 收到）。诊断卡顿时先看这里的数字。
+function measureDelay(t) {
+  if (typeof t !== "number") return;
+  lastDelayMs = Math.max(0, Date.now() - t - clockOffset);
+  document.title = "衍天键帽 · 延迟 " + lastDelayMs + "ms";
+}
 
 function svgIcon(path) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -201,14 +211,15 @@ function setOpacity(v) {
 function handleMessage(msg) {
   switch (msg.type) {
     case "hello":
+      clockOffset = Date.now() - (msg.t | 0);
       applyScheme(msg.scheme);
       setOpacity(msg.opacity);
       iconRev = msg.iconRev | 0;
       setReminder(!!msg.reminder);
       onSnapshot(msg.keys || [], null);
       break;
-    case "snapshot": onSnapshot(msg.keys || [], msg.bumps); break;
-    case "pulse": onPulse(String(msg.label), msg.holdMs | 0, Math.max(1, msg.count | 0)); break;
+    case "snapshot": measureDelay(msg.t); onSnapshot(msg.keys || [], msg.bumps); break;
+    case "pulse": measureDelay(msg.t); onPulse(String(msg.label), msg.holdMs | 0, Math.max(1, msg.count | 0)); break;
     case "reminder": setReminder(!!msg.visible); break;
     case "scheme": applyScheme(msg); break;
     case "config":
