@@ -1,6 +1,6 @@
 ﻿# 衍天高手（The Celestial Diviner）开发进度交接
 
-更新：2026-10-25 — **发版 v1.8.8（方案列表滚动跳顶修复 + 键帽 Caps 缩写 / Web 叠加源显示对齐桌面）；发布包就绪，双端 Release 上传待执行**
+更新：2026-10-25 — **发版 v1.8.8（方案列表滚动跳顶修复 + 键帽 Caps 缩写 / Web 叠加源显示对齐桌面）；双端 Release 已发布**
 
 ## 本次变更（发版 v1.8.8）
 
@@ -24,10 +24,11 @@
 - ✅ 发布包：`dist/TheCelestialDiviner-1.8.8-win64.zip`（20 项与 1.8.7 一致 = exe + 依赖 dll +
   7zr.exe + 配置 + 8 段候选提示音；zip 1,751,795 B；SHA256 `5cbbf300…2285`；
   exe 1,100,288 B 内嵌 1.8.8；Python zipfile 打包沿用）
-- ⏳ 双端 Release 上传待执行：GitHub 走 `scripts/release/gh-api-release.ps1`
-  （-Tag v1.8.8 -Since <远端已有提交> -Zip dist/TheCelestialDiviner-1.8.8-win64.zip
-  -Notes docs/release-notes/v1.8.8-release-notes.md），Gitee 走
-  `scripts/release/publish-gitee-release.sh`；推送后本文件补"双端 Release 已发布"
+- ✅ 双端 Release 已发布：Gitee <https://gitee.com/sofqi/The-Celestial-Diviner/releases/tag/v1.8.8>
+  （release id 1237841，publish-gitee-release.sh 建版 + 附件上传）；GitHub
+  <https://github.com/Dyse-Sofqi/The-Celestial-Diviner/releases/tag/v1.8.8>
+  （release id 422864942，gh-api-release.ps1 自 bf56793 起逐字节复制提交 9c1e92f + 建版 + 传附件）。
+  双端 releases/latest 均已指向 v1.8.8 → 程序内「检查更新」可发现并安装
 
 ## 本次变更（发版 v1.8.7）
 
