@@ -4,6 +4,9 @@ namespace TheCelestialDiviner.Services;
 /// 键帽 Web 叠加源的内嵌网页（OBS 浏览器源加载；CEF 透明背景渲染）。
 /// 复刻 keyviz lowprofile 键帽视觉（双层结构 + 按压下沉 + 连击角标，参数与
 /// KeycapOverlayWindow 一致：size=32 / 帽高 72 / 容器 80 / 圆角 20 / 下沉 8）。
+/// 键帽宽随内容自适应（face 为布局子元素参与撑宽，与桌面一致），文本不换行；
+/// 画布右缘预留 16px（root right）容纳最右角标 8px 外凸 + 8px 余量，
+/// 画布高度 ≥ 96 才能完整显示顶部角标（帽顶上方外凸 8px）。
 /// 协议（JSON 文本帧）：
 ///   hello    {scheme{face,base,text,border}, opacity, reminder, iconRev, keys[]}   ← 连接即发
 ///   snapshot {keys[], bumps{label:n}}                                              ← 按住快照
@@ -25,23 +28,28 @@ public static class WebOverlayPage
   html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
   :root { --face: #6d28d9; --base: #4c1d95; --text: #fbbf24; --border: #4c1d95; }
   #root {
-    position: fixed; right: 8px; bottom: 0;
+    position: fixed; right: 16px; bottom: 0;
     display: flex; align-items: flex-end; gap: 6px;
     transition: opacity 200ms linear;
   }
+  /* 键帽宽随内容自适应（与桌面一致）：face 是布局子元素参与撑宽，min-width 仅兜底；
+     flex:0 0 auto 防止行溢出画布时挤压键帽（宁可整行向左裁切，不重新出现文字溢出） */
   .cap { position: relative; height: 80px; min-width: 72px;
+         display: flex; align-items: flex-start; flex: 0 0 auto;
          opacity: 1; transition: opacity 300ms ease; }
   .cap.modifier { min-width: 80px; }
   .cap.fading { opacity: 0; }
   .cap .base { position: absolute; left: 0; right: 0; bottom: 0; height: 72px;
                border-radius: 20px; background: var(--base); border: 2px solid var(--border);
                box-sizing: border-box; }
-  .cap .face { position: absolute; left: 0; right: 0; top: 0; height: 72px;
+  .cap .face { position: relative; flex: 1 1 auto; height: 72px;
                border-radius: 20px; background: var(--face); border: 2px solid var(--border);
                box-sizing: border-box; display: flex; align-items: center; justify-content: center;
+               padding: 0 16px;
                transform: translateY(0); transition: transform 50ms ease-out; }
   .cap.pressed .face { transform: translateY(8px); }
-  .cap .label { font: 500 32px/1 "Segoe UI", "Microsoft YaHei", sans-serif; color: var(--text); }
+  .cap .label { font: 500 32px/1 "Segoe UI", "Microsoft YaHei", sans-serif; color: var(--text);
+                white-space: nowrap; }
   .cap svg.icon { width: 25.6px; height: 25.6px; stroke: var(--text); stroke-width: 2; fill: none;
                   stroke-linecap: round; stroke-linejoin: round; }
   .cap .face img { width: 40px; height: 40px; }

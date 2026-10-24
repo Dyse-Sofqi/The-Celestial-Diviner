@@ -4,6 +4,26 @@
 下载安装包：[Gitee Releases](https://gitee.com/sofqi/The-Celestial-Diviner/releases/latest) ·
 [GitHub Releases](https://github.com/Dyse-Sofqi/The-Celestial-Diviner/releases)
 
+## v1.8.8 — 2026-10-25
+
+### 修复 · 方案列表滚动后跳回顶部（v1.8.2 回归）
+
+- 根因：v1.8.2 为性能引入的按像素虚拟化滚动（`ScrollUnit=Pixel` + 容器回收），遇上
+  "两模式三分区方案全量混排、非当前行以 Visibility=Collapsed 隐藏"的列表组织——行高
+  成为 0 / ~22px 交错的伪随机序列，视口外行的像素偏移只能估算；方案少时总可滚动余量
+  小于估算误差，被 ScrollViewer 钳制回 0 = 整表跳顶（向上滚 / 持续滚动时最易复现）
+- 修复：移除 `ScrollUnit=Pixel` 回归按项虚拟化——偏移按行索引锚定，不依赖像素估算，
+  跳变整类消失；虚拟化与容器回收保留（v1.8.2 的列表卡顿修复不受影响），代价仅是
+  滚轮一格约滚 3 行（XAML 注释记录了不能改回像素滚动的原因）
+
+### 修复 · 键帽悬浮层（桌面 / Web 叠加源）显示优化
+
+- 大写键键帽内容缩写为 **Caps**（与主界面键位图块一致；此前显示 Caps Lock，键帽过长）
+- Web 叠加源**键帽宽随内容自适应**（对齐桌面悬浮层）：face 由绝对定位改为布局子元素
+  参与撑宽，长键名（Backspace / 小键盘 Enter 等）不再换行溢出键帽；文本禁止换行
+- Web 叠加源**连击角标不再被画布边缘裁切**：源右缘预留角标外凸余量（root right 8→16px）；
+  浏览器源画布高度约束（≥96px）写入 [OBS 指南](docs/obs-recording.md)
+
 ## v1.8.7 — 2026-10-24
 
 ### 新增 · 键帽 Web 叠加源（OBS 浏览器源，键帽透明叠加进录制画面）

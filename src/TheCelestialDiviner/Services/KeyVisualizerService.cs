@@ -661,13 +661,15 @@ public sealed class KeyVisualizerService
         }
     }
 
-    /// <summary>键位显示标签（修饰键归一化为家族名，左右键共用同帽；鼠标左/中/右键用简称
-    /// ——键帽面按标签查表渲染 lucide 图标；滚轮/侧键用短文本）。</summary>
+    /// <summary>键位显示标签（修饰键归一化为家族名，左右键共用同帽；Caps Lock 缩写 Caps
+    /// 与主界面键位图块一致；鼠标左/中/右键用简称——键帽面按标签查表渲染 lucide 图标；
+    /// 滚轮/侧键用短文本）。</summary>
     private static string CanonicalLabel(InputSource s) => s.Kind switch
     {
         InputKind.Keyboard when s.VirtualKey is 0xA2 or 0xA3 => "Ctrl",
         InputKind.Keyboard when s.VirtualKey is 0xA0 or 0xA1 => "Shift",
         InputKind.Keyboard when s.VirtualKey is 0xA4 or 0xA5 => "Alt",
+        InputKind.Keyboard when s.VirtualKey == 0x14 => "Caps",
         InputKind.Mouse => s.Mouse switch
         {
             MouseInput.Left => "左键",
@@ -684,7 +686,8 @@ public sealed class KeyVisualizerService
 
     /// <summary>
     /// 连发目标键的键帽显示名：与物理按下的键帽标签同源（鼠标左/中/右键为图标键帽的标识名，
-    /// 滚轮/侧键为短文本），保证“同键触发连发”时脉冲与物理按键复用同一键帽；其余键位与方案列表显示名一致。
+    /// 滚轮/侧键为短文本，Caps Lock 缩写 Caps），保证“同键触发连发”时脉冲与物理按键复用
+    /// 同一键帽；其余键位与方案列表显示名一致。
     /// </summary>
     private static string KeycapTargetName(TargetKeyConfig t)
     {
@@ -700,6 +703,7 @@ public sealed class KeyVisualizerService
                 _ => InputNameMapper.GetMouseName(t.Mouse),
             },
             TargetKind.Wheel => t.Wheel == MouseInput.WheelUp ? "↑滚" : "↓滚",
+            TargetKind.Keyboard when t.VirtualKey == 0x14 => "Caps",
             _ => InputNameMapper.GetTargetName(t),
         };
         if (t.ModCtrl) baseName = "Ctrl+" + baseName;

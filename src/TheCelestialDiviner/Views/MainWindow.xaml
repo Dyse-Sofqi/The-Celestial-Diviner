@@ -1315,12 +1315,19 @@
                          CanContentScroll=False（按像素滚动）→ 面板被以无限高度测量 →
                          **全部行都被实例化**。30+ 个方案时每行二十来个元素、还带 SharedSizeGroup
                          联动测量，一次列表重建 / 每次拖动窗口重绘都要几百毫秒到 1.5 秒
-                         （实测 UI 线程卡顿 259~1573ms）。开启后只实现视口内的十来行。 -->
+                         （实测 UI 线程卡顿 259~1573ms）。开启后只实现视口内的十来行。
+
+                         ⚠ 不要改回 ScrollUnit="Pixel"（按像素滚动）：本列表把各模式 / 分区的行
+                         全部混排在同一集合、非当前行以 Visibility=Collapsed 隐藏（行高 0），
+                         行高因此是 0 / ~22px 交错的伪随机序列。像素滚动靠已实现行估算视口外
+                         的偏移，行高双峰交错使估算持续失真；方案少时总可滚动余量只有几十像素，
+                         误差超过余量即被 ScrollViewer 钳制回 0——整表跳回顶部。按项滚动的偏移
+                         按行索引锚定，不依赖像素估算，无此问题（net48 VirtualizingStackPanel
+                         已知缺陷类别，无法靠参数修）。 -->
                     <ListBox x:Name="SchemeList" ItemsSource="{Binding SchemeRows}"
                              BorderThickness="0" Background="Transparent" Focusable="False"
                              HorizontalContentAlignment="Stretch"
                              ScrollViewer.CanContentScroll="True"
-                             VirtualizingPanel.ScrollUnit="Pixel"
                              VirtualizingStackPanel.IsVirtualizing="True"
                              VirtualizingStackPanel.VirtualizationMode="Recycling"
                              ScrollViewer.IsDeferredScrollingEnabled="False"

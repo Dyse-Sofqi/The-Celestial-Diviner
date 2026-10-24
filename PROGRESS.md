@@ -1,6 +1,33 @@
 ﻿# 衍天高手（The Celestial Diviner）开发进度交接
 
-更新：2026-10-24 — **发版 v1.8.7（键帽 Web 叠加源终版：OBS 浏览器源透明键帽 + 全链路卡顿攻坚）；双端 Release 已发布**
+更新：2026-10-25 — **发版 v1.8.8（方案列表滚动跳顶修复 + 键帽 Caps 缩写 / Web 叠加源显示对齐桌面）；发布包就绪，双端 Release 上传待执行**
+
+## 本次变更（发版 v1.8.8）
+
+- ✅ **方案列表滚动跳顶修复**（用户报告"按键方案列表滚动后跳顶"）：根因 = v1.8.2 引入的
+  `ScrollUnit=Pixel` + `Recycling` 虚拟化，遇上"两模式三分区方案全量混排、非当前行
+  Visibility=Collapsed 隐藏"的组织——行高 0 / ~22px 交错伪随机，视口外行像素偏移靠估算，
+  方案少时可滚动余量（几十 px）小于估算误差 → ScrollViewer 钳制回 0 = 整表跳顶。
+  修复 = 移除 ScrollUnit=Pixel 回归按项虚拟化（偏移按行索引锚定）；虚拟化 / 回收保留，
+  性能不受影响；XAML 注释详录"勿改回像素滚动"的原因防回归。排查中排除了
+  RefreshSchemeList 重建（均在显式操作路径）、ScrollToTop（仅切模式有意调用）、
+  自绘 ScrollViewer 模板（PART 接线正确）等嫌疑
+- ✅ **键帽 Caps 缩写**：CanonicalLabel / KeycapTargetName 对 VK 0x14 输出 "Caps"
+  （物理按下与连发脉冲双路径、桌面与 Web 同源），与主界面键位图块一致；方案列表仍显全名
+- ✅ **Web 叠加源显示对齐桌面**（浏览器实测截图验证，800×160 与紧凑画布修复前后对比）：
+  face 由绝对定位改布局子元素 → 键帽宽随内容自适应（长键名不再换行溢出，内边距 16px
+  对齐桌面），文本 nowrap，cap flex:0 0 auto 防行溢出时挤压；root right 8→16px，
+  连击角标不再与画布右缘齐平被裁；图标 / 修饰键 / 提醒键帽（demo 模式）验证正常；
+  OBS 指南补画布高度 ≥96 约束
+- ✅ 版本 1.8.7 → **1.8.8**；CHANGELOG v1.8.8 详录（滚动跳顶 + 键帽显示两段）；
+  发布说明 `docs/release-notes/v1.8.8-release-notes.md`；公告无需改（键帽进 OBS 段仍准确）
+- ✅ 发布包：`dist/TheCelestialDiviner-1.8.8-win64.zip`（20 项与 1.8.7 一致 = exe + 依赖 dll +
+  7zr.exe + 配置 + 8 段候选提示音；zip 1,751,795 B；SHA256 `5cbbf300…2285`；
+  exe 1,100,288 B 内嵌 1.8.8；Python zipfile 打包沿用）
+- ⏳ 双端 Release 上传待执行：GitHub 走 `scripts/release/gh-api-release.ps1`
+  （-Tag v1.8.8 -Since <远端已有提交> -Zip dist/TheCelestialDiviner-1.8.8-win64.zip
+  -Notes docs/release-notes/v1.8.8-release-notes.md），Gitee 走
+  `scripts/release/publish-gitee-release.sh`；推送后本文件补"双端 Release 已发布"
 
 ## 本次变更（发版 v1.8.7）
 
