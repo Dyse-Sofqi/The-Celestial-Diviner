@@ -198,6 +198,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _visualizer.WebSnapshot += (keys, bumps) => _webOverlay.SetSnapshot(keys, bumps);
         _visualizer.WebPulse += (label, holdMs, count) => _webOverlay.BroadcastPulse(label, holdMs, count);
         _visualizer.WebReminder += visible => _webOverlay.SetReminder(visible);
+        // 桌面悬浮层静音联动：客户端在线（且配置允许）→ 静音——前台游戏 + OBS 捕获下
+        // 分层窗口与 DWM 争抢会秒级卡顿（2026-10-24 日志实测心跳停 10s），而录制画面的
+        // 键帽由浏览器源渲染不受影响；客户端全部离线 → 恢复。事件在 ThreadPool 线程触发。
+        _webOverlay.ClientCountChanged += () =>
+        {
+            var mute = _webOverlay.ClientCount > 0 && _config.WebOverlayMuteDesktop;
+            _visualizer.SetDesktopMuted(mute);
+        };
 
         _config = _configService.Load();
         MigrateProfileCycleDefault();   // v1.8.2：切换方案热键默认值改为 F10（不覆盖已自定义的）

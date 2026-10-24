@@ -51,6 +51,16 @@ public sealed class WebOverlayService
     /// <summary>服务是否在运行。</summary>
     public bool IsRunning { get; private set; }
 
+    /// <summary>当前在线客户端数（ClientCountChanged 事件外读取用快照语义）。</summary>
+    public int ClientCount
+    {
+        get { lock (_gate) return _clients.Count; }
+    }
+
+    /// <summary>客户端连接 / 断开后触发（ThreadPool 线程；订阅方自行封送）。
+    /// 桌面悬浮层静音联动（KeyVisualizerService.SetDesktopMuted）的数据源。</summary>
+    public event Action? ClientCountChanged;
+
     /// <summary>构造源 URL（OBS 浏览器源粘贴用；端口按配置钳位，与 Start 一致）。</summary>
     public static string BuildUrl(int port, string token) =>
         $"http://127.0.0.1:{Compat.Clamp(port, 1024, 65535)}/overlay?token={Uri.EscapeDataString(token)}";
@@ -109,6 +119,7 @@ public sealed class WebOverlayService
             }
             catch { /* 已断开：忽略 */ }
         }
+        ClientCountChanged?.Invoke();
     }
 
     /// <summary>按住键位快照更新（keys = 修饰键在前按按下顺序；bumps = 本轮各键连击增量）。</summary>
@@ -280,6 +291,7 @@ public sealed class WebOverlayService
         var client = new Client(wsCtx.WebSocket);
         lock (_gate) _clients.Add(client);
         Logger.Info($"Web 叠加源客户端已连接（当前 {CountClients()} 个）。");
+        ClientCountChanged?.Invoke();
         await SendAsync(client, HelloJson());
 
         var buffer = new byte[1024];
@@ -302,6 +314,7 @@ public sealed class WebOverlayService
             lock (_gate) _clients.Remove(client);
             client.Socket.Dispose();
             Logger.Info($"Web 叠加源客户端已断开（当前 {CountClients()} 个）。");
+            ClientCountChanged?.Invoke();
         }
     }
 

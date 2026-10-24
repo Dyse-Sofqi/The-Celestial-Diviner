@@ -115,6 +115,45 @@ public sealed class KeyVisualizerService
     /// <summary>状态提醒键帽显隐。</summary>
     public event Action<bool>? WebReminder;
 
+    // ---------- 桌面悬浮层静音（Web 叠加源客户端在线时，VM 经 SetDesktopMuted 驱动） ----------
+    // 前台最大化游戏 + OBS 捕获/编码会把分层窗口的 DWM 同步拖到秒级（实测悬浮窗线程心跳
+    // 停 10s、Show 3s、渲染滞后 1.3s——2026-10-24 日志）。录制画面的键帽由 OBS 浏览器源
+    // 渲染（不经过本进程 WPF），桌面悬浮层此时只剩"给玩家自己看"且早已冻结滞后；
+    // 静音 = 空快照清屏（键帽 1.2s 淡出 → 窗口 Hide）→ 分层窗口 DWM 压力归零。
+    private volatile bool _desktopMuted;
+
+    /// <summary>
+    /// 静音 / 恢复桌面悬浮层（Web 客户端在线 → 静音；全部离线 → 恢复并重放当前状态）。
+    /// 可在任意线程调用；悬浮窗操作封送到悬浮窗线程执行。
+    /// </summary>
+    public void SetDesktopMuted(bool muted)
+    {
+        if (_desktopMuted == muted) return;
+        _desktopMuted = muted;
+        Logger.Info(muted
+            ? "Web 叠加源客户端在线：桌面键帽悬浮层静音（键帽画面由 OBS 浏览器源渲染，规避分层窗口与游戏 + OBS 争抢 DWM 的卡顿）。"
+            : "Web 叠加源客户端全部离线：桌面键帽悬浮层恢复。");
+        _dispatcher?.BeginInvoke(() =>
+        {
+            if (_overlay is null) return;
+            if (muted)
+            {
+                // 清屏：空快照抬起全部键帽（1.2s 淡出后窗口自动 Hide），提醒键帽经 RefreshReminder 隐藏。
+                _overlay.UpdateKeys(new List<string>(), null);
+                RefreshReminder();
+            }
+            else
+            {
+                // 恢复：重放提醒键帽期望态 + 当前按住快照（Web 通道此前一直在线更新）。
+                RefreshReminder();
+                List<string> snapshot;
+                lock (_gate)
+                    snapshot = _globalEnabled ? BuildSnapshotLocked() : new List<string>();
+                _overlay.UpdateKeys(snapshot, null);
+            }
+        });
+    }
+
     /// <summary>
     /// 初始化悬浮层（UI 线程调用；重复调用安全）。创建后立即应用暂存位置。
     /// 悬浮窗运行在独立 STA 线程（独立 Dispatcher + 消息泵）：游戏前台最大化时，
@@ -262,13 +301,11 @@ public sealed class KeyVisualizerService
 
         var label = KeycapTargetName(target);
         var holdMs = target.HoldMs;
-        if (_dispatcher is null)
-        {
-            // 悬浮窗未创建（含 --no-overlay）：Web 叠加源仍接收（不合并，事件频率 = 发射频率，
-            // 连发发射本就按调度档位限频，localhost 广播可承载）。
-            WebPulse?.Invoke(label, holdMs, 1);
-            return;
-        }
+        // Web 叠加源：直接在调度器线程广播（连发 ≤45 发/秒，localhost 可承载），
+        // 不经悬浮窗线程中转——悬浮层被 DWM 阻塞时录制画面的键帽不受影响。
+        WebPulse?.Invoke(label, holdMs, 1);
+        if (_desktopMuted) return;   // 桌面静音：不进悬浮窗队列
+        if (_dispatcher is null) return;   // 悬浮窗未创建：丢弃（与旧版 BeginInvoke 落空同语义，防排队标志卡死）
         lock (_dispatchGate)
         {
             var prev = _pendingPulses.TryGetValue(label, out var p) ? p.Count : 0;
@@ -293,7 +330,6 @@ public sealed class KeyVisualizerService
             {
                 var lag = unchecked(nowTick - kv.Value.EnqueueTick);
                 if (lag > worst) worst = lag;
-                WebPulse?.Invoke(kv.Key, kv.Value.HoldMs, kv.Value.Count);   // Web 叠加源（合并后语义与悬浮层一致）
                 _overlay?.HoldPulse(kv.Key, kv.Value.HoldMs, kv.Value.Count);
             }
             if (worst > 150 && unchecked(nowTick - _lastUiLagLogTick) > 1000)
@@ -477,7 +513,7 @@ public sealed class KeyVisualizerService
     /// <summary>按当前状态计算提醒键帽期望态并同步悬浮层（UI 线程调用）。</summary>
     private void RefreshReminder()
     {
-        var desired = _reminderEnabled && _masterSwitch && !_firing
+        var desired = !_desktopMuted && _reminderEnabled && _masterSwitch && !_firing
                       && _reminderResumeTimer is not { IsEnabled: true };
         if (desired == _reminderShown) return;
         WebReminder?.Invoke(desired);   // Web 叠加源与悬浮层无关：状态变更即通知（悬浮窗未创建时也生效）
@@ -499,7 +535,8 @@ public sealed class KeyVisualizerService
     /// </summary>
     public void ShowCycleKeycap(string label)
     {
-        WebPulse?.Invoke(label, CycleKeycapHoldMs, 1);   // Web 叠加源（与悬浮层提示键帽同语义）
+        WebPulse?.Invoke(label, CycleKeycapHoldMs, 1);   // Web 叠加源（与悬浮层提示键帽同语义，调用线程直发）
+        if (_desktopMuted) return;
         var overlay = _overlay;
         var dispatcher = _dispatcher;
         dispatcher?.BeginInvoke(() => overlay?.HoldPulse(label, CycleKeycapHoldMs, repeat: 1));
@@ -563,6 +600,7 @@ public sealed class KeyVisualizerService
         lock (_dispatchGate)
             webBumps = new Dictionary<string, int>(_pendingBumps);
         WebSnapshot?.Invoke(snapshot, webBumps);
+        if (_desktopMuted) return;   // 桌面静音：不进悬浮窗队列
         if (_dispatcher is null) return;   // 悬浮窗未创建：丢弃（与旧版 BeginInvoke 落空同语义，防排队标志卡死）
         lock (_dispatchGate)
         {

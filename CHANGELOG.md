@@ -4,7 +4,10 @@
 下载安装包：[Gitee Releases](https://gitee.com/sofqi/The-Celestial-Diviner/releases/latest) ·
 [GitHub Releases](https://github.com/Dyse-Sofqi/The-Celestial-Diviner/releases)
 
-## v1.8.6 — 2026-10-24
+## 未发布（v1.8.6 已撤回，修复后将以 v1.8.7 发布）
+
+> v1.8.6 发布后紧急撤回：前台游戏 + OBS 捕获/编码时 GPU/DWM 饱和，桌面键帽悬浮层与
+> OBS 浏览器源键帽双双卡顿。修复验证后随 v1.8.7 重新发布。
 
 ### 新增 · 键帽 Web 叠加源（OBS 浏览器源，键帽透明叠加）
 

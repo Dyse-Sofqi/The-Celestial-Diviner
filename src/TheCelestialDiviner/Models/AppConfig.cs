@@ -412,6 +412,11 @@ public sealed class AppConfig
     /// <summary>键帽 Web 叠加源访问令牌（首次启动生成；OBS 源 URL 携带，防本机其它程序误连）。</summary>
     public string WebOverlayToken { get; set; } = "";
 
+    /// <summary>Web 叠加源客户端在线时静音桌面键帽悬浮层（默认关：用户要看桌面键帽）。
+    /// 前台游戏 + OBS 捕获下分层窗口与 DWM 争抢可能秒级卡顿（仅影响桌面观感，录制画面
+    /// 由 OBS 浏览器源渲染不受影响）；接受不了桌面键帽冻结的可在 config.json 置 true。</summary>
+    public bool WebOverlayMuteDesktop { get; set; }
+
     /// <summary>所有输入源方案（键为输入源标识字符串；镜像当前档位 Profiles[ActiveProfile]）。</summary>
     public Dictionary<string, KeyScheme> Schemes { get; set; } = new(StringComparer.Ordinal);
 
@@ -490,6 +495,7 @@ public sealed class AppConfig
         WebOverlayEnabled = WebOverlayEnabled,
         WebOverlayPort = WebOverlayPort,
         WebOverlayToken = WebOverlayToken,
+        WebOverlayMuteDesktop = WebOverlayMuteDesktop,
         VisualKeys = new Dictionary<string, bool>(VisualKeys, StringComparer.Ordinal),
         Schemes = Schemes.ToDictionary(p => p.Key, p => p.Value.Clone(), StringComparer.Ordinal),
         GlobalSwitch = GlobalSwitch.Clone(),
