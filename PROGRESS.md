@@ -1,8 +1,48 @@
 ﻿# 衍天高手（The Celestial Diviner）开发进度交接
 
-更新：2026-10-24 — **发版 v1.8.5（检查更新加固：限流原因明示 + raw CHANGELOG 备用通道 + 附件按名匹配）；双端 Release 已发布**
+更新：2026-10-24 — **发版 v1.8.6（键帽 Web 叠加源：OBS 浏览器源，键帽透明叠加进录制画面）；双端 Release 已发布**
 
-## 本次变更（发版 v1.8.5）
+## 本次变更（发版 v1.8.6）
+
+- 📋 用户需求：OBS 录制游戏时把键帽可视化录进成片（游戏画面 1:1 无标题栏黑边 + 键帽可叠加）。
+  **三轮迭代**：①窗口捕获路线（不透明深色底条，`AllowsTransparency` 双模式销毁重建）→ 用户否决
+  （底板丑）；②常显 + SizeToContent 自适应 + 底色三选（深色/绿幕/品红）→ 仍否决；③**最终方案 =
+  Web 叠加源**：不走窗口捕获，本机 HTTP+WebSocket 服务把键帽状态推给 OBS「浏览器源」（CEF 原生
+  透明背景），屏幕观感完全不变、录制画面键帽透明浮动。窗口捕获实现在发版前整体回退（v1.8.5 基线）
+- ✅ **平台约束定论**（写进 docs/obs-recording.md）：OBS 窗口捕获不支持透明通道（透明一律合成黑底）；
+  OBS 窗口选择列表只列**当前可见**的窗口（悬浮窗空闲隐藏策略与之天然冲突）——这是放弃窗口捕获
+  路线的两条根因，不是实现质量问题
+- ✅ `WebOverlayService`（新）：`HttpListener` 绑 **127.0.0.1 + localhost 双前缀**（防 localhost 解析
+  ::1 连不上）+ 访问令牌（首启生成随配置持久，全路径统一校验）；`/overlay`（内嵌页）+ `/ws`（WebSocket
+  广播）+ `/icon.png`（图标 ico→PNG，按版本缓存）；广播 fire-and-forget，单连接信号量串行发送
+  （WebSocket 禁并发 SendAsync）；**页面/图标响应加 `Cache-Control: no-store`**（防 CEF 钉死旧页）
+- ✅ `WebOverlayPage`（新）：内嵌网页逐参数复刻 keyviz lowprofile 键帽视觉（size=32/帽高 72/圆角 20/
+  下沉 8/角标 24），CSS 动画（按压 50ms / 淡出 300ms / 1.2s 独立宽限 / 角标弹跳）；协议
+  hello/snapshot/pulse/reminder/scheme/config 六消息；断线 1s 重连；`token=demo` 本地演示模式
+  （普通浏览器直接预览样式，本会话用它截图验证 ✓）；提醒键帽 flex order 恒居末位（与桌面层一致）
+- ✅ `KeyVisualizerService` 增三条事件流（WebSnapshot/WebPulse/WebReminder）：与悬浮层渲染同一份
+  合并后数据，悬浮窗未创建（`--no-overlay`）时照常流出；VM 接线配色/图标/透明度实时同源
+  （ApplyAppearance / KeycapSchemeName / VisualizerOpacity 三处）
+- ✅ 实修三坑：①**图标请求不带令牌** → 服务端全路径校验 404 → 文字降级（用户报"图标没继承"的根因，
+  img URL 补 token 修复）；②**OBS 浏览器源钉死旧页**——页面随连接建立只加载一次，应用重启后 JS 只会
+  重连 WS 不会重载页面，修复必须手动"刷新缓存"（日志证据：客户端重连成功 + 零渲染失败告警 +
+  16:38 旧页创建时间线）；③gh-api-release.ps1 中文标签消息经 cmd 重定向编码失败 → GitHub 落成轻量
+  标签 → gh api 手工补 POST /git/tags + PATCH ref 强制指向注释对象
+- ✅ 验证：demo 页浏览器截图（键帽/角标/图标键帽/降级文字全正常）；实机探测 `/icon.png` HTTP 200
+  image/png 7091B（PNG 魔数完整）；用户实测 OBS 透明叠加 + 图标继承成功；raw CHANGELOG 首标题
+  **v1.8.6** ✓（备用通道数据源正确，1.8.5 客户端检查即发现新版）；直链 302→200 全尺寸 ✓
+- ✅ 版本 1.8.5 → **1.8.6**；CHANGELOG v1.8.6 详录；发布说明 `docs/release-notes/v1.8.6-release-notes.md`；
+  配置 v18（WebOverlayEnabled/Port/Token，旧档缺省字段反序列化即默认关闭，无迁移代码）
+- ✅ 发布包：`dist/TheCelestialDiviner-1.8.6-win64.zip`（20 项；zip 1,724,803 B；
+  SHA256 `7A07A422…16E250`）；提交 `51d183e`（发版）→ 注释标签 `v1.8.6`（对象 `30f2fd25`）
+- ✅ 双端已发布：Gitee Release id **1236602** + 附件 id 3482582（1,724,803 B）；
+  GitHub Release id **422629038**（附件同名同大小）
+- ✅ 三端一致核对：本地 = 双端 main = `51d183e`；标签三端均为注释对象 `30f2fd25`
+  （GitHub 轻量标签已手工修正）；raw CHANGELOG 首标题已是 **v1.8.6**
+- ℹ️ Gitee 发布令牌取自本机 git 凭据库（`git credential fill`，username=oauth2），未新增明文存储
+- ℹ️ 用户升级路径：1.8.5 检查更新即可发现 1.8.6（API 主通道或 raw 备用通道均可用）
+
+## 历史变更（发版 v1.8.5）
 
 - 📋 用户反馈（v1.8.3 点「检查更新」提示"未能从 Gitee 获取新版本"）：诊断出**根因 = Gitee 匿名 API
   按 IP 限流（403 "Rate Limit Exceeded"，0.24s 即拒）**，而 v1.8.4 Release 本身完好（带令牌 200 + 附件在位）；
