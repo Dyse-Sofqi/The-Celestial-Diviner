@@ -27,6 +27,20 @@
   浏览器源关闭时运行差异仅剩无接收者的微秒级序列化
 - ✅ 版本 1.8.6（撤回）→ **1.8.7**；CHANGELOG v1.8.7 详录（含 v1.8.6 撤回说明）；
   发布说明 `docs/release-notes/v1.8.7-release-notes.md`；指南 `docs/obs-recording.md` 终稿
+- ✅ 发布包：`dist/TheCelestialDiviner-1.8.7-win64.zip`（20 项；zip 1,730,606 B；
+  SHA256 `BBE31FAD…64758F3C`）；提交 `300aa13`（发版）→ 注释标签 `v1.8.7`（对象 `2cc24db6`）
+- ✅ 双端已发布：Gitee Release id **1237404** + 附件 id 3484613（1,730,606 B）；
+  GitHub Release id **422770561**（附件同名同大小）
+- ✅ 三端一致核对：本地 = 双端 main = `300aa13`；标签三端均为注释对象 `2cc24db6`；
+  raw CHANGELOG 首标题已是 **v1.8.7**（备用通道数据源正确）；直链 200 全尺寸
+- ⚠️ **Gitee 标签重写坑复发**：v1.8.5 记录"连续 3 次未复发"，本轮 v1.8.7 推送后
+  gitee 标签被重写为轻量标签（指向提交 300aa13）——`git push gitee v1.8.7 --force`
+  强制推回注释对象后恢复三端一致；今后每次发版推完 gitee 标签必须 ls-remote 复核
+- ℹ️ gh-api-release.ps1 的注释标签复制（中文消息经 cmd 重定向）v1.8.6/v1.8.7 连续两版
+  编码失败 → 统一修复法：python 解析本地 tag 对象 → gh api POST /git/tags + PATCH ref
+  （脚本层面待修，暂以手工流程覆盖）
+- ℹ️ 用户升级路径：1.8.5 检查更新即可发现 1.8.7（主通道 / raw 备用通道均可用）；
+  1.8.6 无可用版本（已撤回）
 
 ## 历史变更（v1.8.6 → 已撤回）
 
