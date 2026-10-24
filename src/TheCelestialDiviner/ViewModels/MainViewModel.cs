@@ -40,6 +40,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private readonly TaskSchedulerService _scheduler;
     private readonly TimerResolutionService _timerResolution;
     private readonly KeyVisualizerService _visualizer;
+    private readonly WebOverlayService _webOverlay = new();
 
     // ---------- 状态字段 ----------
     private AppConfig _config = new();
@@ -193,6 +194,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _timerResolution = timerResolution;
         _visualizer = new KeyVisualizerService(hookService);
         _visualizer.AttachScheduler(_scheduler);   // 连发目标键脉冲 → 键帽可视化
+        // Web 叠加源事件流：与悬浮层渲染同一份合并后数据（任意线程触发，服务内部加锁）。
+        _visualizer.WebSnapshot += (keys, bumps) => _webOverlay.SetSnapshot(keys, bumps);
+        _visualizer.WebPulse += (label, holdMs, count) => _webOverlay.BroadcastPulse(label, holdMs, count);
+        _visualizer.WebReminder += visible => _webOverlay.SetReminder(visible);
 
         _config = _configService.Load();
         MigrateProfileCycleDefault();   // v1.8.2：切换方案热键默认值改为 F10（不覆盖已自定义的）
@@ -202,6 +207,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         (App.Current as App)?.ApplyTheme(themeDark, CurrentLook);
         // 当前档位外观的应用图标 / 键帽配色 / 公告源：悬浮层创建前先登记静态量，创建后即生效。
         _visualizer.SetSectIcon(CurrentLook.AppIconUri);
+        _webOverlay.SetAppIcon(CurrentLook.AppIconUri);   // Web 叠加源提醒键帽图标随启动同步
         _config.KeycapScheme = KeycapSchemes.IsKnown(CurrentLook.KeycapScheme) ? CurrentLook.KeycapScheme : "Pansy";
         _appliedNoticeResource = CurrentLook.NoticeResourceName;
         // 需求：软件打开时无论上次退出时全局开关状态如何，一律重置为关闭。
@@ -215,10 +221,19 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         // 状态提醒：总开关启动即关闭（提醒键帽不显示）；按钮开关随配置还原。
         _visualizer.SetMasterSwitch(_globallyEnabled);
         _visualizer.SetReminderEnabled(_config.StatusReminderEnabled);
+        // Web 叠加源：令牌首次生成 + 按配置启动（启动时序与悬浮窗解耦，服务自持线程）。
+        if (string.IsNullOrEmpty(_config.WebOverlayToken))
+        {
+            _config.WebOverlayToken = Guid.NewGuid().ToString("N");
+            SaveConfig();
+        }
+        if (_config.WebOverlayEnabled) StartWebOverlay();
         Views.KeycapOverlayWindow.ApplyScheme(KeycapSchemes.Resolve(_config.KeycapScheme));
+        _webOverlay.SetScheme(KeycapSchemes.Resolve(_config.KeycapScheme));   // Web 叠加源配色随启动同步
         if (_config.VisualizerLeft is { } l && _config.VisualizerTop is { } t)
             _visualizer.SetPosition(l, t);
         _visualizer.SetOpacity(_config.VisualizerOpacity);   // 键帽透明度（窗口未创建时暂存，AttachOverlay 后应用）
+        _webOverlay.SetOpacity(_config.VisualizerOpacity);   // Web 叠加源透明度随启动同步
         // 调度器字段默认为启用，须与配置中的总开关状态同步，
         // 否则冷启动时横幅显示"已关闭"而方案实际处于待触发状态。
         _scheduler.SetMasterEnabled(_globallyEnabled);
@@ -250,6 +265,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         ToggleGlobalCommand = RelayCommand.Create(ToggleGlobalEnabled);
         ToggleGlobalVisualCommand = RelayCommand.Create(() => GlobalVisualEnabled = !GlobalVisualEnabled);
         ToggleStatusReminderCommand = RelayCommand.Create(() => StatusReminderEnabled = !StatusReminderEnabled);
+        ToggleWebOverlayCommand = RelayCommand.Create(() => WebOverlayEnabled = !WebOverlayEnabled);
         ToggleDivinerVoiceCommand = RelayCommand.Create(() => DivinerVoiceEnabled = !DivinerVoiceEnabled);
         OpenVoiceSettingsCommand = RelayCommand.Create(() => VoiceSettingsRequested?.Invoke());
         CustomizeProfilesCommand = RelayCommand.Create(() => ProfileCustomizeRequested?.Invoke());
@@ -1307,7 +1323,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(KeycapSchemeName));   // 设置菜单 ● 选中标记
         }
         Views.KeycapOverlayWindow.ApplyScheme(KeycapSchemes.Resolve(scheme));
+        _webOverlay.SetScheme(KeycapSchemes.Resolve(scheme));   // Web 叠加源配色随档位换肤
         _visualizer.SetSectIcon(look.AppIconUri);          // 状态提醒 / 调整模式键帽图标
+        _webOverlay.SetAppIcon(look.AppIconUri);           // Web 叠加源提醒键帽图标随档位换肤
         _soundCue.ApplyTheme(look.Theme, ThemeSoundFor(look.Theme));   // 主题语音方案随主题整套切换（高松灯 ↔ 墨提斯）
         OnPropertyChanged(nameof(DivinerVoiceButtonText)); // “成为衍天/莫问高手”按钮文案随主题
         AppearanceChanged?.Invoke(look);                   // 窗口标题与图标、托盘图标与提示
@@ -1484,6 +1502,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// <summary>状态提醒开关联动命令（底栏 message-square-dot 图标按钮）。</summary>
     public ICommand ToggleStatusReminderCommand { get; }
 
+    /// <summary>键帽 Web 叠加源（OBS 浏览器源）开关联动命令（底栏 video 图标按钮）。</summary>
+    public ICommand ToggleWebOverlayCommand { get; }
+
     /// <summary>“成为衍天高手”开关联动命令（底栏按钮）。</summary>
     public ICommand ToggleDivinerVoiceCommand { get; }
 
@@ -1547,6 +1568,44 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
                 ? "状态提醒已开启：总开关开启时常驻应用图标键帽，连发期间自动隐藏。"
                 : "状态提醒已关闭。");
             OnPropertyChanged(nameof(StatusReminderEnabled));   // 底栏按钮图标随开关切换金色 ↔ 常规色
+        }
+    }
+
+    /// <summary>键帽 Web 叠加源（底栏按钮）：开启后本机启动 HTTP+WebSocket 服务，OBS 添加
+    /// 「浏览器源」粘贴源 URL 即可——CEF 透明背景渲染键帽，录制画面里键帽透明浮动，
+    /// 屏幕观感完全不变。URL 一次性粘贴后随配置持久（端口 / 令牌不变则无需重配）。
+    /// 透明度 / 配色 / 提醒键帽 / 可视化过滤与桌面悬浮层实时同源。</summary>
+    public bool WebOverlayEnabled
+    {
+        get => _config.WebOverlayEnabled;
+        set
+        {
+            if (_config.WebOverlayEnabled == value) return;
+            _config.WebOverlayEnabled = value;
+            if (value) StartWebOverlay();
+            else _webOverlay.Stop();
+            SaveConfig();
+            AddLog(value
+                ? $"键帽 Web 叠加源已开启：OBS 添加「浏览器源」并粘贴 {WebOverlayUrl}（已复制到剪贴板）。"
+                : "键帽 Web 叠加源已关闭。");
+            OnPropertyChanged(nameof(WebOverlayEnabled));   // 底栏按钮图标随开关切换金色 ↔ 常规色
+        }
+    }
+
+    /// <summary>OBS 浏览器源 URL（127.0.0.1 + 配置端口 + 令牌）。</summary>
+    private string WebOverlayUrl => WebOverlayService.BuildUrl(_config.WebOverlayPort, _config.WebOverlayToken);
+
+    /// <summary>启动 Web 叠加源监听（失败记录原因，不弹窗——底栏开关状态保持开启，用户可排查后重启）。</summary>
+    private void StartWebOverlay()
+    {
+        var error = _webOverlay.Start(_config.WebOverlayPort, _config.WebOverlayToken);
+        if (error is null)
+        {
+            try { System.Windows.Clipboard.SetText(WebOverlayUrl); } catch { /* 剪贴板被占用：忽略 */ }
+        }
+        else
+        {
+            AddLog($"键帽 Web 叠加源启动失败：{error}");
         }
     }
 
@@ -1700,6 +1759,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             _config.KeycapScheme = value;
             if (CurrentLook.Theme.Customizable) CurrentAppearance.KeycapScheme = value;
             Views.KeycapOverlayWindow.ApplyScheme(KeycapSchemes.Resolve(value));
+            _webOverlay.SetScheme(KeycapSchemes.Resolve(value));   // Web 叠加源配色实时同源
             SaveConfig();
             AddLog($"键帽配色已切换为 {value}。");
             OnPropertyChanged(nameof(KeycapSchemeName));   // 设置菜单 ● 选中标记随切换刷新
@@ -1744,6 +1804,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             if (Math.Abs(_config.VisualizerOpacity - v) < 0.001) return;
             _config.VisualizerOpacity = v;
             _visualizer.SetOpacity(v);
+            _webOverlay.SetOpacity(v);   // Web 叠加源透明度实时同源
             SaveConfigDeferred();   // 拖动中高频变更合并落盘（不做日志，避免刷屏）
             OnPropertyChanged(nameof(VisualizerOpacity));
         }

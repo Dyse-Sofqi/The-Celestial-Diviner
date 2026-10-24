@@ -562,6 +562,9 @@ public partial class MainWindow : Window
     private static readonly Dictionary<string, string> BottomBarComments = new()
     {
         ["StatusReminderButton"] = "状态提醒：总开关开启时在键帽悬浮区常驻应用图标键帽；任一方案连发时自动隐藏，全部连发停止 2.5 秒后恢复（不受键位可视化总开关约束）。",
+        ["WebOverlayButton"] = "键帽 Web 叠加源（OBS 浏览器源）：开启后本机启动服务，OBS 添加「浏览器源」并粘贴源 URL（自动复制到剪贴板）即可——" +
+                               "透明背景渲染键帽，录制画面里键帽透明浮动，屏幕观感完全不变。透明度 / 配色 / 状态提醒与桌面悬浮层实时同源。" +
+                               "URL 一次粘贴随配置持久；详细步骤见 docs/obs-recording.md。",
         ["MasterKeySettingPanel"] = "全局开关热键：点击按钮进入录入，左键点击左侧键位或直接按键即完成录入（默认 F9）。",
         ["AdjustVisualizerButton"] = "调整键帽显示位置：拖动应用图标键帽到目标处，虚线框为键帽可显示区域，点击确定保存。",
         ["DivinerVoiceButton"] = "成为衍天/莫问高手（文案随主题预设）：激活后总开关启动的语音播报改为对应主题的启动音" +

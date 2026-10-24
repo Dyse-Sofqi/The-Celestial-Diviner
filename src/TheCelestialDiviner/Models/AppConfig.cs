@@ -1,5 +1,6 @@
 ﻿using System.Text.Json.Serialization;
 using TheCelestialDiviner.Helpers;
+using TheCelestialDiviner.Services;
 
 namespace TheCelestialDiviner.Models;
 
@@ -296,8 +297,9 @@ public sealed class AppConfig
     /// v7：状态提醒开关；v8：状态提醒默认激活；v9：切换方案热键；v10：成为衍天高手语音按钮；
     /// v11：注释区公告内容缓存；v12：键帽透明度；v13：自定义提示音；v14：门派主题 + 莫问公告缓存；
     /// v15：方案档位自定义名称；v16：方案档位外观定制（主题绑定 + 默认主题自定义，取代全局门派主题）；
-    /// v17：主题语音方案（提示音按主题绑定，随主题切换；取代全局 CustomSounds））。</summary>
-    public const int CurrentVersion = 17;
+    /// v17：主题语音方案（提示音按主题绑定，随主题切换；取代全局 CustomSounds）；
+    /// v18：键帽 Web 叠加源（OBS 浏览器源透明键帽）。</summary>
+    public const int CurrentVersion = 18;
 
     /// <summary>配置文件版本号（预留迁移能力）。</summary>
     public int Version { get; set; } = CurrentVersion;
@@ -400,6 +402,16 @@ public sealed class AppConfig
     /// <summary>键帽透明度（0~100，默认 100 = 完全不透明；底栏滑块调节，实时生效并落盘）。</summary>
     public double VisualizerOpacity { get; set; } = 100;
 
+    /// <summary>键帽 Web 叠加源（底栏按钮）：开启后本机启动 HTTP+WebSocket 服务，把键帽状态
+    /// 推给 OBS「浏览器源」渲染（CEF 透明背景，键帽透明叠加进录制/直播画面）。默认关闭。</summary>
+    public bool WebOverlayEnabled { get; set; }
+
+    /// <summary>键帽 Web 叠加源监听端口（仅 127.0.0.1；默认 43117）。</summary>
+    public int WebOverlayPort { get; set; } = WebOverlayService.DefaultPort;
+
+    /// <summary>键帽 Web 叠加源访问令牌（首次启动生成；OBS 源 URL 携带，防本机其它程序误连）。</summary>
+    public string WebOverlayToken { get; set; } = "";
+
     /// <summary>所有输入源方案（键为输入源标识字符串；镜像当前档位 Profiles[ActiveProfile]）。</summary>
     public Dictionary<string, KeyScheme> Schemes { get; set; } = new(StringComparer.Ordinal);
 
@@ -475,6 +487,9 @@ public sealed class AppConfig
         VisualizerTop = VisualizerTop,
         VisualizerMode = VisualizerMode,
         VisualizerOpacity = VisualizerOpacity,
+        WebOverlayEnabled = WebOverlayEnabled,
+        WebOverlayPort = WebOverlayPort,
+        WebOverlayToken = WebOverlayToken,
         VisualKeys = new Dictionary<string, bool>(VisualKeys, StringComparer.Ordinal),
         Schemes = Schemes.ToDictionary(p => p.Key, p => p.Value.Clone(), StringComparer.Ordinal),
         GlobalSwitch = GlobalSwitch.Clone(),

@@ -103,6 +103,18 @@ public sealed class KeyVisualizerService
         hooks.SourceUp += OnSourceUp;
     }
 
+    // ---------- Web 叠加源事件流（WebOverlayService 订阅；与悬浮层渲染同一份合并后数据） ----------
+    // 事件可在钩子 / 调度器 / 悬浮窗线程触发，订阅方自行加锁；悬浮窗未创建（含 --no-overlay）时照常流出。
+
+    /// <summary>按住键位快照（keys = 修饰键在前按按下顺序；bumps = 本轮各键连击增量，可为空表）。</summary>
+    public event Action<IReadOnlyList<string>, IReadOnlyDictionary<string, int>>? WebSnapshot;
+
+    /// <summary>连发脉冲 / 方案切换键帽（label、按压时长 holdMs、合并次数 repeat）。</summary>
+    public event Action<string, int, int>? WebPulse;
+
+    /// <summary>状态提醒键帽显隐。</summary>
+    public event Action<bool>? WebReminder;
+
     /// <summary>
     /// 初始化悬浮层（UI 线程调用；重复调用安全）。创建后立即应用暂存位置。
     /// 悬浮窗运行在独立 STA 线程（独立 Dispatcher + 消息泵）：游戏前台最大化时，
@@ -250,7 +262,13 @@ public sealed class KeyVisualizerService
 
         var label = KeycapTargetName(target);
         var holdMs = target.HoldMs;
-        if (_dispatcher is null) return;   // 悬浮窗未创建：丢弃（与旧版 BeginInvoke 落空同语义，防排队标志卡死）
+        if (_dispatcher is null)
+        {
+            // 悬浮窗未创建（含 --no-overlay）：Web 叠加源仍接收（不合并，事件频率 = 发射频率，
+            // 连发发射本就按调度档位限频，localhost 广播可承载）。
+            WebPulse?.Invoke(label, holdMs, 1);
+            return;
+        }
         lock (_dispatchGate)
         {
             var prev = _pendingPulses.TryGetValue(label, out var p) ? p.Count : 0;
@@ -275,6 +293,7 @@ public sealed class KeyVisualizerService
             {
                 var lag = unchecked(nowTick - kv.Value.EnqueueTick);
                 if (lag > worst) worst = lag;
+                WebPulse?.Invoke(kv.Key, kv.Value.HoldMs, kv.Value.Count);   // Web 叠加源（合并后语义与悬浮层一致）
                 _overlay?.HoldPulse(kv.Key, kv.Value.HoldMs, kv.Value.Count);
             }
             if (worst > 150 && unchecked(nowTick - _lastUiLagLogTick) > 1000)
@@ -460,7 +479,9 @@ public sealed class KeyVisualizerService
     {
         var desired = _reminderEnabled && _masterSwitch && !_firing
                       && _reminderResumeTimer is not { IsEnabled: true };
-        if (desired == _reminderShown || _overlay is null) return;
+        if (desired == _reminderShown) return;
+        WebReminder?.Invoke(desired);   // Web 叠加源与悬浮层无关：状态变更即通知（悬浮窗未创建时也生效）
+        if (_overlay is null) return;   // 悬浮窗未创建：不推进 _reminderShown（AttachOverlay 后重放）
         _reminderShown = desired;
         _overlay.SetReminderVisible(desired);
     }
@@ -478,6 +499,7 @@ public sealed class KeyVisualizerService
     /// </summary>
     public void ShowCycleKeycap(string label)
     {
+        WebPulse?.Invoke(label, CycleKeycapHoldMs, 1);   // Web 叠加源（与悬浮层提示键帽同语义）
         var overlay = _overlay;
         var dispatcher = _dispatcher;
         dispatcher?.BeginInvoke(() => overlay?.HoldPulse(label, CycleKeycapHoldMs, repeat: 1));
@@ -536,6 +558,11 @@ public sealed class KeyVisualizerService
         List<string> snapshot;
         lock (_gate)
             snapshot = _globalEnabled ? BuildSnapshotLocked() : new List<string>();
+        // Web 叠加源（OBS 浏览器源）：与悬浮层同一份快照，悬浮窗未创建（--no-overlay）时照常流出。
+        Dictionary<string, int> webBumps;
+        lock (_dispatchGate)
+            webBumps = new Dictionary<string, int>(_pendingBumps);
+        WebSnapshot?.Invoke(snapshot, webBumps);
         if (_dispatcher is null) return;   // 悬浮窗未创建：丢弃（与旧版 BeginInvoke 落空同语义，防排队标志卡死）
         lock (_dispatchGate)
         {

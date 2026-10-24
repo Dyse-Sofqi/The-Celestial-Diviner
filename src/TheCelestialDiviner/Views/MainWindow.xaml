@@ -35,6 +35,9 @@
         <!-- lucide keyboard（ISC 许可，lucide-static v0.544；按键圆点用零长线段 + 圆头描边渲染）。
              底栏键帽透明度按钮图标 -->
         <Geometry x:Key="KeyboardIconPath">M4,4 L20,4 A2,2 0 0,1 22,6 L22,18 A2,2 0 0,1 20,20 L4,20 A2,2 0 0,1 2,18 L2,6 A2,2 0 0,1 4,4 Z M6,8 L6.01,8 M10,8 L10.01,8 M14,8 L14.01,8 M18,8 L18.01,8 M8,12 L8.01,12 M12,12 L12.01,12 M16,12 L16.01,12 M7,16 L17,16</Geometry>
+        <!-- lucide video（ISC 许可，lucide-static v0.544；圆角机身 + 右侧镜头，隐式弧已展开为显式 A 命令）。
+             键帽录制模式按钮图标 -->
+        <Geometry x:Key="VideoIconPath">M4,6 L14,6 A2,2 0 0,1 16,8 L16,16 A2,2 0 0,1 14,18 L4,18 A2,2 0 0,1 2,16 L2,8 A2,2 0 0,1 4,6 Z M16,9.2 L21,6.2 A0.5,0.5 0 0,1 21.75,6.63 L21.75,17.37 A0.5,0.5 0 0,1 21,17.8 L16,14.8</Geometry>
 
         <!-- 输入源控件模板：图标 + 名称 + 目标键小字；占位空白透明 -->
         <DataTemplate x:Key="SourceButtonTemplate">
@@ -567,6 +570,37 @@
                                         <Setter Property="Stroke" Value="{DynamicResource ThemeFg}"/>
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding StatusReminderEnabled}" Value="True">
+                                                <Setter Property="Stroke" Value="{DynamicResource AccentGold}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Path.Style>
+                            </Path>
+                        </Grid>
+                    </Button>
+                    <!-- 键帽 Web 叠加源按钮（lucide video）：开启后本机启动 HTTP+WebSocket 服务，
+                         OBS 添加「浏览器源」粘贴源 URL 即可——透明背景渲染键帽，录制画面里键帽
+                         透明浮动，屏幕观感不变。激活态 = 金色墨迹（与状态提醒钮同源），未激活 =
+                         默认文字色；默认关闭。
+                         悬停说明不在 Tooltip：经 MouseEnter 显示于左下注释区（OnBottomBarCommentEnter） -->
+                    <Button x:Name="WebOverlayButton" Width="26" Height="26" Padding="0"
+                            Style="{StaticResource IconButtonStyle}"
+                            Command="{Binding ToggleWebOverlayCommand}"
+                            MouseEnter="OnBottomBarCommentEnter" MouseLeave="OnCommentMouseLeave"
+                            Margin="0,0,6,0">
+                        <Grid Background="Transparent">
+                            <Path StrokeThickness="1.8" Fill="Transparent"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round"
+                                  Width="15" Height="15" Stretch="Uniform">
+                                <Path.Style>
+                                    <Style TargetType="Path">
+                                        <!-- Data / Stroke 全部走 Style Setter：本地值会压过 DataTrigger
+                                             （墨迹颜色区分激活态：金 = 已激活 / 文字色 = 未激活） -->
+                                        <Setter Property="Data" Value="{StaticResource VideoIconPath}"/>
+                                        <Setter Property="Stroke" Value="{DynamicResource ThemeFg}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding WebOverlayEnabled}" Value="True">
                                                 <Setter Property="Stroke" Value="{DynamicResource AccentGold}"/>
                                             </DataTrigger>
                                         </Style.Triggers>
