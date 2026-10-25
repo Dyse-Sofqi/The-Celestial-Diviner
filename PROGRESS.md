@@ -1,8 +1,8 @@
 ﻿# 衍天高手（The Celestial Diviner）开发进度交接
 
-更新：2026-10-25 — **更新确认框 Markdown 渲染（新窗口取代 MessageBox）+ Web 叠加源键帽永久残留修复；未发版**
+更新：2026-10-25 — **发版 v1.8.9（更新确认框 Markdown 渲染 + Web 叠加源键帽残留修复）；双端 Release 已发布**
 
-## 本次变更（更新确认框 Markdown 渲染，未发版）
+## 本次变更（发版 v1.8.9 · 更新确认框 Markdown 渲染）
 
 - 📋 用户报告：点底栏「有更新」弹出的更新日志不渲染 **加粗** 等标记——确认框是 Win32
   MessageBox，渲染不了任何格式，发布说明（Gitee Release body = release-notes.md 全文）
@@ -15,11 +15,25 @@
   （# / ## / ### 标题、"- " 列表、两格缩进 "  - " 二级项同列表缩进、续行接回上一段）——
   发布说明的结构化内容（使用范围声明 / 本轮重点 / 升级方式等分节）也有层级呈现
 - ✅ 实测：v1.8.8 发布说明原文经 AppendBlocks 渲染（探针程序 + RenderTargetBitmap 截图
-  核对）——加粗 / 分节标题 / 圆点列表 / 二级缩进 / 续行接回 / `代码` / 链接全部生效；
-  Release 构建 0 警告 0 错误（bin 目录被运行中的程序锁定，产物在 obj/relcheck 验证，
-  正常构建待程序关闭后执行）
+  核对）——加粗 / 分节标题 / 圆点列表 / 二级缩进 / 续行接回 / `代码` / 链接全部生效
+- ✅ **发版清单**：
+  - 版本号 1.8.8 → **1.8.9**（csproj Version / FileVersion 1.8.9.0）；内嵌 CHANGELOG 含
+    v1.8.9 节、无「未发布」残留（反射读取内嵌资源验证）；内嵌公告含用户更新的 Notice2 🗡 文案
+  - 发布包：`dist/TheCelestialDiviner-1.8.9-win64.zip`（20 项与 1.8.8 一致 = exe + 依赖 dll +
+    7zr.exe + 配置 + 8 段候选提示音；非 exe 项与 1.8.8 包逐字节一致；zip 1,758,018 B；
+    SHA256 `24e0e8c0…1e459`；exe 1,112,064 B 内嵌 f9a6263 沿用"发布提交前构建"惯例；
+    构建用独立输出目录 obj/rel189——运行中的 1.8.8 程序锁定 bin，不影响打包）
+  - **Gitee 已发布**：<https://gitee.com/sofqi/The-Celestial-Diviner/releases/tag/v1.8.9>
+    （release id 1240661，publish-gitee-release.sh 建版 + 附件 id 3493041；releases/latest
+    已指向 v1.8.9 → 程序内「检查更新」可发现并安装）
+  - **GitHub 已发布**（gh-api-release.ps1 走 API：提交 27a5ead 逐字节复制 MATCH + main
+    更新 + Release id 423471659 + 附件上传；releases/latest 已指向 v1.8.9）
+    <https://github.com/Dyse-Sofqi/The-Celestial-Diviner/releases/tag/v1.8.9>
+  - 标签 `v1.8.9` 指向发版提交 27a5ead（Gitee 端随 Release 建于 main 头、GitHub 端由
+    Release 创建时生成于同一提交；本地注释标签已建，因双端 Release 均已锚定该提交，
+    与 1.8.8"标签在 PROGRESS 提交"的差别不影响任何消费方）
 
-## 本次变更（Web 叠加源键帽残留修复，未发版）
+## 本次变更（发版 v1.8.9 · Web 叠加源键帽残留修复）
 
 - 📋 用户报告：OBS 浏览源里经常残留一个 Alt 键帽，重新按 Alt 也顶不掉，只能刷新浏览器源；
   截图里同屏出现 "Alt Ctrl Alt" 两个 Alt 帽
