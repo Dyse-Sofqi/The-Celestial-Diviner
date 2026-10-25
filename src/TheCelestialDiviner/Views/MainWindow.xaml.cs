@@ -322,19 +322,10 @@ public partial class MainWindow : Window
             _vm.DeleteCheckedSchemes();
         };
 
-        // 检查更新 / 底栏「有更新」：确认框（列出远端版本与发布说明）→ 结果消息框 → 重启退出。
+        // 检查更新 / 底栏「有更新」：确认框（版本号 + 发布说明按 Markdown 渲染，与更新日志窗口
+        // 同源解析；旧 Win32 MessageBox 渲染不了格式，**粗体** 只能原样显示）→ 确认即下载重启。
         _vm.UpdateConfirmRequested += check =>
-        {
-            var notes = check.Notes?.Trim() ?? "";
-            if (notes.Length > 600) notes = notes.Substring(0, 600) + "…";
-            return MessageBox.Show(this,
-                $"发现新版本 {check.TagName}（当前 v{UpdateService.CurrentVersion.ToString(3)}），是否下载并安装？"
-                + "\n\n确认后程序将自动下载更新包并重启完成安装。"
-                + (notes.Length > 0 ? "\n\n—— 更新日志 ——\n" + notes : "")
-                + "\n\n（完整历史更新见「选项 → 更新日志」）",
-                "检查更新 — 衍天高手", MessageBoxButton.YesNo, MessageBoxImage.Question)
-                == MessageBoxResult.Yes;
-        };
+            new UpdateConfirmWindow(check) { Owner = this }.ShowDialog() == true;
         // 未发现新版本 / 检查失败等结果提示：不带图标的普通消息框（Information 图标会响提示音）。
         _vm.UpdateMessageRequested += (title, message) =>
             MessageBox.Show(this, message, title, MessageBoxButton.OK);

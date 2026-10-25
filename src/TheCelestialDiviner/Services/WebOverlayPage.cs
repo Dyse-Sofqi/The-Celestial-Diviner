@@ -103,15 +103,27 @@ function svgIcon(path) {
   return svg;
 }
 
+function clearTimers(cap) {
+  if (cap.retireTimer) { clearTimeout(cap.retireTimer); cap.retireTimer = null; }
+  if (cap.fadeTimer) { clearTimeout(cap.fadeTimer); cap.fadeTimer = null; }
+  // 未决的脉冲弹起一并取消：物理按压态由快照接管（对齐桌面 SetPressed 停 _pulsePop）
+  if (cap.pulseTimer) { clearTimeout(cap.pulseTimer); cap.pulseTimer = null; }
+}
+
 function ensureCap(label) {
   let cap = caps.get(label);
   if (cap) {
-    if (cap.retireTimer) { clearTimeout(cap.retireTimer); cap.retireTimer = null; }
-    if (cap.fadeTimer) { clearTimeout(cap.fadeTimer); cap.fadeTimer = null; }
+    clearTimers(cap);
     cap.el.classList.remove("fading");
     return cap;
   }
+  // 孤儿防御：Map 条目已不在但同标签元素仍在 DOM（历史遗留的幽灵键帽）→ 先移除再建，
+  // 否则幽灵帽与新帽同屏并存且永不回收（重新按键顶不掉，只能刷新浏览器源）。
+  for (const el of Array.from(root.children)) {
+    if (el.dataset.label === label) el.remove();
+  }
   const el = document.createElement("div");
+  el.dataset.label = label;
   el.className = "cap" + (MODIFIERS.has(label) ? " modifier" : "");
   const base = document.createElement("div"); base.className = "base";
   const face = document.createElement("div"); face.className = "face";
@@ -142,12 +154,20 @@ function bumpBadge(cap, inc) {
 function press(cap) { cap.el.classList.add("pressed"); }
 function releaseVisual(cap) { cap.el.classList.remove("pressed"); }
 
-// 1.2s 空闲宽限后 300ms 淡出移除（连击计数随键帽销毁归零，与桌面悬浮层一致）
+// 1.2s 空闲宽限后 300ms 淡出移除（连击计数随键帽销毁归零，与桌面悬浮层一致）。
+// 淡出进行中不重挂宽限（对齐桌面 _retiring 语义）——旧版在淡出中重入会让已触发的旧
+// 宽限计时器与新链并存，旧链迟到触发时按标签删 Map，误删重按后新建的同标签帽条目：
+// 元素成为 Map 之外的孤儿（同屏双 Alt / 残留键帽重新按下也顶不掉、只能刷新的根因）。
+// 删除按身份校验：陈旧计时器即使触发也不会误伤当前 Map 条目。
 function armRetire(cap, label) {
-  if (cap.retireTimer) clearTimeout(cap.retireTimer);
+  if (cap.fadeTimer) return;
+  if (cap.retireTimer) { clearTimeout(cap.retireTimer); cap.retireTimer = null; }
   cap.retireTimer = setTimeout(() => {
     cap.el.classList.add("fading");
-    cap.fadeTimer = setTimeout(() => { cap.el.remove(); caps.delete(label); }, 300);
+    cap.fadeTimer = setTimeout(() => {
+      cap.el.remove();
+      if (caps.get(label) === cap) caps.delete(label);
+    }, 300);
   }, 1200);
 }
 
@@ -157,6 +177,11 @@ function onSnapshot(keys, bumps) {
     if (held.has(label)) continue;
     releaseVisual(cap);
     armRetire(cap, label);
+  }
+  // 幽灵键帽兜底清扫：DOM 里有、Map 里没有的键帽立即移除（正常流不产生，防任何路径遗留的孤儿永久残留）
+  for (const el of Array.from(root.children)) {
+    if (!el.dataset.label || caps.has(el.dataset.label)) continue;
+    el.remove();
   }
   for (const label of keys) {
     const cap = ensureCap(label);

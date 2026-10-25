@@ -1,6 +1,53 @@
 ﻿# 衍天高手（The Celestial Diviner）开发进度交接
 
-更新：2026-10-25 — **发版 v1.8.8（方案列表滚动跳顶修复 + 键帽 Caps 缩写 / Web 叠加源显示对齐桌面）；双端 Release 已发布**
+更新：2026-10-25 — **更新确认框 Markdown 渲染（新窗口取代 MessageBox）+ Web 叠加源键帽永久残留修复；未发版**
+
+## 本次变更（更新确认框 Markdown 渲染，未发版）
+
+- 📋 用户报告：点底栏「有更新」弹出的更新日志不渲染 **加粗** 等标记——确认框是 Win32
+  MessageBox，渲染不了任何格式，发布说明（Gitee Release body = release-notes.md 全文）
+  的标记只能原样显示，且截断到 600 字符
+- ✅ **确认框改为 WPF 模态窗**（`UpdateConfirmWindow`，检查更新 / 底栏「有更新」共用）：
+  版本号 + 发布说明按 Markdown 渲染，全文可滚动不再截断；Enter=立即更新 / Esc=取消；
+  `MainWindow` 的 `UpdateConfirmRequested` 处理由 MessageBox.Show 换为 ShowDialog
+- ✅ **行内解析器抽为共用**（`Helpers/InlineMarkdown`）：ChangelogWindow 的 AppendInlines /
+  MinPositive / OnLinkClick 原样迁出（窗口改为调用）；新增 `AppendBlocks` 块级渲染
+  （# / ## / ### 标题、"- " 列表、两格缩进 "  - " 二级项同列表缩进、续行接回上一段）——
+  发布说明的结构化内容（使用范围声明 / 本轮重点 / 升级方式等分节）也有层级呈现
+- ✅ 实测：v1.8.8 发布说明原文经 AppendBlocks 渲染（探针程序 + RenderTargetBitmap 截图
+  核对）——加粗 / 分节标题 / 圆点列表 / 二级缩进 / 续行接回 / `代码` / 链接全部生效；
+  Release 构建 0 警告 0 错误（bin 目录被运行中的程序锁定，产物在 obj/relcheck 验证，
+  正常构建待程序关闭后执行）
+
+## 本次变更（Web 叠加源键帽残留修复，未发版）
+
+- 📋 用户报告：OBS 浏览源里经常残留一个 Alt 键帽，重新按 Alt 也顶不掉，只能刷新浏览器源；
+  截图里同屏出现 "Alt Ctrl Alt" 两个 Alt 帽
+- ✅ **根因定位（页面 JS 淡出计时器重入竞态）**：`armRetire`（1.2s 宽限 → 300ms 淡出 →
+  移除 + 删 Map 条目）在键帽**淡出进行中**被无该键的快照重入时（其它键按下/释放都会派发
+  快照），旧版只 clearTimeout 已触发（失效）的宽限计时器 id（no-op），再挂新宽限链——
+  新旧两条链并存；淡出链先到先删（元素 + Map 条目一致），**迟到的宽限链** 1.2s 后触发时
+  对已移除元素挂淡出 → 300ms 后按标签 `caps.delete(label)`——把重按该键（1.5s 窗口内，
+  高频键极易命中）新建的 Map 条目误删：元素成为 Map 之外的孤儿，不参与快照协调、
+  永不淡出（残留），同键再按 Map 已空 → 再建新帽同屏并存（截图的双 Alt 即此形态），
+  刷新浏览器源（重载页面）才恢复。服务端 `_held` / 快照流无辜（刷新后 hello 重放干净
+  状态即恢复，与用户"刷新可解"吻合）；页面自 v1.8.6 首版即有此竞态（所有版本 Map 结构
+  相同），与"经常"复现吻合（淡出 300ms 窗口 × 活跃按键流）
+- ✅ **修复三层**（`WebOverlayPage.cs`）：
+  1. `armRetire` 淡出进行中（fadeTimer 未决）直接 return 不重挂（对齐桌面 `_retiring`
+     语义）；计时链内的 `caps.delete` 按身份校验（`caps.get(label) === cap`），陈旧计时器
+     即使触发也不误伤当前条目——根因层消除
+  2. `ensureCap` 新建前定向清扫同 label 遗留元素 + 全部键帽补 `dataset.label` 标识
+  3. `onSnapshot` 每次全量清扫"DOM 有、Map 无"的幽灵键帽——历史遗留的残留升级后
+     无需刷新即可自愈
+  顺带：`ensureCap` 复用时取消未决脉冲弹起（物理按压态由快照接管，对齐桌面
+  `SetPressed` 停 `_pulsePop`）
+- ✅ **浏览器实测验证**（IAB 注入确定性序列，真实计时器，新旧页面 A/B 对比）：
+  复现序列（按下 → 释放 → 淡出中重入快照 → 重按 → 释放）旧页 t5200 残留 `["Alt"]`
+  （孤儿确认），新页 `[]` 正常淡出；按住 + 脉冲交织 / 快速连按 / 双键 / 宽限期检查
+  全部 maxDup=1；人造孤儿注入后：空快照全量清扫移除 ✓、map 空时重按定向清扫后
+  仅 1 个新帽 ✓（"重按顶不掉"场景治愈）；释放收尾 DOM/Map 全清空 ✓
+- ✅ 构建 0 警告 0 错误（Release）；CHANGELOG 增「未发布」节（发版时并入新版本号）
 
 ## 本次变更（发版 v1.8.8）
 
