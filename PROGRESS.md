@@ -27,8 +27,20 @@
   exe 1,121,280 B（FileVersion 1.9.0.0），内嵌 CHANGELOG 含 v1.9.0 节、无「未发布」残留
   （内嵌资源字节检索验证）；实机验证待用户执行（重点：设置 / 右键取消 / 键盘区灰底 /
   只开不关 / 连按不重复播报）
+- ✅ **发版清单**：
+  - 版本号 1.8.9 → **1.9.0**（csproj Version / FileVersion 1.9.0.0）
+  - 标签 `v1.9.0`（本地注释标签 53c096a）指向发版提交 0dc2d0c
+  - 发布包 `dist/TheCelestialDiviner-1.9.0-win64.zip`：**20 项** = exe + 依赖 dll +
+    7zr.exe + 配置 + 8 段候选提示音（与 1.8.9 包同名同序；**非 exe 项逐字节一致**）；
+    zip 1,741,455 B，SHA256 `b5bb301c…34b13d`
+  - **Gitee 已发布**：<https://gitee.com/sofqi/The-Celestial-Diviner/releases/tag/v1.9.0>
+    （release id 1249136，`publish-gitee-release.sh` 建版 + 附件 id 3518928；
+    releases/latest 已指向 v1.9.0 → 程序内「检查更新」可发现并安装）
+  - **GitHub 已发布**（`gh-api-release.ps1` 走 API：提交 0dc2d0c 逐字节复制 MATCH + main
+    更新 + Release id 426435444 + 附件上传 1,741,455 B；标签由 Release 创建时生成于同一提交）
+    <https://github.com/Dyse-Sofqi/The-Celestial-Diviner/releases/tag/v1.9.0>
 
-更新：2026-10-25 — **发版 v1.8.9（更新确认框 Markdown 渲染 + Web 叠加源键帽残留修复）；双端 Release 已发布**
+更新：2026-10-28 — **发版 v1.9.0（独立关闭热键 + 热键键位灰度区分）；双端 Release 已发布**
 
 ## 本次变更（发版 v1.8.9 · 更新确认框 Markdown 渲染）
 
