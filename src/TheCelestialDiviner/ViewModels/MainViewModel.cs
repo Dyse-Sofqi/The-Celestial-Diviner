@@ -24,7 +24,11 @@ public enum PickKind
     SetMasterKey,
 
     /// <summary>设置切换方案热键（底栏“切换方案设置”项）：左键键位 / 直接按键设置，右键已设置键位取消，单次操作即完成退出。</summary>
-    SetCycleKey
+    SetCycleKey,
+
+    /// <summary>设置独立关闭热键（底栏“独立关闭热键”项）：交互与切换方案热键一致，
+    /// 左键键位 / 直接按键设置，右键已设置键位取消（回到空键位），单次操作即完成退出。</summary>
+    SetCloseKey
 }
 
 /// <summary>
@@ -52,6 +56,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private string _masterStateText = "全局开关：已关闭";
     private string _masterKeyText = "F9";
     private string _cycleKeyText = "未设置";           // 切换方案热键显示名（默认缺省未设置）
+    private string _closeKeyText = "未设置";           // 独立关闭热键显示名（默认空键位）
     private string _hintText = s_defaultHint;
     private double _soundVolume = Constants.DefaultSoundVolume;
     private bool _globalVisualEnabled = true;          // 键位可视化总开关（默认开启；关闭时仅禁用显示，各键开关状态保留）
@@ -75,6 +80,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private int _lastPickingExitTick;                  // 最近一次退出选择态的时刻（Environment.TickCount，退出冷却防陈旧点击重进）
     private volatile bool _masterKeyHeld;              // 总开关键按下沿标记（仅钩子线程读写；按住自动重复只响应第一次，抬起复位）
     private volatile bool _cycleKeyHeld;               // 切换方案热键按下沿标记（同上）
+    private volatile bool _closeKeyHeld;               // 独立关闭热键按下沿标记（同上）
     private bool _pickingActiveMirror;                 // 选择态的钩子线程镜像（Volatile.Read/Write 访问；PickingActive 变更时同步，调度器分流判定用）
     private int _lastMasterUiLagLogTick;               // 总开关 UI 呈现延迟告警限频（Environment.TickCount）
 
@@ -105,7 +111,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             // 旧档位镜像字典脱钩，运行期字典指向新档位；调度器重建任务并落盘。
             SyncProfileRuntime();
             RefreshAllButtons();
-            UpdateMasterKeyHighlight();
+            UpdateHotkeyHighlight();
             RefreshSchemeList();
             ApplyConfigToScheduler();
             SyncVisualizerRegistry();
@@ -251,6 +257,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _cycleKeyText = _config.ProfileCycle.HasKey
             ? InputNameMapper.GetKeyName(_config.ProfileCycle.VirtualKey, _config.ProfileCycle.Extended)
             : "未设置";
+        _closeKeyText = _config.IndependentClose.HasKey
+            ? InputNameMapper.GetKeyName(_config.IndependentClose.VirtualKey, _config.IndependentClose.Extended)
+            : "未设置";
         _soundVolume = Compat.Clamp(_config.SoundVolume, 0, 100);
         _soundCue.Volume = _soundVolume / 100.0;
         _soundCue.ApplyTheme(CurrentLook.Theme, ThemeSoundFor(CurrentLook.Theme));   // 主题语音方案（高松灯 / 墨提斯 + 按主题自定义）
@@ -265,6 +274,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         StartPickingCommand = RelayCommand.Create(StartPicking);
         SetMasterKeyPickingCommand = RelayCommand.Create(StartMasterKeyPicking);
         SetCycleKeyPickingCommand = RelayCommand.Create(StartCycleKeyPicking);
+        SetCloseKeyPickingCommand = RelayCommand.Create(StartCloseKeyPicking);
         SourceClickedCommand = new RelayCommand(p =>
         {
             if (p is KeySourceViewModel svm && !svm.IsSpacer && svm.Source is not null)
@@ -342,8 +352,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         SyncVisualizerRegistry();
         // 按钮创建晚于配置加载：构造阶段补一次暗淡状态传播（开启时暗淡）。
         ApplyDimState();
-        // 总开关键绿色高亮（按钮创建后；默认 F9）。
-        UpdateMasterKeyHighlight();
+        // 热键键位高亮（按钮创建后；总开关键黑底 / 切换方案与独立关闭热键灰底）。
+        UpdateHotkeyHighlight();
 
         // 键盘注入模式：默认 DD 驱动（物理级）；配置优先，越界回退默认。
         // DD 需 dd63330.dll + 管理员权限：缺失时先回退普通模式，窗口就绪后引导用户
@@ -517,6 +527,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// <summary>进入切换方案热键录入选择态（左键键位 / 直接按键设置，右键已设置键位取消，单次操作即完成退出）。</summary>
     public ICommand SetCycleKeyPickingCommand { get; }
 
+    /// <summary>进入独立关闭热键录入选择态（交互同切换方案热键：左键键位 / 直接按键设置，
+    /// 右键已设置键位取消回到空键位，单次操作即完成退出）。</summary>
+    public ICommand SetCloseKeyPickingCommand { get; }
+
     /// <summary>键鼠区图块左键点击（选择态 → 录入该键；非选择态 → 无操作）。</summary>
     public ICommand SourceClickedCommand { get; }
 
@@ -620,6 +634,13 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         private set => Set(ref _cycleKeyText, value);
     }
 
+    /// <summary>独立关闭热键显示名（未设置 = "未设置" = 空键位，总开关键回到统一启停）。</summary>
+    public string CloseKeyText
+    {
+        get => _closeKeyText;
+        private set => Set(ref _closeKeyText, value);
+    }
+
     /// <summary>底部提示文字。</summary>
     public string HintText
     {
@@ -717,6 +738,19 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         }
         : null;
 
+    /// <summary>当前独立关闭热键对应的输入源（未设置返回 null）。</summary>
+    public InputSource? IndependentCloseSource => _config.IndependentClose.HasKey
+        ? new InputSource
+        {
+            Kind = InputKind.Keyboard,
+            VirtualKey = _config.IndependentClose.VirtualKey,
+            Extended = _config.IndependentClose.Extended
+        }
+        : null;
+
+    /// <summary>是否已设置独立关闭热键（已设置 = 总开关键只负责开启，关闭交给独立关闭热键）。</summary>
+    public bool HasIndependentCloseKey => _config.IndependentClose.HasKey;
+
     // ---------- 运行时初始化 ----------
     /// <summary>
     /// 运行时初始化：提升定时器分辨率（连发间隔精度依赖，无状态栏展示）、安装钩子。
@@ -765,10 +799,21 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// <summary>
     /// 输入源按下（钩子线程调用）：调度器路径零封送直通——连发启停不再排在 UI 线程
     /// 积压工作之后（高负载下松键即停）；仅 UI 动作（总开关 / 档位切换 / 键位录入）
-    /// 封送回 UI 线程。优先总开关键 → 切换方案热键 → 键位录入选择态 → 调度器。
+    /// 封送回 UI 线程。优先独立关闭热键 → 总开关键 → 切换方案热键 → 键位录入选择态 → 调度器。
     /// </summary>
     public void HandleHookDown(InputSource source)
     {
+        // 独立关闭热键：先于总开关键判定（两者互斥，同一键位不会被同时占用）。
+        // 只负责关闭——已关闭时不重复关闭（不播语音、不刷日志）。
+        if (IndependentCloseSource is { } xk && xk.Equals(source))
+        {
+            if (_closeKeyHeld) return;
+            _closeKeyHeld = true;
+            if (KeyRecorder.IsAnyRecording || Volatile.Read(ref _pickingActiveMirror)) return;
+            CloseGlobalEnabledFromHook();
+            return;
+        }
+
         if (GlobalSwitchSource is { } gk && gk.Equals(source))
         {
             // 按下沿判定：按住时 OS 会持续投递 KEYDOWN（自动重复，最快约 31ms 一次），
@@ -779,7 +824,27 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             // 录制 / 选择态不响应（避免把总开关键录为方案源或热键时误切总开关）。
             // volatile 直读判定，钩子线程即可完成，不等 UI。
             if (KeyRecorder.IsAnyRecording || Volatile.Read(ref _pickingActiveMirror)) return;
-            ToggleGlobalEnabledFromHook();
+            // 已设置独立关闭热键 → 总开关键只负责开启（已开启时按下什么都不做），
+            // 关闭统一交给独立关闭热键；未设置时维持原来的单键启停语义。
+            if (HasIndependentCloseKey)
+            {
+                // 已开启时不重复开启：给一句可见反馈（否则用户会以为热键失灵）；
+                // 每次按下只出现一条（按下沿标记已过滤自动重复）。
+                if (_scheduler.MasterEnabled)
+                {
+                    var closeName = _config.IndependentClose.HasKey
+                        ? InputNameMapper.GetKeyName(_config.IndependentClose.VirtualKey,
+                            _config.IndependentClose.Extended)
+                        : "独立关闭热键";
+                    RunOnUi(() => AddLog($"总开关已开启：全局开关热键只负责开启，关闭请按 [{closeName}]。"));
+                    return;
+                }
+                ApplyGlobalEnabled(true);
+            }
+            else
+            {
+                ToggleGlobalEnabledFromHook();
+            }
             return;
         }
 
@@ -843,6 +908,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         // 热键按下沿标记随抬起复位（低级钩子全局投递，抬起事件不会丢）。
         if (GlobalSwitchSource is { } gk && gk.Equals(source)) _masterKeyHeld = false;
         if (ProfileCycleSource is { } ck && ck.Equals(source)) _cycleKeyHeld = false;
+        if (IndependentCloseSource is { } xk && xk.Equals(source)) _closeKeyHeld = false;
         _scheduler.HandleSourceUp(source);
     }
 
@@ -863,6 +929,15 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// 积压之后（体感“按了没反应”，连按数次还会在 UI 恢复后爆发回放、停在错误状态）。
     /// 以调度器当前态为翻转基准：连按次序与最终态始终和实际按键一一对应。</summary>
     private void ToggleGlobalEnabledFromHook() => ApplyGlobalEnabled(!_scheduler.MasterEnabled);
+
+    /// <summary>独立关闭热键入口（钩子线程调用）：只关闭不开启——已关闭时直接返回，
+    /// 避免连按 / 自动重复把"关闭"再执行一遍（语音与日志不重复）。
+    /// 同样以调度器当前态为基准，不等 UI 线程。</summary>
+    private void CloseGlobalEnabledFromHook()
+    {
+        if (!_scheduler.MasterEnabled) return;
+        ApplyGlobalEnabled(false);
+    }
 
     /// <summary>应用总开关目标态：调度器与配置字段就地生效（任意线程安全）；
     /// UI 呈现（横幅 / 控件 / 语音 / 落盘 / 日志）封送 UI 线程（已在 UI 线程则直接执行）。</summary>
@@ -903,7 +978,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             MasterKeyText = "未设置";
             OnPropertyChanged(nameof(GlobalSwitchSource));
             SaveConfig();
-            UpdateMasterKeyHighlight();
+            UpdateHotkeyHighlight();
             AddLog("全局开关键已清除（总开关只能通过界面托盘菜单切换）。");
             return true;
         }
@@ -916,10 +991,15 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             return false;
         }
 
-        // 冲突验证：不能与切换方案热键相同（同一键位两个语义会互相抢占）。
+        // 冲突验证：不能与切换方案热键 / 独立关闭热键相同（同一键位两个语义会互相抢占）。
         if (ProfileCycleSource is { } ck && ck.Equals(key))
         {
             AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被切换方案热键占用。");
+            return false;
+        }
+        if (IndependentCloseSource is { } xk && xk.Equals(key))
+        {
+            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被独立关闭热键占用。");
             return false;
         }
 
@@ -933,8 +1013,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         MasterKeyText = InputNameMapper.GetSourceName(key);
         OnPropertyChanged(nameof(GlobalSwitchSource));
         SaveConfig();
-        UpdateMasterKeyHighlight();
-        AddLog($"总开关键已设置为 [{InputNameMapper.GetSourceName(key)}]。");
+        UpdateHotkeyHighlight();
+        AddLog($"总开关键已设置为 [{InputNameMapper.GetSourceName(key)}]。"
+               + (HasIndependentCloseKey
+                   ? "（已设置独立关闭热键：本键只负责开启，关闭由独立关闭热键负责。）"
+                   : ""));
         return true;
     }
 
@@ -947,6 +1030,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             CycleKeyText = "未设置";
             OnPropertyChanged(nameof(ProfileCycleSource));
             SaveConfig();
+            UpdateHotkeyHighlight();
             AddLog("切换方案热键已取消，恢复缺省（未设置）。");
             return true;
         }
@@ -960,6 +1044,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         if (GlobalSwitchSource is { } gk && gk.Equals(key))
         {
             AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被总开关占用。");
+            return false;
+        }
+        if (IndependentCloseSource is { } xk && xk.Equals(key))
+        {
+            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被独立关闭热键占用。");
             return false;
         }
 
@@ -979,7 +1068,68 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         CycleKeyText = InputNameMapper.GetSourceName(key);
         OnPropertyChanged(nameof(ProfileCycleSource));
         SaveConfig();
+        UpdateHotkeyHighlight();
         AddLog($"切换方案热键已设置为 [{InputNameMapper.GetSourceName(key)}]：按下按 ①→②→③→④ 顺序切换非空方案档位。");
+        return true;
+    }
+
+    /// <summary>
+    /// 设置独立关闭热键（null 表示清除 = 回到空键位，恢复"全局开关热键统一键位启停"）。
+    /// 占用冲突（总开关键 / 切换方案热键 / 任一档位的连发键）时返回 false 且不修改。
+    /// </summary>
+    public bool SetIndependentCloseKey(InputSource? key)
+    {
+        if (key is null)
+        {
+            _config.IndependentClose.HasKey = false;
+            CloseKeyText = "未设置";
+            OnPropertyChanged(nameof(IndependentCloseSource));
+            OnPropertyChanged(nameof(HasIndependentCloseKey));
+            SaveConfig();
+            UpdateHotkeyHighlight();
+            AddLog("独立关闭热键已取消（空键位）：全局开关热键恢复统一键位启停。");
+            return true;
+        }
+
+        if (key.Kind != InputKind.Keyboard)
+        {
+            AddLog("独立关闭热键仅支持键盘键（鼠标 / 滚轮不可用）。");
+            return false;
+        }
+        if (GlobalSwitchSource is { } gk && gk.Equals(key))
+        {
+            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被全局开关热键占用。");
+            return false;
+        }
+        if (ProfileCycleSource is { } ck && ck.Equals(key))
+        {
+            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被切换方案热键占用。");
+            return false;
+        }
+
+        // 与切换方案热键同一套占用校验：四个方案档位的连发键全查，
+        // 否则切到该档位后按下此键时「关闭」与「连发」互相抢占。
+        var keyStr = TaskSchedulerService.BuildSourceKey(key);
+        for (var i = 0; i < ProfileCount; i++)
+        {
+            if (!_config.Profiles[i].ContainsKey(keyStr)) continue;
+            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被方案{ProfileDisplayName(i)}的连发键占用。");
+            return false;
+        }
+
+        _config.IndependentClose.HasKey = true;
+        _config.IndependentClose.VirtualKey = key.VirtualKey;
+        _config.IndependentClose.Extended = key.Extended;
+        CloseKeyText = InputNameMapper.GetSourceName(key);
+        OnPropertyChanged(nameof(IndependentCloseSource));
+        OnPropertyChanged(nameof(HasIndependentCloseKey));
+        SaveConfig();
+        UpdateHotkeyHighlight();
+        var masterName = _config.GlobalSwitch.HasKey
+            ? InputNameMapper.GetKeyName(_config.GlobalSwitch.VirtualKey, _config.GlobalSwitch.Extended)
+            : "未设置";
+        AddLog($"独立关闭热键已设置为 [{InputNameMapper.GetSourceName(key)}]："
+               + $"全局开关热键 [{masterName}] 此后只负责开启，关闭统一由本键负责。");
         return true;
     }
 

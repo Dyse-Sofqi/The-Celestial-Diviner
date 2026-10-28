@@ -1,5 +1,33 @@
 ﻿# 衍天高手（The Celestial Diviner）开发进度交接
 
+## 本次变更（发版 v1.9.0 · 独立关闭热键 + 热键键位灰度区分）
+
+- 📋 用户需求：底栏「全局开关热键设置」之后新增「独立关闭热键」，默认空键位；设置后
+  全局开关热键只负责开启、独立关闭热键负责关闭；右键已设置键位可取消回到空键位
+  （恢复全局开关热键统一启停）；切换方案热键 / 独立关闭热键的键位在左侧键盘区要与
+  全局开关热键的黑色底作**灰度区分**（此前切换方案热键无底色）
+- ✅ 配置：`AppConfig.IndependentClose`（`IndependentCloseConfig`：HasKey 默认 false +
+  VirtualKey + Extended），配置版本 v19 → **v20**（字段有默认值，无迁移动作；
+  ConfigService 迁移注释登记）
+- ✅ VM：`PickKind.SetCloseKey` / `CloseKeyText` / `IndependentCloseSource` /
+  `HasIndependentCloseKey` / `SetCloseKeyPickingCommand` / `StartCloseKeyPicking`；
+  录入 / 右键取消 / 冲突校验完全对齐切换方案热键（仅键盘键，排除总开关键、切换方案热键、
+  四个档位的连发键）。`HandleHookDown` 先判独立关闭键（只关不重复关），再判总开关键
+  （已设置独立关闭键时只开，`_scheduler.MasterEnabled` 为真直接返回）；
+  `_closeKeyHeld` 按下沿标记随 `HandleHookUp` 复位
+- ✅ 高亮：`UpdateMasterKeyHighlight` → **`UpdateHotkeyHighlight`**（总开关键 `IsMasterKey` /
+  `IsCycleKey` / `IsCloseKey` 三态一并刷新，改键 / 取消 / 导入 / 切档位均调用）；
+  `KeySourceViewModel` 新增 `IsCycleKey` / `IsCloseKey`；`SourceButtonTemplate` 新增两个
+  DataTrigger→`HotkeyAuxBg`（App.ApplyTheme 注入：日间 #6E6E6E / 夜间 #555555）
+- ✅ 视图：底栏新增 `CloseKeySettingPanel`（Dock=Right 声明在全局开关热键设置之前 →
+  显示在其右侧），录入中显示「录入中…」并禁用；注释区新增 `CloseKeyComment`
+  （悬停 / 录入态显示），`UpdateCycleKeyPickingComment` → `UpdateHotkeyPickingComment`
+  同时处理两种热键录入态
+- ✅ 构建：环境恢复后 `dotnet build -c Release -o obj/rel190` **0 警告 0 错误**；
+  exe 1,121,280 B（FileVersion 1.9.0.0），内嵌 CHANGELOG 含 v1.9.0 节、无「未发布」残留
+  （内嵌资源字节检索验证）；实机验证待用户执行（重点：设置 / 右键取消 / 键盘区灰底 /
+  只开不关 / 连按不重复播报）
+
 更新：2026-10-25 — **发版 v1.8.9（更新确认框 Markdown 渲染 + Web 叠加源键帽残留修复）；双端 Release 已发布**
 
 ## 本次变更（发版 v1.8.9 · 更新确认框 Markdown 渲染）

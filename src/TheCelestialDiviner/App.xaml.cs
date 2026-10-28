@@ -139,6 +139,9 @@ public partial class App : Application
         dict["ThemeRoundCheckFill"] = ToBrush(isDark ? look.AccentGoldHex : look.AccentPrimaryHex);
         // 热键按钮 / 总开关键图块底色（近黑但不过分扎眼；浅/深主题分别取值）。
         dict["HotkeyBg"] = ToBrush(isDark ? "#303030" : "#1F1F1F");
+        // 切换方案热键 / 独立关闭热键图块底色：中灰——与总开关键的近黑底作**灰度区分**，
+        // 一眼看出该键位已被其它热键占用（比黑底浅两档，白字仍清晰）。
+        dict["HotkeyAuxBg"] = ToBrush(isDark ? "#555555" : "#6E6E6E");
         // 全局热键设置按钮（底栏）：夜间沿用近黑底白字；日间复用普通按钮风格
         //（与 ThemeButtonBg / ThemeBorder / ThemeFg 同值；键鼠区总开关键图块的 HotkeyBg 高亮不受影响）。
         dict["HotkeySettingBg"] = ToBrush(isDark ? "#303030" : buttonBg);

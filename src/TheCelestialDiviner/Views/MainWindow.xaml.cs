@@ -275,7 +275,7 @@ public partial class MainWindow : Window
             else if (args.PropertyName == nameof(MainViewModel.ProfileNames))
                 Dispatcher.BeginInvoke(ApplyProfileNames);   // 方案定制 / 导入配置 → 档位标签刷新
             else if (args.PropertyName == nameof(MainViewModel.PickingKind))
-                Dispatcher.BeginInvoke(UpdateCycleKeyPickingComment);   // 进入/退出切换方案热键录入 → 注释区联动
+                Dispatcher.BeginInvoke(UpdateHotkeyPickingComment);   // 进入/退出热键录入 → 注释区联动
             else if (args.PropertyName == nameof(MainViewModel.NoticeContent))
                 Dispatcher.BeginInvoke(() => RenderDefaultComment(_vm.NoticeContent));   // 公告远端更新 → 默认内容刷新
             else if (args.PropertyName == nameof(MainViewModel.DdFetchStatus))
@@ -443,6 +443,11 @@ public partial class MainWindow : Window
             ShowComment(CycleKeyComment);
             return;
         }
+        if (_vm.PickingKind == PickKind.SetCloseKey)
+        {
+            ShowComment(CloseKeyComment);
+            return;
+        }
         if (_vm.DdFetchStatus is { Length: > 0 } status)
         {
             _ddStatusShown = status;
@@ -482,10 +487,16 @@ public partial class MainWindow : Window
     }
 
     // ---------- 切换方案热键 → 注释区联动 ----------
-    /// <summary>切换方案热键的注释区说明（悬停底栏"切换方案设置"区或进入其录入态时显示）。</summary>
+    /// <summary>悬停切换方案热键的注释区说明（悬停底栏"切换方案设置"区或进入其录入态时显示）。</summary>
     private const string CycleKeyComment =
         "切换方案热键：按下已设置的键位，按 ①→②→③→④ 顺序切换到下一个非空方案档位（空档位自动跳过）。" +
         "点击按钮进入录入：左键点击左侧键位或直接按键完成设置；右键已设置的键位取消，恢复未设置；Esc 或点击空白处退出录入。";
+
+    /// <summary>独立关闭热键的注释区说明（悬停底栏"独立关闭热键"区或进入其录入态时显示）。</summary>
+    private const string CloseKeyComment =
+        "独立关闭热键（默认空键位）：设置后全局开关热键只负责开启，关闭统一由本键负责（按一次即停所有连发）。" +
+        "点击按钮进入录入：左键点击左侧键位或直接按键完成设置；右键已设置的键位取消，回归空键位——" +
+        "全局开关热键恢复单键启停；Esc 或点击空白处退出录入。已设置的热键键位在左侧键盘区显示灰底（总开关键为黑底）。";
 
     /// <summary>悬停底栏"切换方案设置"区（标签或按钮）：注释区显示说明。</summary>
     private void OnCycleKeyCommentEnter(object sender, System.Windows.Input.MouseEventArgs e)
@@ -496,15 +507,23 @@ public partial class MainWindow : Window
         => RestoreComment();
 
     /// <summary>
-    /// 录入态切换联动注释区（订阅 VM.PickingKind 通知）：进入切换方案热键录入显示说明，
-    /// 退出后恢复默认内容；注释区已被其他说明占用时不覆盖。
+    /// 录入态切换联动注释区（订阅 VM.PickingKind 通知）：进入切换方案热键 / 独立关闭热键录入
+    /// 显示对应说明，退出后恢复默认内容；注释区已被其他说明占用时不覆盖。
     /// </summary>
-    private void UpdateCycleKeyPickingComment()
+    private void UpdateHotkeyPickingComment()
     {
         if (_vm.PickingKind == PickKind.SetCycleKey)
+        {
             ShowComment(CycleKeyComment);
-        else if (CommentText.Text == CycleKeyComment)
+        }
+        else if (_vm.PickingKind == PickKind.SetCloseKey)
+        {
+            ShowComment(CloseKeyComment);
+        }
+        else if (CommentText.Text == CycleKeyComment || CommentText.Text == CloseKeyComment)
+        {
             RestoreComment();
+        }
     }
 
     // ---------- 设置菜单 → 注释区联动 ----------
@@ -556,7 +575,9 @@ public partial class MainWindow : Window
         ["WebOverlayButton"] = "键帽 Web 叠加源（OBS 浏览器源）：开启后本机启动服务，OBS 添加「浏览器源」并粘贴源 URL（自动复制到剪贴板）即可——" +
                                "透明背景渲染键帽，录制画面里键帽透明浮动，屏幕观感完全不变。透明度 / 配色 / 状态提醒与桌面悬浮层实时同源。" +
                                "URL 一次粘贴随配置持久；详细步骤见 docs/obs-recording.md。",
-        ["MasterKeySettingPanel"] = "全局开关热键：点击按钮进入录入，左键点击左侧键位或直接按键即完成录入（默认 F9）。",
+        ["MasterKeySettingPanel"] = "全局开关热键：点击按钮进入录入，左键点击左侧键位或直接按键即完成录入（默认 F9）。已设置「独立关闭热键」时，本键只负责开启、不再负责关闭。",
+        ["CloseKeySettingPanel"] = "独立关闭热键（默认空键位）：点击按钮进入录入，左键点击左侧键位或直接按键完成设置；右键已设置的键位取消回到空键位。" +
+                                   "设置后全局开关热键只负责开启，关闭统一由本键负责；取消后恢复全局开关热键统一键位启停。",
         ["AdjustVisualizerButton"] = "调整键帽显示位置：拖动应用图标键帽到目标处，虚线框为键帽可显示区域，点击确定保存。",
         ["DivinerVoiceButton"] = "成为衍天/莫问高手（文案随主题预设）：激活后总开关启动的语音播报改为对应主题的启动音" +
                                 "（衍天高手 →「衍天高手启动」；莫问高手 →「莫问糕手启动」）；关闭播报不变（仍为「停止」）。",

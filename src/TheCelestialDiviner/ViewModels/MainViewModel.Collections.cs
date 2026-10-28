@@ -189,18 +189,27 @@ public sealed partial class MainViewModel
         }
     }
 
-    /// <summary>刷新“总开关键”在键鼠区的绿色高亮（构造 / 修改 / 清除 / 导入后调用）。</summary>
-    private void UpdateMasterKeyHighlight()
+    /// <summary>
+    /// 刷新热键在键鼠区的高亮：总开关键 = 黑底（HotkeyBg），切换方案热键 / 独立关闭热键 = 灰底
+    /// （HotkeyAuxBg，与黑底作灰度区分，提示该键位已被其它热键占用）。
+    /// 构造 / 任一热键修改 / 清除 / 导入后调用。
+    /// </summary>
+    private void UpdateHotkeyHighlight()
     {
         var master = GlobalSwitchSource;
-        foreach (var b in MouseButtons)
+        var cycle = ProfileCycleSource;
+        var close = IndependentCloseSource;
+        void Apply(KeySourceViewModel b)
+        {
             b.IsMasterKey = master is not null && master.Equals(b.Source);
+            b.IsCycleKey = cycle is not null && cycle.Equals(b.Source);
+            b.IsCloseKey = close is not null && close.Equals(b.Source);
+        }
+        foreach (var b in MouseButtons) Apply(b);
         foreach (var row in KeyboardRows)
             foreach (var b in row)
-                if (!b.IsSpacer)
-                    b.IsMasterKey = master is not null && master.Equals(b.Source);
-        foreach (var b in NumpadKeys)
-            b.IsMasterKey = master is not null && master.Equals(b.Source);
+                if (!b.IsSpacer) Apply(b);
+        foreach (var b in NumpadKeys) Apply(b);
     }
 
     // ---------- 方案面板：录入选择态与连发键管理 ----------
@@ -458,6 +467,25 @@ public sealed partial class MainViewModel
         AddLog("开始设置切换方案热键：左键点击左侧键位或直接按键完成设置，右键已设置的键位取消（Esc 取消）。");
     }
 
+    /// <summary>
+    /// 进入独立关闭热键录入选择态（底栏"独立关闭热键"项）：交互与切换方案热键一致——
+    /// 左键键位 / 直接按键设置，右键已设置的键位取消回到空键位，单次操作即完成退出。
+    /// </summary>
+    public void StartCloseKeyPicking()
+    {
+        if (PickingActive) return;
+        // 同 StartPicking：退出冷却防止退出选择态的陈旧点击立刻把热键录入重新打开。
+        if (Environment.TickCount - _lastPickingExitTick < 150) return;
+        PickingActive = true;
+        PickingKind = PickKind.SetCloseKey;
+        _dualFirstPick = null;
+        PickingPromptText = _config.IndependentClose.HasKey
+            ? "请选择独立关闭热键（左键键位 / 直接按键设置 · 右键原键位取消 · Esc 取消）"
+            : "请选择独立关闭热键（左键键位 / 直接按键设置 · Esc 取消）";
+        HintText = "正在录入独立关闭热键：左键点击左侧键位，或直接按下键盘按键（Esc 取消）";
+        AddLog("开始设置独立关闭热键：左键点击左侧键位或直接按键完成设置，右键已设置的键位取消（Esc 取消）。");
+    }
+
     /// <summary>退出选择态（方案管理模式 / 总开关键录入：完成录入，或偶数态下 Esc / 空白处 / 退出按钮）。</summary>
     public void CancelPicking()
     {
@@ -533,6 +561,11 @@ public sealed partial class MainViewModel
         if (ProfileCycleSource is { } ck && ck.Equals(source))
         {
             reason = $"[{InputNameMapper.GetSourceName(source)}] 已被切换方案热键占用，不能录入为双宏键，请重选。";
+            return false;
+        }
+        if (IndependentCloseSource is { } xk && xk.Equals(source))
+        {
+            reason = $"[{InputNameMapper.GetSourceName(source)}] 已被独立关闭热键占用，不能录入为双宏键，请重选。";
             return false;
         }
         if (firstKey is not null && firstKey.Equals(source))
@@ -662,6 +695,15 @@ public sealed partial class MainViewModel
             return;
         }
 
+        // 独立关闭热键录入：仅支持键盘键；冲突检测与占用校验由 SetIndependentCloseKey 负责。
+        if (kind == PickKind.SetCloseKey)
+        {
+            CancelPicking();
+            if (source.Kind == InputKind.Keyboard) SetIndependentCloseKey(source);
+            else AddLog("独立关闭热键仅支持键盘键（鼠标 / 滚轮不可用）。");
+            return;
+        }
+
         // 双宏分区：两步成对录入（暂存 / 成对落盘 / 模式保持交给 CompleteDualPick）。
         if (_pickingSection == ToggleSection.Dual)
         {
@@ -686,6 +728,11 @@ public sealed partial class MainViewModel
         if (ProfileCycleSource is { } ck && ck.Equals(source))
         {
             AddLog($"[{InputNameMapper.GetSourceName(source)}] 已被切换方案热键占用，不能录入为连发键。");
+            return;
+        }
+        if (IndependentCloseSource is { } xk && xk.Equals(source))
+        {
+            AddLog($"[{InputNameMapper.GetSourceName(source)}] 已被独立关闭热键占用，不能录入为连发键。");
             return;
         }
         if (IsDualPartnerUsed(source))
@@ -751,6 +798,21 @@ public sealed partial class MainViewModel
     /// </summary>
     public void RemovePickAt(InputSource source)
     {
+        // 独立关闭热键录入：右键原键位取消恢复空键位（单次操作完成即退出）。
+        if (PickingKind == PickKind.SetCloseKey)
+        {
+            if (IndependentCloseSource is { } closeKey && closeKey.Equals(source))
+            {
+                CancelPicking();
+                SetIndependentCloseKey(null);
+            }
+            else
+            {
+                AddLog($"[{InputNameMapper.GetSourceName(source)}] 不是当前设置的独立关闭热键，右键原键位才可取消。");
+            }
+            return;
+        }
+
         // 切换方案热键录入：右键原键位取消恢复缺省（单次操作完成即退出）。
         if (PickingKind == PickKind.SetCycleKey)
         {
@@ -976,6 +1038,12 @@ public sealed partial class MainViewModel
                 ? InputNameMapper.GetKeyName(imported.ProfileCycle.VirtualKey, imported.ProfileCycle.Extended)
                 : "未设置";
             OnPropertyChanged(nameof(ProfileCycleSource));
+            // 独立关闭热键随导入配置还原（按钮显示名 + 运行期热键源同步）。
+            CloseKeyText = imported.IndependentClose.HasKey
+                ? InputNameMapper.GetKeyName(imported.IndependentClose.VirtualKey, imported.IndependentClose.Extended)
+                : "未设置";
+            OnPropertyChanged(nameof(IndependentCloseSource));
+            OnPropertyChanged(nameof(HasIndependentCloseKey));
             SoundVolume = Compat.Clamp(imported.SoundVolume, 0, 100);
             // 主题语音方案随导入配置还原（ApplyAppearance 已按当前档位主题整套装载，文件缺失留痕）。
             // 键盘注入模式随配置同步（导入 / 导出；旧配置回退 UseScanCodes 语义）。
@@ -992,7 +1060,7 @@ public sealed partial class MainViewModel
             OnPropertyChanged(nameof(GlobalSwitchSource));
             MigrateLegacySchemes();
             RefreshAllButtons();
-            UpdateMasterKeyHighlight();
+            UpdateHotkeyHighlight();
             RefreshSchemeList();
             ApplyConfigToScheduler();
             SyncVisualizerRegistry();

@@ -76,6 +76,18 @@
                     <Setter TargetName="IconLabel" Property="Foreground" Value="White"/>
                     <Setter TargetName="NameLabel" Property="Foreground" Value="White"/>
                 </DataTrigger>
+                <!-- 切换方案热键 / 独立关闭热键：中灰底（HotkeyAuxBg）——与总开关键的近黑底
+                     作灰度区分，一眼看出该键位已被其它热键占用；改键 / 取消后自动刷新 -->
+                <DataTrigger Binding="{Binding IsCycleKey}" Value="True">
+                    <Setter TargetName="Root" Property="Background" Value="{DynamicResource HotkeyAuxBg}"/>
+                    <Setter TargetName="IconLabel" Property="Foreground" Value="White"/>
+                    <Setter TargetName="NameLabel" Property="Foreground" Value="White"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsCloseKey}" Value="True">
+                    <Setter TargetName="Root" Property="Background" Value="{DynamicResource HotkeyAuxBg}"/>
+                    <Setter TargetName="IconLabel" Property="Foreground" Value="White"/>
+                    <Setter TargetName="NameLabel" Property="Foreground" Value="White"/>
+                </DataTrigger>
                 <!-- 键位录入选择态：全部图块半透明 + 手型光标 -->
                 <DataTrigger Binding="{Binding DataContext.PickingActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
                     <Setter TargetName="Root" Property="Opacity" Value="0.45"/>
@@ -723,7 +735,46 @@
                         </Grid>
                     </Button>
                 </StackPanel>
-                <!-- 右二：全局开关（热键录入，自右面板首行搬入）。
+                <!-- 右二：独立关闭热键（Dock=Right 声明在全局开关热键设置之前 → 落于其右侧，
+                     即"全局开关热键设置"之后的下一项）。
+                     默认**空键位**（未设置）：此时全局开关热键统一负责开启 / 关闭；
+                     设置后全局开关热键**只负责开启**，关闭统一交给本键；
+                     录入时右键已设置的键位即可取消，回归空键位恢复单键启停。
+                     悬停说明经 MouseEnter 显示于左下注释区（OnBottomBarCommentEnter） -->
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"
+                            x:Name="CloseKeySettingPanel"
+                            MouseEnter="OnBottomBarCommentEnter" MouseLeave="OnCommentMouseLeave">
+                    <TextBlock Text="独立关闭热键：" VerticalAlignment="Center" FontSize="11"
+                               Foreground="{DynamicResource ThemeFg}"/>
+                    <Button Height="26" MinWidth="34" Padding="4,0" Margin="0,0,8,0"
+                            Command="{Binding SetCloseKeyPickingCommand}">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
+                                <!-- 配色与全局开关 / 切换方案热键按钮同源（HotkeySetting* 随主题注入） -->
+                                <Setter Property="Background" Value="{DynamicResource HotkeySettingBg}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource HotkeySettingFg}"/>
+                                <Setter Property="BorderBrush" Value="{DynamicResource HotkeySettingBorder}"/>
+                                <Setter Property="Content" Value="{Binding CloseKeyText}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding PickingKind}" Value="SetCloseKey">
+                                        <Setter Property="Content" Value="录入中…"/>
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding PickingKind}" Value="AddScheme">
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding PickingKind}" Value="SetMasterKey">
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding PickingKind}" Value="SetCycleKey">
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </StackPanel>
+                <!-- 右三：全局开关（热键录入，自右面板首行搬入）。
                      悬停说明不在 Tooltip：经 MouseEnter 显示于左下注释区（OnBottomBarCommentEnter） -->
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"
                             x:Name="MasterKeySettingPanel"
@@ -747,12 +798,18 @@
                                     <DataTrigger Binding="{Binding PickingKind}" Value="AddScheme">
                                         <Setter Property="IsEnabled" Value="False"/>
                                     </DataTrigger>
+                                    <DataTrigger Binding="{Binding PickingKind}" Value="SetCycleKey">
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding PickingKind}" Value="SetCloseKey">
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
                                 </Style.Triggers>
                             </Style>
                         </Button.Style>
                     </Button>
                 </StackPanel>
-                <!-- 右三：切换方案设置（Dock=Right 声明在全局开关热键设置之后 → 落于其左侧）。
+                <!-- 右四：切换方案设置（Dock=Right 声明在全局开关热键设置之后 → 落于其左侧）。
                      按钮缺省显示"未设置"；点击进入录入：左键左侧键位 / 直接按键设置，
                      右键已设置键位取消恢复缺省；设置后按下该键按顺序切换非空方案档位。
                      悬停 / 录入时经 MouseEnter/Leave 在注释区显示说明（按钮原有 Tooltip 文案已并入
@@ -779,6 +836,9 @@
                                         <Setter Property="IsEnabled" Value="False"/>
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding PickingKind}" Value="SetMasterKey">
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding PickingKind}" Value="SetCloseKey">
                                         <Setter Property="IsEnabled" Value="False"/>
                                     </DataTrigger>
                                 </Style.Triggers>

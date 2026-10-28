@@ -259,6 +259,31 @@ public sealed class ProfileCycleConfig
 }
 
 /// <summary>
+/// 独立关闭热键配置（底栏「独立关闭热键」项）：默认**空键位**（未设置）。
+/// 设置后全局开关热键只负责开启，关闭改由本键负责；清除（右键已设置键位）后
+/// 回到"全局开关热键统一键位启停"的缺省语义。
+/// </summary>
+public sealed class IndependentCloseConfig
+{
+    /// <summary>是否已设置独立关闭热键（默认 false = 空键位，全局开关热键仍为统一启停）。</summary>
+    public bool HasKey { get; set; }
+
+    /// <summary>独立关闭热键虚拟键码（HasKey = true 时有效）。</summary>
+    public int VirtualKey { get; set; }
+
+    /// <summary>独立关闭热键扩展键标志。</summary>
+    public bool Extended { get; set; }
+
+    /// <summary>创建当前实例的副本。</summary>
+    public IndependentCloseConfig Clone() => new()
+    {
+        HasKey = HasKey,
+        VirtualKey = VirtualKey,
+        Extended = Extended
+    };
+}
+
+/// <summary>
 /// 主题语音方案配置（每个主题各一套；值为语音目录下的文件名，空 = 该主题的配套默认音频，
 /// 见 SectThemes.CueFiles）。导入的音频会复制到 %APPDATA%\TheCelestialDiviner\sounds，
 /// 因此原文件删除后仍可用。
@@ -299,8 +324,9 @@ public sealed class AppConfig
     /// v15：方案档位自定义名称；v16：方案档位外观定制（主题绑定 + 默认主题自定义，取代全局门派主题）；
     /// v17：主题语音方案（提示音按主题绑定，随主题切换；取代全局 CustomSounds）；
     /// v18：键帽 Web 叠加源（OBS 浏览器源透明键帽）；
-    /// v19：桌面悬浮层静音开关强制回默认关闭（历史值只由开发构建自动写入）。</summary>
-    public const int CurrentVersion = 19;
+    /// v19：桌面悬浮层静音开关强制回默认关闭（历史值只由开发构建自动写入）；
+    /// v20：独立关闭热键（默认未设置）。</summary>
+    public const int CurrentVersion = 20;
 
     /// <summary>配置文件版本号（预留迁移能力）。</summary>
     public int Version { get; set; } = CurrentVersion;
@@ -427,6 +453,9 @@ public sealed class AppConfig
     /// <summary>切换方案热键配置（按下按顺序切换非空方案档位；与全局开关键、连发方案互斥）。</summary>
     public ProfileCycleConfig ProfileCycle { get; set; } = new();
 
+    /// <summary>独立关闭热键配置（默认未设置；设置后全局开关热键只负责开启，关闭由本键负责）。</summary>
+    public IndependentCloseConfig IndependentClose { get; set; } = new();
+
     /// <summary>
     /// 自定义提示音（v13~v16 的全局选择）。v17 起语音方案按主题存储于 <see cref="ThemeSounds"/>，
     /// 本字段运行期不再读取，保留仅为旧版程序读档兼容（降级场景仍可用）。
@@ -501,6 +530,7 @@ public sealed class AppConfig
         Schemes = Schemes.ToDictionary(p => p.Key, p => p.Value.Clone(), StringComparer.Ordinal),
         GlobalSwitch = GlobalSwitch.Clone(),
         ProfileCycle = ProfileCycle.Clone(),
+        IndependentClose = IndependentClose.Clone(),
         CustomSounds = CustomSounds.Clone(),
         ThemeSounds = ThemeSounds.Select(t => t.Clone()).ToList(),
         SoundVolume = SoundVolume,

@@ -32,6 +32,8 @@ public sealed class KeySourceViewModel : INotifyPropertyChanged
     private SourceRegistration _registration = SourceRegistration.Empty;
     private bool _globallyDimmed;
     private bool _isMasterKey;
+    private bool _isCycleKey;
+    private bool _isCloseKey;
     private Brush _background = s_emptyBrush;
     private Brush _foreground = s_emptyForeground;
 
@@ -169,11 +171,25 @@ public sealed class KeySourceViewModel : INotifyPropertyChanged
         set => Set(ref _globallyDimmed, value);
     }
 
-    /// <summary>是否为全局总开关键（键盘 / 鼠标区标绿高亮）。</summary>
+    /// <summary>是否为全局总开关键（键盘 / 鼠标区标黑高亮）。</summary>
     public bool IsMasterKey
     {
         get => _isMasterKey;
         set => Set(ref _isMasterKey, value);
+    }
+
+    /// <summary>是否为切换方案热键（键鼠区标灰高亮：与总开关键的黑底作灰度区分，提示该键位已被占用）。</summary>
+    public bool IsCycleKey
+    {
+        get => _isCycleKey;
+        set => Set(ref _isCycleKey, value);
+    }
+
+    /// <summary>是否为独立关闭热键（键鼠区标灰高亮：同切换方案热键，与总开关键的黑底作灰度区分）。</summary>
+    public bool IsCloseKey
+    {
+        get => _isCloseKey;
+        set => Set(ref _isCloseKey, value);
     }
 
     /// <summary>控件背景（跟随注册状态与主题）。?。</summary>

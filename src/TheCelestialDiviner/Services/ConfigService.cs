@@ -130,6 +130,8 @@ public sealed class ConfigService
         //（长度 / 空值由 AppConfig.NormalizeProfileNames 归一化，加载与导入均调用）。
         // v16：方案档位外观定制（主题绑定 + 默认主题自定义）——字段有默认值（4 套「默认主题」预设），
         // 无需迁移动作；旧的全局 SectTheme 字段被 per-profile 外观取代（旧 JSON 里的该字段被忽略）。
+        // v20：独立关闭热键——字段有默认值（HasKey = false = 空键位，全局开关热键仍统一启停），
+        // 无需迁移动作；已设置过的值随 JSON 反序列化还原。
 
         config.Version = AppConfig.CurrentVersion;
         Logger.Info($"配置 v{fromVersion} 已迁移到 v{AppConfig.CurrentVersion}（总开关默认关闭、默认键 F9、开关模式分区、方案四档位、键位可视化）。" );
