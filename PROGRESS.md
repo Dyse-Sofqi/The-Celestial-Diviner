@@ -83,7 +83,16 @@
   3. **配置向后兼容**：`DriverAdvisorAnswered` / `PendingModeAfterReboot` 缺字段按默认处理，
      旧 `PendingDdAfterReboot` 仍兼容读取；DD 连发/时序/回环路径除兜底外无改动
 - ✅ 构建 Debug/Release 0 警告 0 错误；发布包 `bin\Release\net48-publish`（含 `interception\` 三文件）
-- ⚠️ 待办：打 zip + sha256、提交打标签（按以往发版流程）；25H2 机器上过一遍导引判定
+- 📦 发布包：`dist/TheCelestialDiviner-1.9.1-win64.zip`，23 个文件 / 1,953,283 B，
+  sha256 `dd72394f5568c7250c644360bcdf8ea23818641d43eaa2fcc0c68f41f928247f`
+  - 口径沿用 v1.9.0：**不含** DD 闭源驱动（dd63330.dll/.sys，用户首次使用按引导自动获取），
+    但**含** `interception\` 三文件（interception.dll + install-interception.exe + LGPL-3.0.txt）
+- 🔀 双端推送：Gitee 已推送（main `dd7e919..0064325` + tag `v1.9.1`）；
+  GitHub 本轮未推成 —— 本机经代理访问 github.com 的 **HTTPS POST 被 reset**（curl GET 正常），
+  而 `ssh.github.com:443` 通路可用，但本机公钥（SHA256:avxN9qfP…）未登记到 GitHub 账号，
+  走 SSH 也是 Permission denied(publickey)。待用户在 GitHub 添加该公钥后即可补推
+- ⚠️ 待办：25H2 机器上过一遍导引判定
+
 
 ## 待发 v1.9.1 · 驱动路线系统导引（按环境推荐该装哪条）
 
