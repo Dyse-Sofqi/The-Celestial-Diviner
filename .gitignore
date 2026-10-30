@@ -11,12 +11,18 @@ scratch_*/
 crashdumps/
 dist/
 
-# 本机 AI 助手的工作区数据（会话记忆等），不入库
+# 本机 AI 助手的工作区数据（会话记忆、任务产物），不入库
 .workbuddy-ai/
+.workbuddy/
 
 # DD 驱动为闭源第三方组件，不入库（请从 ddxoft 官网获取，见 drivers/README.md）
 drivers/dd63330.dll
 drivers/dd63330.sys
+
+# Interception（开源，LGPL 允许再分发）二进制不入库：发布包由 drivers/interception/ 带入，
+# 缺文件时程序回退官方 Release 下载。许可文本 LGPL-3.0.txt 入库。
+drivers/interception/*.dll
+drivers/interception/*.exe
 
 # 候选提示音：散装音频文件不入库（不集成进程序；见 audio/README.md）
 audio/*

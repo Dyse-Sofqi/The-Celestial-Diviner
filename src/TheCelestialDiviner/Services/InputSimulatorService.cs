@@ -23,9 +23,18 @@ public static class InputSimulatorService
     /// 不进入系统输入流、无 LLKHF_INJECTED 标记，可绕过基于注入标记的过滤；
     /// 仅对读取窗口消息的游戏有效），
     /// 3 = DD 虚拟驱动（经 ddxoft DD 虚拟设备注入，无 LLKHF_INJECTED 标记，
-    /// 对游戏表现为物理键盘；需 dd63330.dll + 管理员权限）。运行时热切换。
+    /// 对游戏表现为物理键盘；需 dd63330.dll + 管理员权限），
+    /// 4 = Interception 驱动（开源键盘类过滤驱动，同样无注入标记；
+    /// 需安装驱动并重启，与 DD 二选一）。运行时热切换。
     /// </summary>
     public static int KeyboardMode { get; set; }
+
+    /// <summary>
+    /// 当前是否为「物理级驱动注入」（3 = DD / 4 = Interception）：
+    /// 这两条路线的事件在系统层与物理按键同源（无注入标记、设备归因相同），
+    /// 低级钩子必须靠 <see cref="EchoGuard"/> 按注入时间线消除回环。
+    /// </summary>
+    public static bool IsPhysicalInjectionMode => KeyboardMode is 3 or 4;
 
     /// <summary>兼容旧配置字段：true 等价于 KeyboardMode = 1。</summary>
     public static bool UseScanCodes
@@ -39,6 +48,7 @@ public static class InputSimulatorService
     {
         if (KeyboardMode == 2) return PostKey(vk, up: false, extended);
         if (KeyboardMode == 3) return DdDriverService.SendKey(vk, down: true);
+        if (KeyboardMode == 4) return InterceptionDriverService.SendKey(vk, down: true, extended);
 
         // 兼容性策略：wVk 与 wScan 双字段同填。
         // DirectInput / RawInput 游戏读扫描码字段，普通程序读虚拟键码——双填两端都兼容。
@@ -67,6 +77,7 @@ public static class InputSimulatorService
     {
         if (KeyboardMode == 2) return PostKey(vk, up: true, extended);
         if (KeyboardMode == 3) return DdDriverService.SendKey(vk, down: false);
+        if (KeyboardMode == 4) return InterceptionDriverService.SendKey(vk, down: false, extended);
 
         // 同 KeyDown：wVk + wScan 双字段同填，扫描码模式下加 KEYEVENTF_SCANCODE。
         var input = new NativeMethods.INPUT

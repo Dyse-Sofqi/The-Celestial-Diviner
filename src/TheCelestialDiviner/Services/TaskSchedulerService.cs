@@ -71,7 +71,8 @@ public sealed class TaskSchedulerService
     private readonly object _gate = new();
     private readonly List<RunningTask> _tasks = new();
     private readonly Dictionary<InputSource, List<RunningTask>> _sourceMap = new();
-    private readonly HashSet<InputSource> _downSources = new();   // 物理按住中的输入源（防自动重复）
+    // 物理按住中的输入源 → 记录时刻（防自动重复；时刻用于丢失释放事件后的自愈）
+    private readonly Dictionary<InputSource, int> _downSources = new();
     private int _activeHoldCount;                                  // 正在连发的 Hold 任务数（Interlocked）
     private bool _masterEnabled = true;
     private bool _anyFiring;                                       // 上次聚合激活态（FiringChanged 去重）
@@ -178,11 +179,11 @@ public sealed class TaskSchedulerService
             // 防键盘自动重复：按住期间重复的 down 不再处理。
             if (source.Kind == InputKind.Keyboard)
             {
-                if (!_downSources.Add(source)) return;
+                if (!TryMarkDown(source)) return;
             }
             else if (source.Kind == InputKind.Mouse && source.Mouse is not (MouseInput.WheelUp or MouseInput.WheelDown))
             {
-                if (!_downSources.Add(source)) return;
+                if (!TryMarkDown(source)) return;
             }
 
             if (!_sourceMap.TryGetValue(source, out var tasks)) return;
@@ -226,6 +227,55 @@ public sealed class TaskSchedulerService
             // 逐键“按下/释放”日志已移除：战斗节奏下约 20 行/秒纯噪音（写盘在 UI/钩子
             // 线程同步执行、UI 日志面板随之刷屏）；任务启停状态变化已在 Activate / Deactivate 落日志。
             NotifyFiringChangedLocked();
+        }
+    }
+
+    /// <summary>
+    /// 按住状态自愈时间窗（毫秒）：系统自动重复的最长间隔（默认设置 500ms，
+    /// 最慢档约 1s 量级）远小于此值，所以超过它的旧记录必然是"释放事件丢了"。
+    /// </summary>
+    private const int StaleDownMs = 1500;
+
+    /// <summary>
+    /// 标记输入源为"按住中"，返回 false 表示这是自动重复、应忽略。
+    /// 释放事件一旦丢失（驱动模式切换、回环名额误吞、钩子被系统跳过），键会永远卡在
+    /// 按住状态，之后同键的按下全被当成重复 —— 外部表现就是"开关按一次停不下来，
+    /// 只能按全局开关"（全局停用会清空按住表）。所以旧记录超时即视为新按下。
+    /// </summary>
+    private bool TryMarkDown(InputSource source)
+    {
+        var now = Environment.TickCount;
+        if (_downSources.TryGetValue(source, out var stamp))
+        {
+            if (unchecked(now - stamp) < StaleDownMs) return false;   // 按住窗口内：自动重复，忽略
+
+            // 超过窗口只有两种可能：①释放事件丢了（要自愈）②用户一直按着，系统重复间隔本来就慢
+            // （最慢档约 1s）。用物理键状态区分 —— 还按着就继续当重复（刷新时刻），已经松开才自愈。
+            // 这一条保证「长按开关键」不会被误判成第二次按下（老用户升级后行为不变）。
+            if (source.Kind == InputKind.Keyboard &&
+                (NativeMethods.GetAsyncKeyState(source.VirtualKey) & 0x8000) != 0)
+            {
+                _downSources[source] = now;
+                return false;
+            }
+
+            OnLog($"输入源 [{InputNameMapper.GetSourceName(source)}] 的释放事件丢失，已自愈重置。");
+        }
+        _downSources[source] = now;
+        return true;
+    }
+
+    /// <summary>
+    /// 清空"按住中"状态（切换键盘注入模式时调用）：跨驱动切换后，
+    /// 旧驱动上留下的按住记录与回环名额都失去意义，留着只会让按键卡住。
+    /// </summary>
+    public void ResetInputState()
+    {
+        lock (_gate)
+        {
+            if (_downSources.Count == 0) return;
+            _downSources.Clear();
+            OnLog("已重置按键按住状态（注入模式切换）。");
         }
     }
 

@@ -54,6 +54,15 @@ public partial class App : Application
             return;
         }
 
+        // 关机 / 注销：系统会直接结束进程，来不及走 ExitApp。这里撤掉崩溃熔断标记，
+        // 否则每次正常关机都会被下次启动误判成"上次异常退出"，白白退回普通模式。
+        // 直接删标记而不走 DdDriverService.Shutdown()：后者要拿驱动锁，关机时不该被它拖住。
+        SessionEnding += (_, _) =>
+        {
+            try { DdCrashGuard.MarkCleanExit(); }
+            catch (Exception ex) { Logger.Warn($"关机时序清理 DD 会话标记失败：{ex.Message}"); }
+        };
+
         // 渲染模式：**不要**在进程级强制 SoftwareOnly。
         // 键帽悬浮层是 AllowsTransparency=True 的分层窗口，WPF 对它本身就是"离屏位图 +
         // UpdateLayeredWindow 上传"，与进程渲染模式无关——那条 0.5~3.9s 的 GPU 排队问题
@@ -68,6 +77,7 @@ public partial class App : Application
         //   --no-mouse-hook → 不安装 WH_MOUSE_LL（鼠标类方案不可用）
         //   --no-overlay    → 不创建键帽悬浮层（含渲染时钟激励器）
         //   --no-dd         → 不加载 DD 驱动（判断是否 DD 内核驱动引入拖动延迟）
+        //   --no-intercept  → 不加载 Interception 驱动（同上，针对第二条注入路线）
         var args = Environment.GetCommandLineArgs();
         if (args.Any(a => string.Equals(a, "--no-mouse-hook", StringComparison.OrdinalIgnoreCase)))
             InputHookService.SuppressMouseHook = true;
@@ -77,6 +87,8 @@ public partial class App : Application
             KeyVisualizerService.SuppressOverlay = true;
         if (args.Any(a => string.Equals(a, "--no-dd", StringComparison.OrdinalIgnoreCase)))
             DdDriverService.SuppressDriver = true;
+        if (args.Any(a => string.Equals(a, "--no-intercept", StringComparison.OrdinalIgnoreCase)))
+            InterceptionDriverService.SuppressDriver = true;
 
         // 渲染能力（一次性记录）：Tier 0 = 没有硬件加速（WPF 全程软件光栅化，拖动必然发涩）。
         // 混合显卡 / 4K / 远程桌面等环境容易落到 Tier 0，排查拖动问题时先看这一行。
@@ -341,7 +353,17 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        // 兜底二次清理（正常路径走 ExitApp）。
+        // 兜底二次清理（正常路径走 ExitApp）：
+        // 无论从哪里退出，都要撤掉 DD 崩溃熔断标记，否则下次启动会把这次正常退出
+        // 当成"异常退出"而退回普通模式。Shutdown 内部幂等。
+        try { DdDriverService.Shutdown(); }
+        catch (Exception ex) { Logger.Warn($"退出时序清理 DD 会话标记失败：{ex.Message}"); }
+
+        // Interception 上下文：释放设备句柄（不卸载驱动 —— 驱动是系统级类过滤驱动，
+        // 卸载要单独走官方安装器 /uninstall，退出程序不该动它）。
+        try { InterceptionDriverService.Shutdown(); }
+        catch (Exception ex) { Logger.Warn($"退出时序释放 Interception 上下文失败：{ex.Message}"); }
+
         _trayIcon?.Dispose();
         // 释放单实例互斥体（与 TryAcquire 同为 UI 线程，可安全 Release）。
         SingleInstanceGuard.Release();

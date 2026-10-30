@@ -319,10 +319,10 @@ public sealed class InputHookService : IDisposable
                             Logger.Warn($"键盘输入管线延迟 {latency}ms（vk=0x{info.vkCode:X2}, down={isDown}）。");
                         }
 
-                        // DD 键盘模式：注入回环与物理输入在系统层不可区分
+                        // 物理级驱动模式（DD / Interception）：注入回环与物理输入在系统层不可区分
                         // （无 INJECTED 标记、设备归因相同），按注入时间线消除回环，
                         // 防止任务目标键再触发注册源造成 Toggle 被回环关断 / Hold 被打断。
-                        if (InputSimulatorService.KeyboardMode == 3 &&
+                        if (InputSimulatorService.IsPhysicalInjectionMode &&
                             EchoGuard.TryConsume((int)info.vkCode, isDown, unchecked((int)info.time)))
                         {
                             return NativeMethods.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);

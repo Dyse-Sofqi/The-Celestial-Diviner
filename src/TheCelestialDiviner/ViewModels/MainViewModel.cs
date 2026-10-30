@@ -62,6 +62,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private bool _globalVisualEnabled = true;          // 键位可视化总开关（默认开启；关闭时仅禁用显示，各键开关状态保留）
     private int _keyboardMode; // 键盘注入模式：0 普通 / 1 扫描码 / 2 消息
     private bool _ddAutoActivate;   // DD 缺驱动自动回退后挂起：自动获取完成时升回 DD 模式（用户手动切换即取消）
+
+    /// <summary>本次启动因"崩溃熔断"把 DD 强制改回普通模式：用于在注释区给出可读说明。</summary>
+    private bool _ddCrashFallback;
     private string? _ddFetchStatus;  // DD 驱动获取进度提示（注释区展示；null = 无进行中/刚结束的提示）
     private readonly System.Windows.Threading.DispatcherTimer _ddStatusTimer = new(); // 获取状态提示自动消退
     // UI 线程卡顿探针：200ms 定时器，实际间隔明显超时即说明 UI 线程被占（点击 / 拖动会同时变迟钝）。
@@ -91,10 +94,17 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     public event Action<int>? KeyboardModeChanged;
 
     /// <summary>
-    /// DD 驱动引导获取确认请求（View 弹 Yes/No 框）：返回用户是否同意自动下载安装。
-    /// 由用户发起官方渠道下载，程序仅做下载器，不分发闭源驱动。
+    /// 驱动引导获取确认请求（View 弹 Yes/No 框）：返回用户是否同意自动下载安装。
+    /// 由用户发起官方渠道下载，程序仅做下载器（DD：闭源不分发；Interception：官方 LGPL 原版）。
     /// </summary>
     public event Func<string, bool>? DdDriverFetchConfirmRequested;
+
+    /// <summary>
+    /// 「选哪条驱动路线」导引请求（View 弹选择窗口）：
+    /// 返回 4 = Interception / 3 = DD / 0 = 暂用普通模式 / -1 = 直接关窗（等同于暂不）。
+    /// 只在从未做过导引时调用一次，见 <see cref="RunDriverAdvisorOnce"/>。
+    /// </summary>
+    public event Func<SystemDriverAdvisor.Advice, int>? DriverChoiceRequested;
 
     /// <summary>方案档位数量（①②③④）。</summary>
     public const int ProfileCount = AppConfig.ProfileCount;
@@ -306,6 +316,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             RequestDdDriverFetch();
             RefreshDdDriverState();   // 确认后 IsAutoFetchRunning 已置位 → 入口转「获取中…」并禁用
         });
+        // 双驱动路线第二条：Interception（开源、官方签名驱动）。安装后必须重启，
+        // 所以这里只负责"装好 + 提示重启"，不在安装后强行切模式（重启前切了也用不了）。
+        InstallInterceptionDriverCommand = RelayCommand.Create(RequestInterceptionInstall);
+        UninstallInterceptionDriverCommand = RelayCommand.Create(RequestInterceptionUninstall);
         SetKeycapSchemeCommand = new RelayCommand(o =>
         {
             if (o is string name) KeycapSchemeName = name;
@@ -355,22 +369,107 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         // 热键键位高亮（按钮创建后；总开关键黑底 / 切换方案与独立关闭热键灰底）。
         UpdateHotkeyHighlight();
 
+        // 崩溃熔断（必须早于模式决策）：上一次如果带着 DD 跑、且没干净收场——进程没走完退出时序，
+        // 或者退出后驱动才把野指针写出去把机器蓝了——这次强制退回普通模式。
+        // 不做的话每次启动都会自动再试一次 DD，表现就是"开一次蓝一次"。
+        var ddCrashedBefore = DdCrashGuard.TryDetectPreviousCrash(out var ddCrashDetail);
+
         // 键盘注入模式：默认 DD 驱动（物理级）；配置优先，越界回退默认。
         // DD 需 dd63330.dll + 管理员权限：缺失时先回退普通模式，窗口就绪后引导用户
         // 一键从官方渠道获取（DdDriverFetchConfirmRequested，用户发起下载），
         // 完成后自动升回 DD 模式。
-        _keyboardMode = _config.KeyboardMode is >= 0 and <= 3
+        // 4 = Interception（双驱动路线第二条）：需已安装驱动并重启过，缺失时只回退 + 提示，
+        // 不自动弹下载（它是用户显式选择的分支，装不装由「键盘注入」里的安装入口决定）。
+        _keyboardMode = _config.KeyboardMode is >= 0 and <= 4
             ? _config.KeyboardMode
             : 3;
+
+        // 「重启后自动切换」待办（3 = DD / 4 = Interception）：把"重启后还得记得再手动选一次"这步包办。
+        // 来源：①互斥弹窗里确认卸载 Interception（→3）；②首次导引里选了要装 Interception（→4）。
+        // 判据一律用 IsDriverPresent：/uninstall 只删注册项，驱动要到重启才摘掉，
+        // 那段窗口里 DriverInstalled 已是 false，但切过去依旧是"假状态"。
+        var pendingMode = _config.PendingModeAfterReboot;
+        if (pendingMode == 0 && _config.PendingDdAfterReboot) pendingMode = 3;   // 旧字段迁移
+        if (pendingMode is 3 or 4)
+        {
+            var keepPending = false;
+            var target = SystemDriverAdvisor.ModeLabel(pendingMode);
+            if (pendingMode == 3 && ddCrashedBefore)
+            {
+                Logger.Warn("待激活的 DD 已取消：上次运行疑似由 DD 驱动异常结束。");
+                FinishDdFetchStatus("上次未正常结束，已取消自动切到 DD；确认环境无碍后可手动选择。", 25);
+            }
+            else if (pendingMode == 3 && InterceptionDriverService.IsDriverPresent)
+            {
+                keepPending = true;   // 还没重启（或卸载没成）：保留待办，等真正重启后再生效
+                Logger.Warn("待激活的 DD 暂缓：Interception 驱动仍在系统里（卸载后需重启才摘得掉）。");
+                FinishDdFetchStatus("Interception 驱动仍在系统里：请重启电脑，重启后会自动切到 DD 驱动。", 25);
+            }
+            else if (pendingMode == 4 && !InterceptionDriverService.IsDriverPresent)
+            {
+                Logger.Warn("待激活的 Interception 已取消：重启后没检测到驱动（安装可能没成功）。");
+                FinishDdFetchStatus("没检测到 Interception 驱动，自动切换已取消；可在「键盘注入」里重新安装。", 25);
+            }
+            else
+            {
+                _keyboardMode = pendingMode;
+                _config.KeyboardMode = pendingMode;
+                Logger.Info($"按上次的请求自动切到 {target}（重启完成，环境已满足）。");
+                FinishDdFetchStatus($"已按上次的请求自动切到 {target}。", 10);
+            }
+            if (!keepPending)
+            {
+                _config.PendingModeAfterReboot = 0;
+                _config.PendingDdAfterReboot = false;
+                SaveConfig();
+            }
+        }
+
+        if (ddCrashedBefore && _keyboardMode == DdCrashGuard.DdKeyboardMode)
+        {
+            _keyboardMode = 0;
+            _ddAutoActivate = false;    // 不弹"获取驱动"引导：用户刚崩过，别再把他推回 DD
+            _ddCrashFallback = true;
+            _config.KeyboardMode = 0;   // 必须落盘：否则下次启动又会自动试 DD，等于没熔断
+            _config.UseScanCodes = false;
+            SaveConfig();
+            Logger.Warn($"崩溃熔断：{ddCrashDetail}；本次已退回普通模式，DD 驱动需用户手动重新选择。");
+        }
+        else if (ddCrashedBefore)
+        {
+            Logger.Info($"上次运行未干净收场（{ddCrashDetail}），但本次不使用 DD，无需熔断。");
+        }
+
+        if (_keyboardMode == 3 && DdDriverService.EnsureReady() && InterceptionDriverService.IsDriverPresent)
+        {
+            Logger.Warn("启动：Interception 驱动已安装，DD 注入预计无效（两者在键盘栈上冲突）。");
+            FinishDdFetchStatus("Interception 驱动已安装：DD 注入会失效，请先卸载它并重启再用 DD。", 30);
+        }
+
         if (_keyboardMode == 3 && !DdDriverService.EnsureReady())
         {
             _keyboardMode = 0;
             _ddAutoActivate = true;
             Logger.Warn($"DD 驱动未就绪，先以普通模式运行，待引导获取：{DdDriverService.LastError}");
         }
+        else if (_keyboardMode == 4 && !InterceptionDriverService.EnsureReady())
+        {
+            // Interception 不可用（未安装 / 装完没重启 / HVCI 拦下）：回退普通模式。
+            // 不做自动下载：用户当初是显式选了这条分支，缺什么由「键盘注入」里的安装入口补。
+            _keyboardMode = 0;
+            Logger.Warn($"Interception 驱动未就绪，先以普通模式运行：{InterceptionDriverService.LastError}");
+            FinishDdFetchStatus($"Interception 驱动不可用：{InterceptionDriverService.LastError}", 25);
+        }
         InputSimulatorService.KeyboardMode = _keyboardMode;
+        EchoGuard.Reset(RttSeedFor(_keyboardMode));   // 启动即清空陈旧名额 / 按路线设置往返窗口
+
+        // 运行快照（启动时间 + 实际模式）：下次启动据此判断"上次是不是带着 DD 跑的"。
+        DdCrashGuard.SaveRunState(_keyboardMode);
+
         DdDriverService.AutoFetchCompleted += OnDdAutoFetchCompleted;
         DdDriverService.AutoFetchProgress += OnDdAutoFetchProgress;
+        InterceptionDriverService.PrepareCompleted += OnInterceptionPrepareCompleted;
+        InterceptionDriverService.PrepareStateChanged += OnInterceptionPrepareProgress;
 
         // 获取状态提示自动消退（成功 8s / 硬性失败 20s）：注释区是公告的展示位，
         // 不该被一条过期的状态长期顶掉；重试期间不消退（状态本身会不断刷新）。
@@ -379,6 +478,15 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             _ddStatusTimer.Stop();
             DdFetchStatus = null;
         };
+
+        // 熔断提示：用户必须知道"为什么突然变回普通模式"，以及怎么把 DD 要回来，
+        // 否则只会觉得程序坏了。AddLog 的 Logs 集合界面上没有绑定，必须同步写注释区。
+        if (_ddCrashFallback)
+        {
+            AddLog("上次运行未正常结束，已自动退回普通模式（避免再次蓝屏）。"
+                   + "确认环境无碍后，可在「选项 → 键盘注入」重新选择 DD 驱动。");
+            FinishDdFetchStatus("上次未正常结束，已退回普通模式；DD 驱动暂停自动加载。", 30);
+        }
 
         // UI 线程卡顿探针：定时器实际间隔比设定值多出 >250ms 即记录（限频 2s）。
         // 只要这个数值大，就说明界面线程在等锁 / 等 GC / 渲染积压，而不是"输入没送到"。
@@ -446,8 +554,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             + "DD 驱动虽由作者免费提供，但它是闭源软件，我们无权将其打包分发，"
             + "所以这一步需要由您来完成：\n\n"
             + "是否自动从 DD 官方发布渠道下载并安装（约 3.7MB，仅首次）？\n"
-            + "确认后全程自动完成并启用 DD 驱动模式；官方渠道网络不稳定，"
-            + "下载失败会自动重试直至成功。\n\n"
+            + "确认后全程自动完成并启用 DD 驱动模式。\n\n"
+            + "⚠ 国内访问 GitHub 很不稳定：连续失败、卡住几分钟、连上又断，都是正常现象。\n"
+            + "   程序会自动重试（间隔逐次拉长，最长 60 秒一次），请让它自己跑完，不要关程序或反复点。\n\n"
             + "下载与重试进度显示在窗口左下的注释区，也可在「选项 → 键盘注入」查看获取状态。") == true;
         if (confirmed)
         {
@@ -493,6 +602,218 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             KeyboardMode = 3;
             FinishDdFetchStatus("DD 驱动已就绪：已启用 DD 驱动模式（物理级注入）。", 8);
         });
+    }
+
+    /// <summary>
+    /// Interception 安装进度回调（后台线程触发，封送 UI 线程）：与 DD 获取共用注释区状态位，
+    /// 「键盘注入」里的安装入口同步转「安装中…」。
+    /// </summary>
+    private void OnInterceptionPrepareProgress(InterceptionDriverService.PrepareProgress progress)
+    {
+        Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            DdFetchStatus = progress.Message;
+            RefreshInterceptionDriverState();
+            if (progress.Stage is InterceptionDriverService.PrepareStage.Succeeded
+                or InterceptionDriverService.PrepareStage.Failed)
+            {
+                ScheduleDdStatusClear(TimeSpan.FromSeconds(
+                    progress.Stage == InterceptionDriverService.PrepareStage.Succeeded ? 30 : 25));
+            }
+        });
+    }
+
+    /// <summary>
+    /// Interception 安装结束（后台线程）：重算菜单可用态。
+    /// 装好不等于可用——类过滤驱动要重启才挂上，所以这里只刷新状态、不切模式；
+    /// 用户重启后再次选择该模式即可（配置里已经是 4 的话，重启后会自动升回）。
+    /// </summary>
+    private void OnInterceptionPrepareCompleted()
+    {
+        Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            RefreshInterceptionDriverState();
+            if (!InterceptionDriverService.DriverInstalled) return;
+            if (InterceptionDriverService.State == InterceptionDriverService.DriverState.Ready)
+            {
+                FinishDdFetchStatus("Interception 驱动已就绪，可在「选项 → 键盘注入」里选择该模式。", 10);
+                return;
+            }
+            AddLog("Interception 驱动已安装：请重启电脑，重启后才能选择该注入模式。");
+            FinishDdFetchStatus("Interception 驱动已安装：请重启电脑后使用。", 30);
+        });
+    }
+
+    /// <summary>
+    /// 引导安装 Interception 驱动（UI 线程）：确认框说明来历（开源 / 官方 Release / LGPL）、
+    /// 代价（装完必须重启、与 DD 二选一、HVCI 可能拦下），确认后后台下载安装。
+    /// </summary>
+    private void RequestInterceptionInstall()
+    {
+        var confirmed = DdDriverFetchConfirmRequested?.Invoke(
+            "Interception 是一条开源的物理级注入路线（oblitum/Interception，LGPL 3.0），"
+            + "驱动由官方 GitHub Release 提供、带原作者数字签名，本程序只做原版下载与安装。\n\n"
+            + "代价与限制：\n"
+            + "· 它替换的是系统键盘类过滤驱动，**安装完成后必须重启电脑**才生效；\n"
+            + "· 与 DD 驱动二选一（同一时刻只用一条注入路线）；\n"
+            + "· 开启「内存完整性 / 内核隔离」的系统可能拒绝加载该驱动。\n\n"
+            + "官方文件已随程序内置（interception\\ 目录），安装不需要联网。\n\n"
+            + "是否现在安装？") == true;
+        if (confirmed)
+        {
+            InterceptionDriverService.StartPrepare();
+            RefreshInterceptionDriverState();
+            return;
+        }
+        AddLog("已取消安装 Interception 驱动。需要时可再次从「选项 → 键盘注入 → 安装 Interception 驱动…」发起。");
+    }
+
+    /// <summary>
+    /// 卸载 Interception 驱动（UI 线程）：确认 → 调官方安装器 /uninstall。
+    /// 卸载后如正在使用该模式，先退回普通模式（否则下一次注入直接失败，用户只会觉得"程序坏了"）。
+    /// </summary>
+    private void RequestInterceptionUninstall()
+    {
+        var confirmed = DdDriverFetchConfirmRequested?.Invoke(
+            "将调用官方安装器卸载 Interception 驱动（移除键盘类过滤驱动注册）。\n\n"
+            + "· 卸载后同样需要重启电脑才彻底生效；\n"
+            + "· 卸载后该注入模式不可用，可改回 DD 驱动或普通模式；\n"
+            + "· 只是不用了、不想重启的话，直接切到别的注入模式即可，不必卸载。\n\n"
+            + "确认卸载？") == true;
+        if (!confirmed) return;
+
+        if (KeyboardMode == 4) KeyboardMode = 0;   // 先退出该模式，避免卸载后注入全失败
+        var ok = InterceptionDriverService.Uninstall();
+        RefreshInterceptionDriverState();
+        if (ok)
+        {
+            AddLog("Interception 驱动已卸载：请重启电脑，重启后键盘类过滤驱动才会彻底移除。");
+            FinishDdFetchStatus("Interception 驱动已卸载：请重启电脑。", 30);
+            return;
+        }
+        var reason = InterceptionDriverService.LastError ?? "未知原因";
+        AddLog($"Interception 驱动卸载未完成（{reason}）。");
+        FinishDdFetchStatus($"Interception 驱动卸载未完成：{reason}", 25);
+    }
+
+    /// <summary>导引是否已在本会话跑过（防重复弹窗）。</summary>
+    private bool _driverAdvisorDone;
+
+    /// <summary>
+    /// 启动后的「驱动路线导引」：探测系统版本 / 内核完整性开关 / 键盘栈上已有的过滤驱动，
+    /// 判断这台机器适合哪条物理级注入路线，首次运行时给一次选择机会。
+    ///
+    /// 为什么需要：同一个版本号以下，DD 与 Interception 的可用性完全不同 ——
+    /// Win11 25H2 + 内核完整性开启时两条都用不了，25H2 关掉开关时 Interception 更稳、
+    /// DD 有 0x50 风险，24H2 及更早则是 DD 更省事（免重启）。让用户自己猜是没道理的。
+    ///
+    /// 只在两种情况弹窗：①从未做过导引（首次）；②当前配置的物理级路线在这台机器上明显不合适。
+    /// 其余情况只写日志 + 必要时注释区一句提示，不打扰。
+    /// </summary>
+    public void RunDriverAdvisorOnce()
+    {
+        if (_driverAdvisorDone) return;
+        _driverAdvisorDone = true;
+
+        SystemDriverAdvisor.Advice advice;
+        try { advice = SystemDriverAdvisor.Evaluate(); }
+        catch (Exception ex)
+        {
+            Logger.Warn($"驱动导引：环境探测失败（跳过导引，不影响使用）：{ex.Message}");
+            return;
+        }
+
+        Logger.Info("驱动导引：" + SystemDriverAdvisor.Describe(advice));
+        foreach (var warning in advice.Warnings) Logger.Warn("驱动导引：" + warning);
+
+        // 已经导引过：只在"当前路线在这台机器上明显不合适"时提示一句，不再弹窗。
+        if (_config.DriverAdvisorAnswered)
+        {
+            if (advice.NoPhysicalRouteAvailable && KeyboardMode is 3 or 4)
+            {
+                FinishDdFetchStatus($"当前环境不适合物理级注入（{advice.OsName} + 内核完整性开关）：建议改用普通模式。", 30);
+            }
+            else if (advice.Is25H2Plus && KeyboardMode == 3)
+            {
+                FinishDdFetchStatus("Win11 25H2 上 DD 驱动有蓝屏（0x50）风险，建议改用 Interception 驱动。", 30);
+            }
+            return;
+        }
+
+        // 当前用的是 普通 / 扫描码 / 消息 的老用户：他们没在追驱动，别拿「装哪个驱动」去打断。
+        // （新用户默认就是 3，会正常走到下面的判断；他们在菜单里随时能看到驱动入口。）
+        if (_keyboardMode is not (3 or 4))
+        {
+            Logger.Info($"驱动导引：当前为 {SystemDriverAdvisor.ModeLabel(_keyboardMode)}，不弹驱动选择窗口。");
+            return;
+        }
+
+        // 老用户零打扰（升级保护）：如果当前配置的路线本身就是这台机器的最优解、而且现在就能用，
+        // 就不弹窗、不改变任何行为 —— 典型场景：Win10 / 24H2 + DD 库在位 + 配置就是 DD，
+        // 升级前后表现必须完全一致，不能被一个「要不要换驱动」的弹窗打断。
+        if (advice.RecommendedMode == _keyboardMode && IsCurrentModeViable(advice))
+        {
+            _config.DriverAdvisorAnswered = true;
+            SaveConfig();
+            Logger.Info($"驱动导引：当前已是本机最优路线（{advice.RecommendedLabel}）且可用，跳过选择窗口。");
+            return;
+        }
+
+        // 首次导引：给一次选择。View 没接线（或用户直接关窗）时按暂不处理，绝不阻塞启动。
+        var choice = DriverChoiceRequested?.Invoke(advice) ?? -1;
+        _config.DriverAdvisorAnswered = true;
+        SaveConfig();
+        if (choice < 0)
+        {
+            AddLog($"驱动导引已跳过。本次建议：{advice.RecommendedLabel}"
+                   + (advice.Reasons.Count > 0 ? $"（{advice.Reasons[0]}）" : ""));
+            return;
+        }
+        ApplyDriverChoice(choice);
+    }
+
+    /// <summary>
+    /// 当前配置的注入路线在本次环境里是否可用（只查状态，不初始化设备）：
+    /// 用于判断「要不要弹导引窗口」——已经能正常用的老用户不该被打扰。
+    /// </summary>
+    private bool IsCurrentModeViable(SystemDriverAdvisor.Advice advice) => _keyboardMode switch
+    {
+        4 => advice.InterceptionPresent,
+        3 => DdDriverService.IsAvailable && !advice.InterceptionPresent,
+        _ => true   // 普通 / 扫描码 / 消息：不依赖任何驱动，永远可用
+    };
+
+    /// <summary>
+    /// 执行导引里选中的路线：能立刻用就直接切；需要装的先装，并登记"重启后自动切换"，
+    /// 免得用户装完忘了回头再选一次（重启后 DD / Interception 都不会自动生效）。
+    /// </summary>
+    private void ApplyDriverChoice(int mode)
+    {
+        switch (mode)
+        {
+            case 4 when InterceptionDriverService.IsAvailable:
+                KeyboardMode = 4;
+                break;
+            case 4:
+                _config.PendingModeAfterReboot = 4;
+                SaveConfig();
+                InterceptionDriverService.StartPrepare();
+                Logger.Info("驱动导引：选择 Interception，开始安装（装完重启自动切换）。");
+                AddLog("正在安装 Interception 驱动：装完请重启，重启后会自动切到 Interception 模式。");
+                FinishDdFetchStatus("正在安装 Interception 驱动：装完重启后自动切换。", 20);
+                break;
+            case 3 when DdDriverService.IsAvailable:
+                KeyboardMode = 3;
+                break;
+            case 3:
+                _ddAutoActivate = true;   // 装好即自动启用
+                RequestDdDriverFetch();
+                break;
+            default:
+                KeyboardMode = 0;
+                AddLog("驱动导引：已选择暂用普通模式（可随时在「选项 → 键盘注入」里改）。");
+                break;
+        }
     }
 
     // ---------- 集合 ----------
@@ -1494,23 +1815,33 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// 键盘注入模式：0 普通 SendInput / 1 扫描码 / 2 PostMessage 消息模式 / 3 DD 虚拟驱动。
-    /// 界面下拉框热切换，自动保存。消息模式仅目标窗口在前台时有效；
-    /// DD 模式需 dd63330.dll 与管理员权限，键盘注入无 LLKHF_INJECTED 标记。
+    /// 键盘注入模式：0 普通 SendInput / 1 扫描码 / 2 PostMessage 消息模式 / 3 DD 虚拟驱动 /
+    /// 4 Interception 驱动（开源）。界面菜单热切换，自动保存。
+    /// 消息模式仅目标窗口在前台时有效；3 与 4 都是物理级注入（无 LLKHF_INJECTED 标记），
+    /// 前者需 dd63330.dll、后者需已安装驱动并重启过，两者互斥使用。
     /// </summary>
     public int KeyboardMode
     {
         get => _keyboardMode;
         set
         {
-            if (value is < 0 or > 3) value = 0;
+            if (value is < 0 or > 4) value = 0;
             _ddAutoActivate = false;   // 用户手动切换：取消自动升回 DD 的挂起态
+            var previousMode = _keyboardMode;   // 放弃切换时回退用（如 DD 与 Interception 冲突且用户取消卸载）
             if (!Set(ref _keyboardMode, value)) return;
+            // 用户改主意选了别的模式：撤销"重启后自动切换"的待办，别在重启后强推某条路线。
+            if (value != _config.PendingModeAfterReboot && _config.PendingModeAfterReboot != 0)
+            {
+                var dropped = _config.PendingModeAfterReboot;
+                _config.PendingModeAfterReboot = 0;
+                Logger.Info($"已取消「重启后自动切到 {SystemDriverAdvisor.ModeLabel(dropped)}」：用户改选了其他注入模式。");
+            }
             // DD 模式：先确保虚拟驱动就绪；缺失则回退普通模式，并引导用户一键获取
             //（确认后后台下载安装，完成自动升回 DD 模式）。
             if (value == 3 && !DdDriverService.EnsureReady())
             {
                 var reason = DdDriverService.LastError ?? "未知原因";
+                Logger.Warn($"切换到 DD 驱动失败，回退普通模式：{reason}");
                 AddLog($"DD 驱动模式暂不可用（{reason}），已先回退普通模式。");
                 // 同一句原因送到注释区：手动放错文件（如放了 32 位版）时用户必须能看到为什么，
                 // AddLog 走的 Logs 集合界面上没有绑定，等于没提示。
@@ -1523,21 +1854,109 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
                 else
                     RequestDdDriverFetch();
             }
+            else if (value == 3 && InterceptionDriverService.IsDriverPresent)
+            {
+                // 实测结论（2026-10-30，本机）：装过 Interception 之后，DD 注入的按键
+                // 一个都进不了系统（探针：DD_btn(0)=1、DD_key 不停调，低级钩子 0 条），
+                // 与"有没有建立 Interception 上下文"无关 —— 是键盘类过滤驱动把 DD 虚拟设备
+                // 的注入路径挡住了。所以两个驱动不是"不同时用"，而是"装了就不能用另一个"。
+                Logger.Warn("DD 模式：检测到 Interception 驱动已安装，DD 注入完全无效（实测按键进不了系统）。");
+                var confirmed = DdDriverFetchConfirmRequested?.Invoke(
+                    "DD 驱动与已安装的 Interception 驱动互斥，两者不能同时使用：\n\n"
+                    + "· Interception 是键盘「类过滤驱动」，拦在所有键盘设备前面，会把 DD 虚拟键盘"
+                    + "注入的按键全部吞掉（实测：DD 初始化成功，但注入的按键一条都进不了系统）；\n"
+                    + "· 卸载后必须重启电脑，驱动才会真正从键盘栈上摘掉；重启之前 DD 依然无效。\n\n"
+                    + "是否现在卸载 Interception 驱动？（卸载后请重启，再回来选择 DD 驱动）") == true;
+
+                if (confirmed)
+                {
+                    var uninstalled = InterceptionDriverService.Uninstall();
+                    RefreshInterceptionDriverState();
+                    if (uninstalled)
+                    {
+                        // 置"待激活"：重启后启动流程会自动切到 DD，用户不必记得再点一次。
+                        // 之所以不现在切，是因为驱动重启前仍挂在键盘栈上，切了就是个"假 DD"。
+                        _config.PendingModeAfterReboot = 3;
+                        _config.PendingDdAfterReboot = false;
+                        SaveConfig();
+                        Logger.Info("已卸载 Interception 驱动（为切回 DD），已登记重启后自动切到 DD。");
+                        AddLog("Interception 驱动已卸载：请重启电脑，重启后会自动切到 DD 驱动（无需再手动选择）。");
+                        FinishDdFetchStatus("Interception 驱动已卸载：重启后会自动切到 DD 驱动，无需再手动选择。", 30);
+                    }
+                    else
+                    {
+                        var uninstallError = InterceptionDriverService.LastError ?? "未知原因";
+                        Logger.Warn($"卸载 Interception 驱动失败：{uninstallError}");
+                        AddLog($"卸载 Interception 驱动失败（{uninstallError}），DD 驱动仍不可用。");
+                        FinishDdFetchStatus($"卸载 Interception 驱动失败：{uninstallError}", 25);
+                    }
+                }
+                else
+                {
+                    AddLog("已取消：DD 与 Interception 互斥，需先卸载 Interception 并重启才能使用 DD。");
+                    FinishDdFetchStatus("DD 与 Interception 互斥：请先卸载 Interception 驱动并重启。", 25);
+                }
+
+                // 无论卸载成功与否，**重启前 DD 都发不出按键**（驱动还在内核里）：
+                // 这时切到 DD 只会得到"看着是 DD、实际什么都不发"的假状态，必须退回原模式。
+                value = previousMode;
+                Set(ref _keyboardMode, previousMode);
+                return;
+            }
+
+            // Interception 模式（双驱动路线第二条）：驱动未安装 / 没重启 / 被 HVCI 拦下时
+            // 一律回退普通模式并把具体原因送到注释区 —— 这一步不可用不是"程序坏了"，
+            // 而是"还差一个动作"，提示必须能让用户知道差的是哪一步。
+            if (value == 4 && !InterceptionDriverService.EnsureReady())
+            {
+                var reason = InterceptionDriverService.LastError ?? "未知原因";
+                Logger.Warn($"切换到 Interception 驱动失败，回退普通模式：{reason}");
+                AddLog($"Interception 驱动模式暂不可用（{reason}），已先回退普通模式。");
+                FinishDdFetchStatus($"Interception 驱动模式不可用：{reason}", 25);
+                value = 0;
+                Set(ref _keyboardMode, 0);
+                _ddAutoActivate = false;
+            }
+
+            // 注：切到 Interception 时不主动 Shutdown DD —— DD 的虚拟设备保持初始化是无害的（空闲），
+            // 而反复重入 DD_btn(0) 反而有把驱动内部状态搞坏的风险；切回 DD 时无需重新初始化即可用。
 
             // 同步到模拟器（连发线程每次注入时读取）。
             InputSimulatorService.KeyboardMode = value;
+            // 切换驱动路线必须同时清两样东西，否则第一条物理按键就会被旧状态吃掉：
+            // ① 回环名额（旧驱动登记的名额在新驱动的时间尺度上等于"永远匹配不上"）；
+            // ② 按住表（旧驱动上丢过释放事件的键会一直被视为按住，开关再也停不下来）。
+            EchoGuard.Reset(RttSeedFor(value));
+            _scheduler.ResetInputState();
             _config.KeyboardMode = value;
             _config.UseScanCodes = value == 1; // 旧字段语义保留（持久化兼容）
             SaveConfig();
+            // 刷新运行快照：用户切走 DD 之后再崩，不该算到 DD 头上。
+            DdCrashGuard.SaveRunState(value);
+            Logger.Info(value is 3 or 4
+                ? $"键盘注入已切换到 {(value == 3 ? "DD 驱动" : "Interception 驱动")}（回环窗口种子 {RttSeedFor(value)}ms）。"
+                : $"键盘注入已切换到模式 {value}。");
             AddLog(value switch
             {
                 1 => "键盘注入已切换：扫描码模式（DirectInput 兼容）。",
                 2 => "键盘注入已切换：消息模式（仅游戏前台时有效）。",
                 3 => $"键盘注入已切换：DD 驱动模式（{Path.GetFileName(DdDriverService.LoadedPath)}）。",
+                4 => $"键盘注入已切换：Interception 驱动模式（{Path.GetFileName(InterceptionDriverService.LoadedPath)}，开源）。",
                 _ => "键盘注入已切换：普通模式（SendInput）。"
             });
         }
     }
+
+    /// <summary>
+    /// 各注入路线的回环往返延迟种子（毫秒，实测值）：Interception ≈0~16ms、DD ≈170ms、
+    /// 普通注入不产生回环（用默认值即可）。EchoGuard 用它决定"多久没等到回环就判定丢失"。
+    /// </summary>
+    private static int RttSeedFor(int mode) => mode switch
+    {
+        3 => 170,   // DD：dd63330 虚拟设备固定上报节拍
+        4 => 20,    // Interception：探针实测 40Hz 连发下中位 0ms、最大 16ms
+        _ => 60
+    };
 
     /// <summary>
     /// DD 驱动是否可用（可加载的 x64 dd63330.dll 在位）：决定「键盘注入 → DD 驱动」能否点选。
@@ -1550,8 +1969,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     public bool IsDdDriverFetching => DdDriverService.IsAutoFetchRunning;
 
     /// <summary>
-    /// DD 驱动获取进度提示（注释区展示）：null = 无提示（平时 / 结束后自动消退）。
-    /// 下载百分比、第 N 次失败、几秒后重试、成功或终止，全部走这一条文本。
+    /// 驱动状态提示（注释区展示，DD 获取与 Interception 安装共用这一条通道）：
+    /// null = 无提示（平时 / 结束后自动消退）。下载百分比、第 N 次失败、几秒后重试、
+    /// 成功 / 需重启 / 终止，全部走这条文本。
     /// </summary>
     public string? DdFetchStatus
     {
@@ -1564,6 +1984,22 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     {
         OnPropertyChanged(nameof(IsDdDriverAvailable));
         OnPropertyChanged(nameof(IsDdDriverFetching));
+    }
+
+    /// <summary>
+    /// Interception 驱动是否可用（x64 库在位 + 键盘类上线了该过滤驱动）：决定菜单项能否点选。
+    /// 装完没重启也算可用 —— 点选时由 EnsureReady 给出"请重启"这种可执行原因。
+    /// </summary>
+    public bool IsInterceptionDriverAvailable => InterceptionDriverService.IsAvailable;
+
+    /// <summary>Interception 官方包是否正在下载 / 安装（安装入口据此转「安装中…」并禁用）。</summary>
+    public bool IsInterceptionDriverPreparing => InterceptionDriverService.IsPreparing;
+
+    /// <summary>重算 Interception 驱动可用 / 安装中状态并通知 UI。</summary>
+    public void RefreshInterceptionDriverState()
+    {
+        OnPropertyChanged(nameof(IsInterceptionDriverAvailable));
+        OnPropertyChanged(nameof(IsInterceptionDriverPreparing));
     }
 
     /// <summary>把当前配置应用到连发调度器（方案变更后调用）。</summary>
@@ -1696,11 +2132,20 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// <summary>更新日志窗口请求（View 接线后订阅；打开模态窗）。</summary>
     public event Action? ChangelogRequested;
 
-    /// <summary>底栏设置菜单：切换键盘注入模式（参数 = 模式索引 0 普通 / 1 扫描码 / 2 消息 / 3 DD 驱动）。</summary>
+    /// <summary>底栏设置菜单：切换键盘注入模式（参数 = 模式索引 0 普通 / 1 扫描码 / 2 消息 / 3 DD 驱动 / 4 Interception 驱动）。</summary>
     public ICommand SetKeyboardModeCommand { get; }
 
     /// <summary>底栏设置菜单：获取 DD 驱动（缺失时出现的下载安装入口，用户确认后从官方渠道获取）。</summary>
     public ICommand FetchDdDriverCommand { get; }
+
+    /// <summary>
+    /// 底栏设置菜单：安装 Interception 驱动（双驱动路线的第二条）。
+    /// 走官方 GitHub Release 原版包（LGPL，允许再分发），安装后必须重启。
+    /// </summary>
+    public ICommand InstallInterceptionDriverCommand { get; }
+
+    /// <summary>底栏设置菜单：卸载 Interception 驱动（调官方安装器 /uninstall，同样需重启）。</summary>
+    public ICommand UninstallInterceptionDriverCommand { get; }
 
     /// <summary>底栏设置菜单：切换键帽配色方案（参数 = KeycapSchemes.All 中的方案名）。</summary>
     public ICommand SetKeycapSchemeCommand { get; }

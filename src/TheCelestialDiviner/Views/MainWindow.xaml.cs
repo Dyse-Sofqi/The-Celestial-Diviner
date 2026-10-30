@@ -262,6 +262,10 @@ public partial class MainWindow : Window
         // 注释区公告：初渲染（内嵌兜底或已同步的远端缓存）；随 VM.NoticeContent 更新刷新。
         RenderDefaultComment(_vm.NoticeContent);
         SyncDdFetchStatus();   // 启动早期已产生的驱动获取 / 不可用提示（如有）补显示到注释区
+
+        // 驱动路线导引：等主窗渲染完再弹（Background 优先级），否则模态窗会压在一张白底主窗上。
+        Dispatcher.BeginInvoke(new Action(() => _vm.RunDriverAdvisorOnce()),
+            System.Windows.Threading.DispatcherPriority.Background);
         // 方案档位按钮：初值回填；后续随 VM.ActiveProfile 变更同步选中态。
         // 不用 IsChecked 双向绑定：同组互斥取消选中会破坏绑定（WPF 已知问题）。
         // 设置菜单选中标记：键盘注入 / 键帽配色 / 键帽可视化 随 VM 状态同步
@@ -300,6 +304,14 @@ public partial class MainWindow : Window
         _vm.ProfileCustomizeRequested += ShowProfileCustomize;
         // 更新日志：「选项 → 更新日志」→ 模态窗展示全部历史版本（内嵌 CHANGELOG.md）。
         _vm.ChangelogRequested += ShowChangelog;
+        // 驱动路线导引：系统版本 / 内核完整性 / 键盘栈冲突探测后的首次选择窗口
+        //（返回 4 = Interception、3 = DD、0 = 暂用普通、-1 = 关窗；决策与落地都在 VM 里）
+        _vm.DriverChoiceRequested += advice =>
+        {
+            var dialog = new DriverChoiceDialog(advice) { Owner = this };
+            dialog.ShowDialog();
+            return dialog.Choice;
+        };
 
         // 钩子事件 → 钩子线程直通处理：连发启停路径（调度器，自身加锁线程安全）不再
         // 排队等 UI 线程，高负载下松键即停；仅 UI 动作（总开关 / 档位切换 / 键位录入）
@@ -331,9 +343,10 @@ public partial class MainWindow : Window
             MessageBox.Show(this, message, title, MessageBoxButton.OK);
         _vm.UpdateRestartRequested += () => _app.ExitForUpdateRestart();
 
-        // DD 驱动引导获取：确认框（用户发起官方渠道下载，程序只做下载器不分发闭源驱动）。
+        // 驱动引导获取 / 安装：确认框（用户发起，程序只做下载器；DD 为闭源不分发，
+        // Interception 为官方 LGPL 原版）。两条路线共用同一个 Yes/No 通道，按内容区分。
         _vm.DdDriverFetchConfirmRequested += message =>
-            MessageBox.Show(this, message, "DD 驱动 — 衍天高手",
+            MessageBox.Show(this, message, "驱动切换 — 衍天高手",
                     MessageBoxButton.YesNo, MessageBoxImage.Question)
             == MessageBoxResult.Yes;
 
@@ -531,8 +544,12 @@ public partial class MainWindow : Window
     private static readonly Dictionary<string, string> MenuComments = new()
     {
         ["方案定制"] = "方案定制：给四个方案档位命名，并为每个档位绑定主题（默认主题 / 衍天高手 / 莫问高手）；绑定「默认主题」时还可定制应用图标、应用名（窗口名，版本号不变）、键帽配色与开关 / 按压 / 双宏三种配色。切换档位即整套换肤。",
-        ["键盘注入"] = "游戏内键盘连发不生效时逐个尝试：扫描码模式 → 消息模式 → DD 驱动模式。消息模式仅游戏在前台时有效；DD 驱动模式为物理级注入（需 dd63330.dll + 管理员权限）。未检测到 DD 驱动时该项灰显不可选，用下方「获取 DD 驱动…」安装后自动可选。",
+        ["键盘注入"] = "游戏内键盘连发不生效时逐个尝试：扫描码模式 → 消息模式 → 物理级（DD 驱动 / Interception）。消息模式仅游戏在前台时有效；两条物理级路线二选一：DD 需 dd63330.dll + 管理员权限、免重启，Interception 为开源驱动、装完需重启。对应驱动不可用时该项灰显，用下方安装 / 获取入口处理。",
         ["获取 DD 驱动…"] = "从 DD 官方发布渠道下载并安装 dd63330.dll（约 3.7MB，仅首次）：确认后全程自动（下载 → 解包 → 安装），官方渠道网络不稳定时会自动重试直至成功；装好后自动启用 DD 驱动模式。程序只做下载器，不二次分发闭源驱动。",
+        ["Interception 驱动（物理级 / 开源）"] = "第二条物理级注入路线：Interception（oblitum/Interception，LGPL 3.0）。驱动为系统键盘类过滤驱动，注入事件无“模拟按键”标记；代价是安装后必须重启，且开启内存完整性（HVCI）时可能被拒绝加载。注意：它装上后会挡住 DD 的虚拟设备注入（实测 DD 按键进不了系统），因此要回 DD 必须先卸载它并重启——这不是“同时只用一条”的问题，而是两者在系统键盘栈上互斥。",
+        ["DD 驱动（物理级）"] = "DD 虚拟设备注入（闭源，需 dd63330.dll + 管理员权限），免重启、游戏兼容性最强。若已安装 Interception 驱动，DD 注入会完全无效（键盘类过滤驱动冲突）：点选时会弹窗询问，确认后自动卸载 Interception 驱动，然后请重启电脑再选 DD。",
+        ["安装 Interception 驱动…"] = "Interception v1.0.1 官方原版文件已随程序内置（interception 目录，LGPL 允许再分发），安装无需联网：校验 interception.dll 指纹后调用官方安装器安装（不修改、不重签驱动）。装完必须重启电脑；随包文件缺失时会自动改走官方 Release 下载。",
+        ["卸载 Interception 驱动…"] = "调用官方安装器 /uninstall 移除键盘类过滤驱动注册（同样需要重启才彻底生效）。卸载后该注入模式不可用，可随时改回 DD 或普通模式。",
         ["键帽配色"] = "可视化键帽配色方案（复刻自 keyviz 预设），切换实时生效并落盘。",
         ["键帽可视化"] = "键帽可视化方案：全部 = 所有键位；修饰键和自定义键 = 修饰键与方案内键位；自定义键 = 仅方案内键位（均受单键开关约束）。",
         ["导入配置"] = "从 JSON 文件导入配置：整份配置（方案档位 + 热键 + 各项设置）被覆盖并立即生效，用于恢复备份或使用他人分享的方案。",
@@ -837,10 +854,12 @@ public partial class MainWindow : Window
     }
 
     /// <summary>设置菜单任一级展开：子项容器此时已生成，补同步 ● 选中标记；
-    /// 同时重算 DD 驱动可用态（用户可能刚手动把 dd63330.dll 放进程序目录）。</summary>
+    /// 同时重算两条驱动路线的可用态（用户可能刚手动把 dd63330.dll / interception.dll
+    /// 放进程序目录，或刚装完 Interception 还没重启）。</summary>
     private void OnSettingsMenuSubmenuOpened(object sender, RoutedEventArgs e)
     {
         _vm.RefreshDdDriverState();
+        _vm.RefreshInterceptionDriverState();
         SyncSettingsMenu();
     }
 

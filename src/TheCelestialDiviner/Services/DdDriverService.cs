@@ -2,7 +2,10 @@ using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
+using Microsoft.Win32;
 using TheCelestialDiviner.Helpers;
 
 namespace TheCelestialDiviner.Services;
@@ -101,6 +104,26 @@ public static class DdDriverService
     private const int ERROR_SERVICE_MARKED_FOR_DELETE = 1072;
     private const uint SERVICE_NO_CHANGE = 0xFFFFFFFF;
 
+    /// <summary>内核驱动服务名（DD 官方固定，且为全局单例）。</summary>
+    private const string DriverServiceName = "dd63330";
+
+    /// <summary>
+    /// DD_btn(0) 单进程最大调用次数。它做的是"重建虚拟设备"的重操作，失败后反复重入
+    /// 有把驱动内部状态搞坏的风险（0x50 的典型诱因）。曾经 5 次递增退避，实测的瞬时失败
+    /// （免费版在线认证抖动、上一个会话被强杀后的 PnP 重建）在等一次之后基本都能过，
+    /// 故收敛为 2 次。要严格只试一次，把这个常量改成 1 即可。
+    /// </summary>
+    private const int DdInitMaxAttempts = 2;
+
+    /// <summary>两次 DD_btn(0) 之间的等待（覆盖虚拟设备 PnP 重建的常见耗时）。</summary>
+    private const int DdInitRetryDelayMs = 900;
+
+    /// <summary>驱动身份不一致时的统一提示（UI 注释区 / LastError 展示）。</summary>
+    private const string IdentityRejectedMessage =
+        "系统中已加载的 dd63330 驱动与程序自带的不是同一份（常见于换过安装目录、或装过旧版本 / 其他软件）。"
+        + "为避免版本错位导致蓝屏，本次运行不启用 DD 驱动：请重启电脑后重试，"
+        + "重启后残留的服务项会按当前版本重建。";
+
     // ---------- 状态 ----------
 
     private static readonly object Gate = new();
@@ -142,6 +165,12 @@ public static class DdDriverService
 
     private static bool _initialized;
 
+    /// <summary>
+    /// 本次进程已因"驱动身份不一致"主动放弃 DD。同会话内不再重试：
+    /// 服务项虽已标记删除，内核里跑的仍是旧驱动，再调 DD_btn 就是拿新 DLL 去驱动旧 sys。
+    /// </summary>
+    private static bool _driverIdentityRejected;
+
     /// <summary>最近一次初始化失败的原因（供 UI 日志展示）。</summary>
     public static string? LastError { get; private set; }
 
@@ -167,9 +196,21 @@ public static class DdDriverService
             LastError = "诊断模式：已通过 --no-dd 禁用 DD 驱动";
             return false;
         }
+
+        // 崩溃熔断的"正在使用 DD"标记，必须写在初始化之前：万一初始化本身把机器蓝屏了，
+        // 下次启动才看得出"上次是带着 DD 挂掉的"（见 DdCrashGuard）。
+        DdCrashGuard.MarkSessionInUse();
+
         lock (Gate)
         {
             if (_ddKey is not null && _initialized) return true;
+
+            if (_driverIdentityRejected)
+            {
+                LastError = IdentityRejectedMessage;
+                return false;
+            }
+
             LastError = null;
 
             var path = ProbeDll(out var wrongArch);
@@ -212,20 +253,24 @@ public static class DdDriverService
             // DD_btn(0)：初始化虚拟设备。返回 1 = 成功；0/-1 = 失败。
             // 实测存在瞬时失败：免费版加载时需在线认证（网络抖动），且前一个
             // 会话被强制结束后虚拟设备 PnP 重建期间（数秒）调用会返回 -1。
-            // 因此带退避重试数次，仍失败才判定不可用。
-            const int maxAttempts = 5;
+            // 重试上限见 DdInitMaxAttempts：不再 5 次递增退避，避免反复重入把驱动状态搞坏。
             var ret = 0;
             var seh = false;
-            EnsureKernelService();
+            if (!EnsureKernelService())
+            {
+                // 服务里跑着来路不明的旧驱动：这次连 DD_btn 都不能调，直接把 DLL 卸掉。
+                FreeAll();
+                return false;
+            }
             Logger.Info("正在初始化 DD 虚拟设备（DD_btn(0)）...");
-            for (var attempt = 1; attempt <= maxAttempts; attempt++)
+            for (var attempt = 1; attempt <= DdInitMaxAttempts; attempt++)
             {
                 ret = SafeCall(_ddBtn, 0, out seh);
                 if (!seh && ret == 1) break;
-                if (attempt < maxAttempts)
+                if (attempt < DdInitMaxAttempts)
                 {
-                    Logger.Warn($"DD 虚拟设备初始化第 {attempt}/{maxAttempts} 次失败（ret={ret}），{400 * attempt}ms 后重试。");
-                    Thread.Sleep(400 * attempt);
+                    Logger.Warn($"DD 虚拟设备初始化第 {attempt}/{DdInitMaxAttempts} 次失败（ret={ret}），{DdInitRetryDelayMs}ms 后重试。");
+                    Thread.Sleep(DdInitRetryDelayMs);
                 }
             }
             if (seh || ret != 1)
@@ -254,62 +299,117 @@ public static class DdDriverService
     /// DD 的安装例程是"释放 sys 到 %TEMP% → CreateServiceW → StartService"，
     /// 受安全软件拦截（释放文件被查杀）或旧服务"标记删除"未完成时
     /// 会间歇性失败，并弹出"驱动安装错误"模态框阻塞调用线程。
-    /// 本方法在 DD_btn 之前确保服务就绪：服务缺失时用随包分发的
-    /// dd63330.sys（与 DD 释放的文件字节一致，微软 WHQL 签名）自行创建并启动，
-    /// 使 DD_btn 走"服务已存在"的快速路径，不再触发其安装例程。
+    /// 本方法在 DD_btn 之前确保服务就绪，并先校验"服务登记的映像 == 我们要用的那一份"：
+    /// 换过安装目录、装过旧版本、或用过其他软件留下的 dd63330 服务时两者会不一致——
+    /// 拿新 DLL 去驱动旧 sys 是 0x50（PAGE_FAULT_IN_NONPAGED_AREA）最典型的成因。
     /// </summary>
-    private static void EnsureKernelService()
+    /// <returns>
+    /// false = 检测到"正在运行的驱动与本程序自带的不是同一份"，已主动放弃本次初始化，
+    /// 调用方不得再调 DD_btn；true = 服务已就绪（或已交由 DD 自行安装，属尽力而为）。
+    /// </returns>
+    private static bool EnsureKernelService()
     {
         try
         {
-            var sysPath = ResolveDriverSysPath();
+            var sys = ResolveDriverSys(out var conflict);
+            if (conflict is not null) Logger.Warn(conflict);
+
             var scm = OpenSCManagerW(null, null, SC_MANAGER_ALL_ACCESS);
             if (scm == IntPtr.Zero)
             {
                 Logger.Warn($"预置 DD 内核服务：打开 SCM 失败（err={Marshal.GetLastWin32Error()}），交由 DD 自行安装。");
-                return;
+                return true;
             }
             try
             {
-                var service = OpenServiceW(scm, "dd63330", SERVICE_ALL_ACCESS);
+                var service = OpenServiceW(scm, DriverServiceName, SERVICE_ALL_ACCESS);
+
+                // ---- 身份校验：服务登记的映像必须就是我们要用的那一份 ----
+                if (service != IntPtr.Zero && sys is not null)
+                {
+                    var registered = ReadServiceImagePath(DriverServiceName);
+                    var running = QueryServiceStatus(service, out var st) && st.dwCurrentState == SERVICE_RUNNING;
+                    if (registered is not null && !PathsEqual(registered, sys.Path))
+                    {
+                        // 路径不同不等于版本不同：DD 自释放到 %TEMP% 再被收编就是"同字节、异路径"。
+                        // 必须先比指纹，否则会把正常用户误判成"来路不明"。
+                        var registeredHash = File.Exists(registered) ? TryHashFile(registered) : null;
+                        var sameContent = registeredHash is not null
+                                          && string.Equals(registeredHash, sys.Hash, StringComparison.OrdinalIgnoreCase);
+
+                        if (sameContent && !running)
+                        {
+                            // 同一份字节、只是路径不同：把服务改指固定副本，下次启动不再依赖 %TEMP%。
+                            if (ChangeServiceConfigW(service, SERVICE_NO_CHANGE, SERVICE_NO_CHANGE, SERVICE_NO_CHANGE,
+                                    sys.Path, null, IntPtr.Zero, null, null, null, null))
+                            {
+                                Logger.Info($"预置 DD 内核服务：登记映像已从 {registered} 改指固定副本。");
+                            }
+                        }
+                        else if (sameContent)
+                        {
+                            Logger.Info($"预置 DD 内核服务：驱动来自 {registered}，与当前版本字节一致。");
+                        }
+                        else if (running)
+                        {
+                            // 内核里跑着一份来路不明（或已过时）的驱动：这次绝不碰它，也不能调 DD_btn。
+                            // DeleteService 只是"标记删除"，驱动会继续运行到下次重启；
+                            // 重启后服务项按当前版本重建（本进程内不再重试，见 _driverIdentityRejected）。
+                            Logger.Error($"DD 驱动身份不一致：服务指向 {registered}，当前版本 {sys.Path}；已放弃本次 DD 初始化。");
+                            LastError = IdentityRejectedMessage;
+                            _driverIdentityRejected = true;
+                            DeleteService(service);
+                            CloseServiceHandle(service);
+                            return false;
+                        }
+                        else
+                        {
+                            Logger.Warn($"DD 服务指向 {registered}（与当前版本不一致），驱动未运行：删除后按当前版本重建。");
+                            DeleteService(service);
+                            CloseServiceHandle(service);
+                            service = IntPtr.Zero;
+                        }
+                    }
+                }
+
                 if (service == IntPtr.Zero)
                 {
-                    var err = Marshal.GetLastWin32Error();
-                    if (sysPath is null)
+                    if (sys is null)
                     {
-                        Logger.Info("预置 DD 内核服务：服务不存在且无 dd63330.sys，交由 DD 自行安装。");
-                        return;
+                        Logger.Info("预置 DD 内核服务：服务不存在且无自带 dd63330.sys，交由 DD 自行安装。");
+                        return true;
                     }
+                    var err = 0;
                     // 旧服务可能处于"标记删除"未完成状态（1072），稍等重试。
                     for (var attempt = 1; ; attempt++)
                     {
-                        service = CreateServiceW(scm, "dd63330", "dd63330", SERVICE_ALL_ACCESS,
+                        service = CreateServiceW(scm, DriverServiceName, DriverServiceName, SERVICE_ALL_ACCESS,
                             SERVICE_KERNEL_DRIVER, SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
-                            sysPath, null, IntPtr.Zero, null, null, null);
+                            sys.Path, null, IntPtr.Zero, null, null, null);
                         if (service != IntPtr.Zero) break;
                         err = Marshal.GetLastWin32Error();
                         if (err != ERROR_SERVICE_MARKED_FOR_DELETE || attempt >= 5)
                         {
                             Logger.Warn($"预置 DD 内核服务：CreateService 失败（err={err}），交由 DD 自行安装。");
-                            return;
+                            return true;
                         }
                         Thread.Sleep(600);
                     }
-                    Logger.Info("预置 DD 内核服务：已创建 dd63330 服务。");
+                    Logger.Info($"预置 DD 内核服务：已按当前版本创建（{sys.Path}，SHA256 {sys.Hash.Substring(0, 16)}…）。");
                 }
 
                 if (QueryServiceStatus(service, out var status) && status.dwCurrentState == SERVICE_RUNNING)
                 {
                     Logger.Info("预置 DD 内核服务：dd63330 驱动已在运行。");
-                    return;
+                    return true;
                 }
                 if (!StartServiceW(service, 0, IntPtr.Zero))
                 {
                     var err = Marshal.GetLastWin32Error();
-                    if (err == ERROR_SERVICE_ALREADY_RUNNING) return;
+                    if (err == ERROR_SERVICE_ALREADY_RUNNING) return true;
 
                     // 服务被安全软件禁用（1058）：改回按需启动后重试；仍失败则删除重建。
-                    if (err == ERROR_SERVICE_DISABLED && sysPath is not null)
+                    if (err == ERROR_SERVICE_DISABLED && sys is not null)
                     {
                         Logger.Warn("预置 DD 内核服务：服务被禁用（err=1058），尝试恢复启动类型...");
                         if (ChangeServiceConfigW(service, SERVICE_NO_CHANGE, SERVICE_DEMAND_START,
@@ -318,7 +418,7 @@ public static class DdDriverService
                             if (StartServiceW(service, 0, IntPtr.Zero))
                             {
                                 Logger.Info("预置 DD 内核服务：已恢复被禁用的服务并启动。");
-                                return;
+                                return true;
                             }
                             err = Marshal.GetLastWin32Error();
                         }
@@ -327,28 +427,29 @@ public static class DdDriverService
                             err = Marshal.GetLastWin32Error();
                         }
 
-                        // 仍失败：删除旧服务，用随包 sys 文件重建（摆脱被标记/损坏的服务项）。
+                        // 仍失败：删除旧服务，用同一份 sys 重建（摆脱被标记/损坏的服务项）。
                         Logger.Warn($"预置 DD 内核服务：恢复失败（err={err}），删除并重建服务...");
                         DeleteService(service);
                         CloseServiceHandle(service);
-                        service = CreateServiceW(scm, "dd63330", "dd63330", SERVICE_ALL_ACCESS,
+                        service = CreateServiceW(scm, DriverServiceName, DriverServiceName, SERVICE_ALL_ACCESS,
                             SERVICE_KERNEL_DRIVER, SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
-                            sysPath, null, IntPtr.Zero, null, null, null);
+                            sys.Path, null, IntPtr.Zero, null, null, null);
                         if (service != IntPtr.Zero && StartServiceW(service, 0, IntPtr.Zero))
                         {
                             Logger.Info("预置 DD 内核服务：已重建并启动 dd63330 驱动。");
-                            return;
+                            return true;
                         }
                         err = Marshal.GetLastWin32Error();
                         Logger.Warn($"预置 DD 内核服务：重建启动失败（err={err}），交由 DD 自行处理。");
                         if (service != IntPtr.Zero) CloseServiceHandle(service);
-                        return;
+                        return true;
                     }
 
                     Logger.Warn($"预置 DD 内核服务：StartService 失败（err={err}），交由 DD 自行处理。");
-                    return;
+                    return true;
                 }
                 Logger.Info("预置 DD 内核服务：dd63330 驱动已启动。");
+                return true;
             }
             finally
             {
@@ -359,36 +460,174 @@ public static class DdDriverService
         {
             // 预置属于尽力而为：任何异常都不阻断 DD 自身的安装路径。
             Logger.Warn($"预置 DD 内核服务异常（交由 DD 自行安装）：{ex.Message}");
+            return true;
         }
     }
 
-    /// <summary>定位内核驱动文件（预置服务用）：exe 目录 → %APPDATA% drivers → %TEMP%（DD 自身释放位置）。</summary>
-    private static string? ResolveDriverSysPath()
+    /// <summary>随包内核驱动文件（路径 + SHA-256），作为"服务登记的映像是否就是我们这一份"的判据。</summary>
+    private sealed record DriverSysFile(string Path, string Hash);
+
+    /// <summary>
+    /// 定位并指纹化内核驱动文件：优先"实际加载的 DLL 同目录"（官方按包发布，同目录即同一包，
+    /// 配对最可靠）→ 程序目录 → %APPDATA% drivers。
+    /// 不再把 %TEMP% 当候选：那是 DD 自己的释放位置，也可能躺着旧版本或别的软件留下的同名文件，
+    /// 用它建服务等于给来路不明的驱动发身份证。
+    /// </summary>
+    /// <param name="conflict">多份文件内容不一致时的说明（仅记日志，不改变选择）。</param>
+    private static DriverSysFile? ResolveDriverSys(out string? conflict)
     {
-        var candidates = new[]
+        conflict = null;
+        var candidates = new List<string>();
+        if (_loadedPath is not null)
         {
-            Path.Combine(AppContext.BaseDirectory, "dd63330.sys"),
-            Path.Combine(AppDataDriversDir, "dd63330.sys"),
-            Path.Combine(Path.GetTempPath(), "dd63330.sys")
-        };
-        return candidates.FirstOrDefault(File.Exists);
+            var dir = Path.GetDirectoryName(_loadedPath);
+            if (!string.IsNullOrEmpty(dir)) candidates.Add(Path.Combine(dir, "dd63330.sys"));
+        }
+        candidates.Add(Path.Combine(AppContext.BaseDirectory, "dd63330.sys"));
+        candidates.Add(Path.Combine(AppDataDriversDir, "dd63330.sys"));
+
+        DriverSysFile? first = null;
+        var hashed = new List<DriverSysFile>();
+        foreach (var path in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!File.Exists(path)) continue;
+            var hash = TryHashFile(path);
+            if (hash is null) continue;
+            var item = new DriverSysFile(path, hash);
+            hashed.Add(item);
+            first ??= item;
+        }
+
+        if (hashed.Count > 1)
+        {
+            var kinds = hashed.Select(x => x.Hash).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+            if (kinds > 1)
+            {
+                conflict = "找到多份内容不同的 dd63330.sys（"
+                    + string.Join("、", hashed.Select(x => $"{x.Path} = {x.Hash.Substring(0, 16)}…"))
+                    + "），已按与 DLL 同目录的那份为准。";
+            }
+        }
+        return first;
+    }
+
+    /// <summary>计算文件 SHA-256（大写十六进制）；被占用 / 无权限时返回 null。</summary>
+    private static string? TryHashFile(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var sha = SHA256.Create();
+            var hash = sha.ComputeHash(stream);
+            var sb = new StringBuilder(hash.Length * 2);
+            foreach (var b in hash) sb.Append(b.ToString("X2"));
+            return sb.ToString();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>读取服务登记的映像路径（HKLM\SYSTEM\CurrentControlSet\Services\&lt;name&gt;\ImagePath）；读不到返回 null。</summary>
+    private static string? ReadServiceImagePath(string serviceName)
+    {
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Services\{serviceName}");
+            return NormalizeServiceImagePath(key?.GetValue("ImagePath") as string);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"读取 DD 服务 ImagePath 失败（跳过身份校验）：{ex.Message}");
+            return null;
+        }
     }
 
     /// <summary>
-    /// 首次初始化成功后把 DD 自释放到 %TEMP% 的 dd63330.sys 转存到 %APPDATA% drivers
-    /// （尽力而为）：后续启动预置内核服务可走快速路径，不受 %TEMP% 清理影响。
+    /// 把服务 ImagePath 规范成可直接比较的文件全路径：去引号、去命令行参数，
+    /// 展开 \??\ 与 \SystemRoot\ 前缀（CreateService 写入的是 NT 路径形式）。
+    /// </summary>
+    private static string? NormalizeServiceImagePath(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var p = raw!.Trim();
+
+        if (p.StartsWith("\"", StringComparison.Ordinal))
+        {
+            var end = p.IndexOf('"', 1);
+            p = end > 1 ? p.Substring(1, end - 1) : p.Trim('"');
+        }
+        else
+        {
+            // 未加引号但带参数（…\dd63330.sys /foo）：截到 .sys 为止
+            var idx = p.IndexOf(".sys", StringComparison.OrdinalIgnoreCase);
+            if (idx > 0) p = p.Substring(0, idx + 4);
+        }
+
+        if (p.StartsWith(@"\??\", StringComparison.Ordinal)) p = p.Substring(4);
+        if (p.StartsWith(@"\SystemRoot\", StringComparison.OrdinalIgnoreCase))
+        {
+            p = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                             p.Substring(@"\SystemRoot\".Length));
+        }
+        else if (p.StartsWith(@"system32\", StringComparison.OrdinalIgnoreCase))
+        {
+            p = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), p);
+        }
+
+        try { p = Environment.ExpandEnvironmentVariables(p); } catch { /* 非法变量名忽略 */ }
+        try { return Path.GetFullPath(p); } catch { return p; }
+    }
+
+    /// <summary>两个路径是否指向同一位置（忽略大小写与 . / .. 段差异）。</summary>
+    private static bool PathsEqual(string? a, string? b)
+    {
+        if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return false;
+        try { a = Path.GetFullPath(a!); } catch { }
+        try { b = Path.GetFullPath(b!); } catch { }
+        return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// DD 初始化成功时会把内嵌的内核驱动释放到 %TEMP%。这里做两件事：
+    /// 1）把它与随包副本比对指纹，不一致说明本次加载的驱动不是程序期望的那份（蓝屏排查的关键线索）；
+    /// 2）仅当它是"刚被释放"的、且 %APPDATA% 还没有副本时，才收编为固定副本（后续预置服务用）。
+    /// 旧文件可能是别的软件很久以前留下的，收编它等于给来路不明的驱动发身份证。
     /// </summary>
     private static void KeepKernelDriverSys()
     {
         try
         {
-            var target = Path.Combine(AppDataDriversDir, "dd63330.sys");
-            if (File.Exists(target)) return;
             var temp = Path.Combine(Path.GetTempPath(), "dd63330.sys");
             if (!File.Exists(temp)) return;
+
+            var tempHash = TryHashFile(temp);
+            var target = Path.Combine(AppDataDriversDir, "dd63330.sys");
+
+            if (File.Exists(target))
+            {
+                var targetHash = TryHashFile(target);
+                if (tempHash is not null && targetHash is not null
+                    && !string.Equals(tempHash, targetHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    Logger.Warn($"%TEMP% 的 DD 驱动（{tempHash.Substring(0, 16)}…）与随包副本（{targetHash.Substring(0, 16)}…）不一致："
+                                + "本次加载的驱动可能不是程序期望的那一份，请核对驱动来源。");
+                }
+                return;
+            }
+
+            var age = DateTime.Now - File.GetLastWriteTime(temp);
+            if (age > TimeSpan.FromMinutes(15))
+            {
+                Logger.Warn($"%TEMP% 的 dd63330.sys 是 {age.TotalHours:0.#} 小时前的旧文件，未收编（可能来自其他软件）。");
+                return;
+            }
+
             Directory.CreateDirectory(AppDataDriversDir);
             File.Copy(temp, target, overwrite: true);
-            Logger.Info("已备份 DD 内核驱动到 %APPDATA%\\TheCelestialDiviner\\drivers（预置服务用）。");
+            Logger.Info($"已收编 DD 自释放的内核驱动到 %APPDATA%\\TheCelestialDiviner\\drivers"
+                        + $"（SHA256 {tempHash?.Substring(0, 16)}…，预置服务用）。");
         }
         catch (Exception ex)
         {
@@ -404,6 +643,9 @@ public static class DdDriverService
             _initialized = false;
             // 不 FreeLibrary：进程退出时随进程回收，避免驱动会话中断的时序问题。
         }
+        // 走到这里说明是正常退出：撤掉崩溃熔断标记（蓝屏 / 强杀时这行不会被执行，
+        // 标记留在磁盘上，下次启动即可判定"上次没干净收场"）。
+        DdCrashGuard.MarkCleanExit();
     }
 
     private static void FreeAll()
@@ -557,7 +799,8 @@ public static class DdDriverService
                     var delaySec = Math.Min(5 * attempt, 60);
                     Logger.Warn($"DD 驱动自动获取第 {attempt} 次尝试失败：{ex.Message}；{delaySec}s 后自动重试（直至成功）。");
                     ReportProgress(DdFetchStage.Retrying, attempt,
-                        $"DD 驱动获取第 {attempt} 次尝试失败：{DescribeFetchFailure(ex)}，{delaySec} 秒后自动重试（会一直重试到成功）。");
+                        $"DD 驱动获取第 {attempt} 次尝试失败：{DescribeFetchFailure(ex)}，{delaySec} 秒后自动重试"
+                        + "（国内访问 GitHub 不稳定，失败几次、等几分钟都属正常，会一直重试到成功）。");
                     Thread.Sleep(delaySec * 1000);
                 }
             }

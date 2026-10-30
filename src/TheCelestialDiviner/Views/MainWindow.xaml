@@ -895,6 +895,48 @@
                                     </Style>
                                 </MenuItem.Style>
                             </MenuItem>
+                            <!-- Interception 驱动项（「双驱动」路线的第二条）：x64 库在位、且键盘类已挂上该过滤驱动
+                                 才可点选。装完没重启时仍允许点 —— 由 EnsureReady 明确提示"请重启"，
+                                 比灰着不给点更能告诉用户差的是哪一步 -->
+                            <MenuItem Header="Interception 驱动（物理级 / 开源）" Tag="4"
+                                      Style="{StaticResource MenuSubStyle}"
+                                      Command="{Binding SetKeyboardModeCommand}"
+                                      CommandParameter="{Binding RelativeSource={RelativeSource Self}, Path=Tag}"
+                                      IsEnabled="{Binding IsInterceptionDriverAvailable}"/>
+                            <!-- 安装 Interception 驱动：未安装时出现（官方 Release 原版包 + 官方安装器，装完需重启）；
+                                 安装期间整体替换 Header 并禁用 -->
+                            <MenuItem Tag="action" Command="{Binding InstallInterceptionDriverCommand}">
+                                <MenuItem.Style>
+                                    <Style TargetType="MenuItem" BasedOn="{StaticResource MenuSubStyle}">
+                                        <Setter Property="Header" Value="安装 Interception 驱动…"/>
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsInterceptionDriverAvailable}" Value="False">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsInterceptionDriverPreparing}" Value="True">
+                                                <Setter Property="Header" Value="安装中…（装完需重启）"/>
+                                                <Setter Property="IsEnabled" Value="False"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </MenuItem.Style>
+                            </MenuItem>
+                            <!-- 卸载 Interception 驱动：已安装时出现（调官方安装器 /uninstall，同样需重启）。
+                                 只是不想用了可以不必卸载，直接切别的模式即可 -->
+                            <MenuItem Tag="action" Command="{Binding UninstallInterceptionDriverCommand}">
+                                <MenuItem.Style>
+                                    <Style TargetType="MenuItem" BasedOn="{StaticResource MenuSubStyle}">
+                                        <Setter Property="Header" Value="卸载 Interception 驱动…"/>
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsInterceptionDriverAvailable}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </MenuItem.Style>
+                            </MenuItem>
                         </MenuItem>
                         <MenuItem x:Name="KeycapSchemeMenu" Header="键帽配色" Style="{StaticResource MenuSubStyle}"
                                   ItemsSource="{Binding KeycapSchemeNames}"

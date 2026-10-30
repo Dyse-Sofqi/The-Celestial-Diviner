@@ -1047,7 +1047,7 @@ public sealed partial class MainViewModel
             SoundVolume = Compat.Clamp(imported.SoundVolume, 0, 100);
             // 主题语音方案随导入配置还原（ApplyAppearance 已按当前档位主题整套装载，文件缺失留痕）。
             // 键盘注入模式随配置同步（导入 / 导出；旧配置回退 UseScanCodes 语义）。
-            var mode = imported.KeyboardMode is >= 0 and <= 3
+            var mode = imported.KeyboardMode is >= 0 and <= 4
                 ? imported.KeyboardMode
                 : imported.UseScanCodes ? 1 : 0;
             if (KeyboardMode != mode)

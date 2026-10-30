@@ -17,8 +17,8 @@
     <!-- 管理员权限 + PerMonitorV2 DPI 声明 -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Resources\app.ico</ApplicationIcon>
-    <Version>1.9.0</Version>
-    <FileVersion>1.9.0.0</FileVersion>
+    <Version>1.9.1</Version>
+    <FileVersion>1.9.1.0</FileVersion>
     <AssemblyTitle>衍天高手</AssemblyTitle>
     <Product>衍天高手 (The Celestial Diviner)</Product>
     <Description>键盘 / 鼠标连发工具（全局钩子 + SendInput，.NET Framework 4.8）</Description>
@@ -34,6 +34,10 @@
   <!-- NoticeService 公告远端检查（net48 不默认引用 in-box 的 HttpClient 程序集） -->
   <ItemGroup>
     <Reference Include="System.Net.Http" />
+    <!-- InterceptionDriverService：解官方 Interception.zip（ZipArchive / ZipFile），
+         net48 同样不默认引用这两个 in-box 程序集 -->
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
   </ItemGroup>
 
   <ItemGroup>
@@ -86,6 +90,28 @@
     <None Include="..\..\drivers\7zr.exe">
       <Link>7zr.exe</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Visible>false</Visible>
+    </None>
+    <!-- Interception（双驱动路线第二条）随包文件：官方 x64 interception.dll + 官方安装器 +
+         LGPL 3.0 许可文本。LGPL 双许可明确允许再分发驱动与安装器二进制（前提：与驱动的通信
+         仅经 interception.dll 的 API），因此可以随包内置、省掉联网下载；
+         文件不入库（见 .gitignore），打包发布时需先放好，缺失时程序自动退回官方 Release 下载。 -->
+    <None Include="..\..\drivers\interception\interception.dll" Condition="Exists('..\..\drivers\interception\interception.dll')">
+      <Link>interception\interception.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <Visible>false</Visible>
+    </None>
+    <None Include="..\..\drivers\interception\install-interception.exe" Condition="Exists('..\..\drivers\interception\install-interception.exe')">
+      <Link>interception\install-interception.exe</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <Visible>false</Visible>
+    </None>
+    <None Include="..\..\drivers\interception\LGPL-3.0.txt">
+      <Link>interception\LGPL-3.0.txt</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <Visible>false</Visible>
     </None>
   </ItemGroup>

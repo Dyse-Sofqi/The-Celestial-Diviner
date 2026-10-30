@@ -487,10 +487,28 @@ public sealed class AppConfig
     public bool UseScanCodes { get; set; }
 
     /// <summary>
-    /// 键盘注入模式：0 普通 SendInput / 1 扫描码 / 2 消息 / 3 DD 虚拟驱动（默认）。
+    /// 键盘注入模式：0 普通 SendInput / 1 扫描码 / 2 消息 / 3 DD 虚拟驱动（默认）/
+    /// 4 Interception 驱动（开源，双驱动路线的第二条；需装驱动并重启）。
     /// 旧配置无此字段时回退 <see cref="DefaultKeyboardMode"/>（默认 DD 驱动）。
     /// </summary>
     public int KeyboardMode { get; set; } = DefaultKeyboardMode;
+
+    /// <summary>
+    /// 重启后自动切换到的注入模式：0 = 无待办 / 3 = DD / 4 = Interception。
+    /// 典型来源：①在互斥弹窗里确认卸载 Interception（→3）；②首次导引里选了要装 Interception（→4）。
+    /// 重启后由启动流程兑现并清零 —— 省掉"重启后还得记得再手动选一次"。
+    /// 无迁移：缺字段时按 0 处理。
+    /// </summary>
+    public int PendingModeAfterReboot { get; set; }
+
+    /// <summary>上一版字段（等价于 <see cref="PendingModeAfterReboot"/> == 3），仅为读取旧配置保留。</summary>
+    public bool PendingDdAfterReboot { get; set; }
+
+    /// <summary>
+    /// 是否已经做过「选哪条驱动路线」的首次导引（系统版本 + 内核完整性 + 冲突探测后的建议）。
+    /// false 时下次启动会弹一次选择窗口；之后只在环境明显变化时以注释区提示。
+    /// </summary>
+    public bool DriverAdvisorAnswered { get; set; }
 
     /// <summary>方案面板默认连发间隔（毫秒，添加连发键时录入该值），5~90000。</summary>
     public int DefaultIntervalMs { get; set; } = Constants.DefaultIntervalMs;
@@ -536,6 +554,9 @@ public sealed class AppConfig
         SoundVolume = SoundVolume,
         UseScanCodes = UseScanCodes,
         KeyboardMode = KeyboardMode,
+        PendingModeAfterReboot = PendingModeAfterReboot,
+        PendingDdAfterReboot = PendingDdAfterReboot,
+        DriverAdvisorAnswered = DriverAdvisorAnswered,
         DefaultIntervalMs = DefaultIntervalMs,
         DefaultHoldMs = DefaultHoldMs,
         TimingPreset = TimingPreset

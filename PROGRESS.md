@@ -1,5 +1,238 @@
 ﻿# 衍天高手（The Celestial Diviner）开发进度交接
 
+## 踩过的坑（长期备忘 · 不随版本滚动，新的坑往下加）
+
+### 坑 1 · 回环消除：修好一面，埋了另一面（v1.6.0 → v1.9.1）
+
+回环消除（`EchoGuard`）是自环方案（目标键 = 触发键，如 F1 连发 F1）的命门：
+注入的事件必须从低级钩子里精确摘掉，摘多摘少都会坏，而且**两个方向的症状完全相反**。
+
+- **A 面（已修，v1.6.0 / `aa3c0f7` 2026-09-07）**：旧实现按"注入时刻 ±12ms 时间窗"匹配，
+  游戏卡顿让回环迟到 > 12ms 就漏判 → 回环被当物理按键放行 → **运行中的 Toggle 被自己翻掉**
+  （用户报"开关模式连发莫名其妙自动停止"）。改成纯 FIFO 配额后彻底消失。
+- **B 面（潜伏 7 周，v1.9.1 修）**：FIFO 只讲顺序、不讲年龄，名额一旦因回环丢失而滞留
+  （钩子回调被系统跳过 / UI 线程长时间卡顿 / 切换注入模式），就会在之后把**用户的物理按键**
+  当成回环吃掉；再叠加 `_downSources` 只能靠 UP 清除 → 该键永远"按住中" → 同键按下全被当
+  自动重复丢弃 → **按一次停不下来，只能按全局开关**（全局停用会清空按住表，所以它能救）。
+- 当时的"撞车自愈"推理（物理按键吃掉名额时，位移的回环会替我翻一次）**只在队列浅 + 回环稳定
+  时成立**：DD 往返 110~170ms ÷ 周期 26ms ≈ 队列 5~7 深。前提没写清，等于埋雷。
+- `8d96655` 把名额上限 128→256（为支持 100 发/秒）——**优化一个方向的余量，等于放大反方向的
+  破坏力**，滞留代价随之变大。教训：给"防堆积"加容量前，先想清楚堆积物会伤到谁。
+- 暴露条件：2026-10-30 加 Interception（两条路线 RTT 差 10 倍：实测 0~16ms vs 170ms）
+  + 切模式不清名额 + 用户方案是自环 → 从"偶发"变"必现"。同期另一位用户（v1.9.0、纯 DD、
+  没装过 Interception）也复现，其 UI 线程卡顿 629~6891ms → 证明是老洞，不是新引入的。
+
+**改这块代码必须守住的不变量（否则任一条都会退回某个失败面）：**
+
+1. **判"是不是回环"只用 FIFO 与注入顺序，不引入时间窗**——否则退回 A 面（回环迟到被漏判 → 自停）。
+2. 时间只用于判"名额还算不算数"：超过该路线实测往返 ×2 + 40ms（硬上限 600ms）即**丢弃名额并放行
+   事件**——宁可漏判一次回环（多触发一次），也不能吞掉用户的物理按键。
+3. 名额上限要小（现 32）：正常深度 = 往返 ÷ 连发周期，放大只会放大滞留危害。
+4. 任何"按住中 / 已按下"状态都必须带时间戳自愈（现 1.5s），**绝不能只靠 UP 事件清除**。
+5. 切换注入模式 / 启动时：`EchoGuard.Reset(该路线种子)` + `TaskSchedulerService.ResetInputState()`。
+   两条路线刻度不同，**跨路线复用任何回环状态都是错的**。
+6. 自环方案是这一整套逻辑的最大压力用例：动回环 / 按住表 / 注入模式的代码，回归时必须用自环试。
+
+**排查关键字**（`%APPDATA%\TheCelestialDiviner\logs\`）：`丢弃 N 个未匹配的回环名额`（名额滞留过，已清理）、
+`释放事件丢失，已自愈重置`（按住表卡死过，已恢复）、`注入输入到达延迟 xxxms`（>1s 基本就是
+物理按键吃到了滞留名额，而不是"win32k 排队 1 秒"——这个数字是"注入→吃掉名额"的间隔，不是管线延迟）。
+
+**附带教训**：`AddLog` 只进 UI 日志面板、不落盘，导致"切到 DD 之后日志一片空白"无法复盘。
+现在模式切换 / 切换失败都会 `Logger.Info` 落盘。
+
+### 坑 2 · 装了 Interception，DD 注入整体失效（不是"不同时用"，是"装了就不能用"）
+
+- 📋 2026-10-30 用户实测：装好 Interception 并重启后，切回 DD → 游戏里连发全无效果、方案停不下来
+- 🔍 日志证据（新构建，17:11:43 切到 DD）：`DD 虚拟驱动初始化成功（DD_btn(0)）`、
+  `键盘注入已切换到 DD 驱动（回环窗口种子 170ms）`，但随后每个键都出现
+  `丢弃 20 / 17 / 15 / 7 / 32 个未匹配的回环名额` —— **DD 注入的按键一条都没回来**
+  （按 26ms 周期算，20 个滞留 ≈ 1 秒的注入全部无回环）
+- 🧪 独立探针（`DD_btn(0)=1` → `DD_key` 连续注入 F9，自有 WH_KEYBOARD_LL）三阶段对照：
+  ①无 Interception 上下文 ②有上下文 ③销毁上下文后 → **三次都是 0 条**。
+  说明与我们的上下文无关，是驱动层面的冲突
+- 🔍 对照：装 Interception 之前（同日 15:10/15:20 日志）DD 注入有回环，往返约 170ms
+- 💡 机理：Interception 是键盘**类过滤驱动**（`UpperFilters: keyboard, kbdclass`），
+  挂在所有键盘设备上，DD 的虚拟键盘也在其中 —— DD 的注入路径被吞掉
+- ✅ 产品侧处理（用户要求）：点选 DD 且检测到 Interception 在系统里 → **弹窗说明互斥并询问卸载**；
+  确认后自动 `Uninstall()`（官方安装器 /uninstall）→ 提示重启；取消则回退原模式并说明。
+  关键取舍：卸载成功也**不**当场切 DD（驱动重启前仍在键盘栈上，切了就是"假 DD"），一律回原模式。
+- ✅ 二轮用户要求「把手动再点 DD 这步也包办」：卸载成功即写 `PendingDdAfterReboot`（持久化），
+  重启后启动流程自动切 DD 并清标志；若重启后发现驱动仍在（没重启 / 卸载失败）→ 保留登记 + 提示重启；
+  用户中途手动改选别的模式 → 自动撤销登记。冲突判据改用 `IsDriverPresent`
+  （= 已安装 或 已卸载但未重启），单看 `DriverInstalled` 会在过渡态误判为"没冲突"
+  启动即 DD 且已装 Interception 时改为注释区 + 日志告警；菜单悬停说明同步；README 更正
+  （上一轮写的"切回 DD 不需要重启"只在没装 Interception 时成立）
+- ⚠️ 结论对用户的含义：**同一次开机只能选一条物理级路线**。要 DD → 卸载 Interception + 重启；
+  要 Interception → 首次安装 + 重启。普通 / 扫描码 / 消息三条不受影响，可自由切
+- 📌 待验证（需用户配合）：卸载 Interception + 重启后 DD 是否恢复 —— 这是这条结论的最后一块拼图
+
+## 发版 v1.9.1（2026-10-30）
+
+- 📦 csproj `Version` / `FileVersion` → **1.9.1 / 1.9.1.0**；CHANGELOG 标题定版 `## v1.9.1 — 2026-10-30`
+- 📄 新增 `docs/release-notes/v1.9.1-release-notes.md`（按既有发版说明格式：使用范围声明 / 本轮重点 /
+  升级方式 / 已知问题 / 使用说明）
+- 🎁 README：新增「鸣谢与第三方组件」，写清 Interception 的作者（Francisco Lopes / @oblitum）、
+  仓库、版本 v1.0.1、双许可、官方 dll 指纹，以及我们「只校验指纹 + 调官方安装器、不改不重签」的边界；
+  并附一段致谢（没有它，剑网 3 这类游戏只剩闭源方案）
+- 🛡️ 老 DD 用户升级保护（本轮专门加的，优先级高于新功能）：
+  1. **零打扰**：`RunDriverAdvisorOnce` 先判「当前模式 == 推荐模式 且当前模式可用」→ 不弹窗，
+     直接标记已回答（典型：Win10/24H2 + DD 库在位 + 配置 3）。另加一道闸：当前是 普通/扫描码/消息
+     的老用户压根不弹（他们没在追驱动）
+  2. **长按不误判**：按住表自愈前先查 `GetAsyncKeyState` —— 物理键还按着就当自动重复（刷新时刻），
+     确认已松开才自愈。修正上一版「按住开关键 >1.5s 会被当成第二次按下」的隐患
+  3. **配置向后兼容**：`DriverAdvisorAnswered` / `PendingModeAfterReboot` 缺字段按默认处理，
+     旧 `PendingDdAfterReboot` 仍兼容读取；DD 连发/时序/回环路径除兜底外无改动
+- ✅ 构建 Debug/Release 0 警告 0 错误；发布包 `bin\Release\net48-publish`（含 `interception\` 三文件）
+- ⚠️ 待办：打 zip + sha256、提交打标签（按以往发版流程）；25H2 机器上过一遍导引判定
+
+## 待发 v1.9.1 · 驱动路线系统导引（按环境推荐该装哪条）
+
+- 📋 用户需求：启动时检测系统版本 + 是否与系统已有驱动冲突，给出「装哪种驱动」的选择
+- ✅ 新增 `Services/SystemDriverAdvisor.cs`：纯读探测 + 建议，不弹窗不装驱动
+  - **系统版本**：`RtlGetVersion`（不能用 `Environment.OSVersion` —— manifest 未声明
+    supportedOS 时谎报 6.2.9200，实测本机被报成 Build 9200，判断 25H2 会全错）
+  - **内核完整性三项**：HVCI / Kernel Shadow Stacks / Smart App Control（注册表直读）
+  - **键盘栈冲突**：类 GUID `{4D36E96B-…}` 的 UpperFilters，剔除 `kbdclass` / `keyboard`
+    后的第三方项点名提示
+  - **现有驱动**：Interception 是否在（IsDriverPresent，含「已卸载未重启」）、DD 库是否在位
+  - **判定顺序**：已有 Interception → 4；三项开关任一开 → 0（并说明关掉才可能用）；
+    25H2+ → 4（DD 有 0x50 风险）；24H2 及更早且 DD 在位 → 3；否则 → 4
+- ✅ 新增 `Views/DriverChoiceDialog`：系统检测 / 建议 / 理由 / 风险 + 三个出口
+  （用 SystemColors 取色，跟随系统深浅色，不依赖应用主题资源）
+- ✅ 接线：`MainWindow.OnLoaded` 以 Background 优先级调 `RunDriverAdvisorOnce()`
+  （避免模态窗压在白底主窗上）；只有 `DriverAdvisorAnswered == false` 才弹，之后只提示
+- ✅ 选择落地 `ApplyDriverChoice`：能立刻用就切；Interception 未装 → `StartPrepare()`
+  + 登记 `PendingModeAfterReboot = 4`；DD 缺库 → 走官方获取；普通 → 仅切模式
+- ✅ 顺带把待办泛化：`PendingModeAfterReboot`（0/3/4）取代只有 DD 的旧字段，
+  启动时统一兑现（DD 仍带崩溃熔断保护；Interception 校验驱动是否真在）
+- ✅ 实测（本机 Win10 19045）：Build 19045 识别正确、过滤链 [kbdclass]、推荐 DD，
+  理由与告警文案符合预期；构建 0 警告 0 错误
+- ⚠️ 未做真机验证：25H2 / 内核完整性开启两条分支只做了逻辑推演（没有 25H2 机器），
+  文案与判定顺序待用户在 25H2 上过一遍
+
+## 待发 v1.9.1 · 修复：切回 DD 后按键"停不下来"
+
+- 📋 用户实测反馈：Interception 装好可用 → 在选项里切回 DD 后 ①游戏里连发无效
+  ②方案触发后停不下来，同键按第二下无反应，只能按全局开关
+- 🔍 关键事实：用户方案是**自环**（K:114→114 / K:113→113 / K:112→112，Toggle + Rotate），
+  即目标键 = 触发键。这类方案完全依赖 `EchoGuard` 把注入事件从钩子里摘掉
+- 🧪 自写探针（`dotnet` 临时工程，LoadLibrary + 5 个导出 + 自己的 WH_KEYBOARD_LL）：
+  只注入 F13/F14，不碰游戏输入 → 40Hz × 40 次连发，钩子收到 40 down / 40 up，
+  延迟 min 0 / 中位 0 / max 16ms。**结论：Interception 注入与回环本身完全正常**，
+  故障在应用侧的回环状态管理
+- 🔍 日志还原（16:33–16:38）：F1 启动 → F2 启动（F1 被轮转互斥停掉）→ F2 连跑 55/78/113s
+  才被"另一个键"打断；同键第二下始终不生效 → 与"按住表卡死"特征一致
+- 🐞 三条根因：
+  1. `EchoGuard` 名额滞留（钩子回调被系统跳过一次 / UI 线程卡顿 / 切模式）后，
+     滞留名额把**物理按键**当回环吃掉；自环方案名额源源不断，故几乎每次都中
+  2. `_downSources` 只靠 UP 清除：一次 UP 被吃 → 该键永远"按住中" → 同键按下全被当重复丢弃
+  3. 切模式不清这两样状态：旧路线名额（2s 过期）继续吃切换后的头几次按键 → "切到 DD 直接不灵"
+     （也是 16:38 之后日志再无「连发已启动」的原因：按键根本没进调度器）
+- ✅ 修复：EchoGuard 名额接受窗口按实测往返自适应（种子 Interception 20ms / DD 170ms，
+  EWMA 自学习，上限 600ms），超窗即丢弃并放行事件；每键上限 256→32；
+  按住表加时间戳（>1.5s 视为释放丢失自愈）；切模式/启动时 `EchoGuard.Reset(种子)` +
+  `TaskSchedulerService.ResetInputState()`；切换与回退写日志文件
+- ✅ 构建 0 警告 0 错误；发布到 `bin\Release\net48-publish-fix`（原 publish 目录被运行中的
+  实例锁定，待退出后覆盖）
+- ⚠️ 已知代价：按住 Toggle 键 >1.5s 会被当成新按下（系统重复间隔 ≤1s，正常点按不受影响）
+- ⚠️ 待复测：DD 下按键能否正常启停；若日志显示「已启动」而游戏无反应，则是 DD 注入侧
+  另一问题（与本修复无关），下一步对比普通模式定位
+
+## 待发 v1.9.1 · 双驱动路线（第二条物理级注入：Interception，开源）
+
+- 📋 需求：DD 闭源（ddxoft 仓库无任何许可文件）、加载要在线授权、自身有 0x50 缺陷；
+  开一条"来源可核对 + 许可明确"的第二条物理级路线，与 DD 并列，用户二选一
+- 🔍 选型结论（承接上一轮调研）：Interception（oblitum/Interception，LGPL 3.0）是唯一
+  "官方 Release + 官方签名 + 允许再分发二进制"的现成方案；代价固定：类过滤驱动、**装完必须重启**、
+  HVCI 可能拒绝加载。这三条无法绕过，只能如实提示
+- ✅ 新增 `Services/InterceptionDriverService.cs`（模式 4）：
+  - 动态绑定（LoadLibrary + GetProcAddress），DLL 缺失不影响启动；只认 x64（读 PE Machine）
+  - `EnsureReady` 失败原因分档：库缺失 / 驱动未安装 / 装完没重启 / HVCI 拦下 / 设备被独占，
+    每档给可执行动作（去装、去重启、去关内存完整性）
+  - **只发不收**：不调用 `interception_set_filter`（filter 保持 NONE）。一旦注册 KEY_ALL 而不在
+    后台原样 send 回去，用户整块键盘就被吞（进程卡 → 键盘卡，进程崩 → 键盘失灵到重启）；
+    本程序只需注入，故把风险面压到"send 失败即返回 false"
+  - 注入：`MapVirtualKey(vk, MAPVK_VK_TO_VSC_EX)` 取 scan + 0xE0/0xE1 前缀 →
+    `InterceptionKeyStroke{code, state}` → `interception_send`（cdecl，返回 nstroke）
+  - 回环：与 DD 共用 `EchoGuard`（注入前登记名额、失败撤销），钩子侧条件改为
+    `InputSimulatorService.IsPhysicalInjectionMode`（3 或 4）
+- ✅ 驱动获取（`StartPrepare` 单飞 + 重试）：
+  官方 API 查最新 zip → 固定 v1.0.1 直链 → 镜像链（ghproxy / ghfast / gh-proxy）→
+  `ZipArchive` 解出 x64 `interception.dll` + `install-interception.exe` →
+  **指纹校验**（官方 v1.0.1 = `AB88164C…443C8`；不认识时退回 Authenticode 签名者必须是
+  Francisco Lopes，两者不过则拒绝安装）→ 调官方安装器 `/install` →
+  以注册表 `HKLM\...\Class\{4D36E96B-…}\UpperFilters` 含 `keyboard` 判定装成功
+- ✅ VM / 菜单接线：模式 4 启动与热切换两条路径都会先 `EnsureReady`，失败回退普通模式 +
+  原因进注释区；菜单项 `IsEnabled = IsInterceptionDriverAvailable`（库在位 + 驱动已装，
+  装完没重启仍可点，点了得到"请重启"）；未安装时出现「安装 Interception 驱动…」动作项
+- ✅ 导入配置模式范围 0~3 → 0~4；`--no-intercept` 诊断开关；`App.OnExit` 释放上下文
+- ✅ 构建 0 警告 0 错误
+- ⚠️ **未做真机验证**（本轮只做静态与构建验证，刻意不动本机系统驱动 / 不要求重启）：
+  待实测项 —— ①官方安装器在本机 Win 版本上的实际返回与 UpperFilters 写入；
+  ②重启后 `\\.\interception00` 能否打开、`create_context` 是否成功；
+  ③注入的按键在游戏内的识别情况（与 DD 对比）；④HVCI 开启时的失败文案是否命中
+- ⚠️ 已知取舍：Interception 没有崩溃熔断（DdCrashGuard 只认模式 3）——它不动机器状态、
+  只读设备句柄，崩溃面远小于 DD；若实测出现驱动侧故障，再按同样思路加一道模式 4 的熔断
+
+### 追加：许可确认 → 改为随包内置（省掉下载）
+
+- 📋 用户提问：Interception 能否随包分发、直接内置省掉下载？→ **可以**
+- ⚖️ 依据（官方 README + 包内 licenses）：双许可。非商业分支 = LGPL 3.0，作者原文
+  "with rights of distribution of the related binary assets (drivers and installers)
+  once communication with drivers happen solely by use of the library and its API"
+  → LGPL 本身不自动给二进制分发权，这句是作者额外授予的**有条件再分发权**，两个条件：
+  ① 非商业用途；② 与驱动的通信只经 interception.dll 的 API。商业闭源分发需买
+  commercial-usage 授权（francisco@oblita.com）
+- ⚠️ 合规修正：原实现用 `CreateFile("\\.\interception00")` 探"驱动有没有加载"，
+  这属于绕过库直连驱动设备，踩在条件 ② 边上 → 改为 `TryProbeContext()`
+  （create_context + destroy_context），并删掉 CreateFileW/CloseHandle 的 P/Invoke。
+  现在全文只有 LoadLibrary/GetProcAddress 取导出 + 5 个库导出调用，别无他路
+- ✅ 落地：`drivers/interception/{interception.dll, install-interception.exe, LGPL-3.0.txt}`
+  → csproj 拷到输出 `interception\`（CopyToOutput/Publish 都开）→ 服务新增 BundledDir/
+  BundledDll/BundledInstaller/HasBundled，DllCandidates 把它排第一，PrepareOnce 有随包就
+  File.Copy 到暂存并校验（不联网），没有才走下载；Uninstall 也优先用随包安装器
+- ✅ 仓库策略：二进制仍不入库（.gitignore 加 drivers/interception/*.dll|*.exe，与 DD 惯例一致），
+  **LGPL 全文入库**；发布包必须带 `interception\` 目录，否则用户首次安装退回联网下载
+- ✅ 文档同步：README（安装改为"随包自带、无需联网" + 许可章节加 Interception 原文引用）、
+  drivers/README（三种获取方式 + 两个官方 SHA256）、CHANGELOG、本条
+- ⚠️ 提醒：随包只省下载，**不省重启** —— 类过滤驱动必须重启才挂上，这点没变
+
+## 待发 v1.9.1 · DD 驱动身份校验（0x50 蓝屏隐患排查）
+
+- 📋 起因：客户在 Win11 25H2 上"刚打开程序"即蓝屏，`PAGE_FAULT_IN_NONPAGED_AREA (0x50)`，
+  失败的操作 `dd63330.sys`（第三方 DD 虚拟键鼠驱动的内核部分，闭源，用户态改不了）
+- 🔍 代码审计结论：`EnsureKernelService` 只在 `OpenService` 成功后直接 `StartService`，
+  **从不校验服务登记的映像是不是本程序自带的那一份**；且 `ResolveDriverSysPath` 把
+  `%TEMP%\dd63330.sys` 也当候选。换过安装目录 / 装过旧版本 / 其他软件留下服务时，
+  内核里跑旧驱动而 `DD_btn` 来自新 DLL —— 版本错位是 0x50 的典型成因
+- ✅ `EnsureKernelService` 改返回 `bool`（false = 身份不符且驱动正在运行，调用方不得再调 `DD_btn`）
+- ✅ 身份校验：`ReadServiceImagePath`（注册表 ImagePath）+ `NormalizeServiceImagePath`
+  （去引号 / 去参数 / 剥 `\??\` 与 `\SystemRoot\`）+ `PathsEqual` + `TryHashFile`（SHA-256）
+  - 同字节异路径（DD 自释放到 %TEMP% 后被收编）→ 不拒绝，`ChangeServiceConfigW` 改指固定副本
+  - 未运行且版本不符 → `DeleteService` 后按当前版本重建
+  - **正在运行且版本不符 → 放弃本次 DD（含 `DD_btn`）**，`_driverIdentityRejected` 阻断本会话重试，
+    提示重启；`DeleteService` 只标记删除，重启后按当前版本重建
+- ✅ `ResolveDriverSysPath` → `ResolveDriverSys(out conflict)`：优先"实际加载的 DLL 同目录"，
+  其次程序目录、%APPDATA% drivers；**不再从 %TEMP% 取**；多份内容不一致时记日志
+- ✅ `KeepKernelDriverSys`：与随包副本比指纹（不一致 → 告警，是蓝屏排查关键线索）；
+  只收编 15 分钟内刚被 DD 释放的副本（旧文件可能来自其他软件，收编等于给它发身份证）
+- ✅ `DD_btn(0)` 重试 5 次递增退避 → `DdInitMaxAttempts = 2`、间隔 900ms（重建虚拟设备是重操作，
+  反复失败重入有弄坏驱动内部状态的风险）
+- ⚠️ 已排除：`SendKey` / `EnsureReady` 同在 `lock (Gate)` 内，不存在多线程并发调 `DD_btn`/`DD_key`
+- ⚠️ 局限：本改动只能消除"我们喂错驱动"这一支；驱动自身在新系统上的缺陷仍需靠"不加载"规避
+- ✅ **崩溃熔断**（新文件 `Services/DdCrashGuard.cs`）：
+  - 会话标记 `dd-session.txt`：`EnsureReady` **之前**写入（初始化本身蓝屏也能看出来），
+    正常退出 / 注销 / 关机时删除；`_sessionMarked` 门控，重复启动的第二实例不会删别人的标记
+  - 运行快照 `dd-last-run.txt`（启动时间 + 实际模式）：模式切换时也刷新，避免"切走 DD 后再崩"误判
+  - `TryDetectPreviousCrash`：标记残留 → 熔断；否则查 WER 1001 事件，只认 `0x50`，
+    且要求蓝屏时间落在"上次启动 + 12h"窗口内
+  - `MainViewModel` 构造期：熔断 → 模式强制 0 + `_config.KeyboardMode=0` 落盘 + `SaveConfig()`，
+    且**不弹**获取驱动引导（`_ddAutoActivate=false`）；注释区给出可读原因与恢复路径
+  - `App.OnStartup` 挂 `SessionEnding` 清标记；`OnExit` 兜底 `DdDriverService.Shutdown()`（原为死代码，现已接上）
+  - 坑：第二实例 `TryAcquire` 失败会直接 `Shutdown()`→`OnExit`，若无 `_sessionMarked` 门控会把
+    正在运行实例的标记删掉，熔断被静默掏空
+- 🧰 配套：`tools/diag-dd-driver.ps1`（客户现场采集）+ `docs/dd-0x50-检查指引.md`
+
 ## 本次变更（发版 v1.9.0 · 独立关闭热键 + 热键键位灰度区分）
 
 - 📋 用户需求：底栏「全局开关热键设置」之后新增「独立关闭热键」，默认空键位；设置后
