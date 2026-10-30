@@ -87,10 +87,21 @@
   sha256 `dd72394f5568c7250c644360bcdf8ea23818641d43eaa2fcc0c68f41f928247f`
   - 口径沿用 v1.9.0：**不含** DD 闭源驱动（dd63330.dll/.sys，用户首次使用按引导自动获取），
     但**含** `interception\` 三文件（interception.dll + install-interception.exe + LGPL-3.0.txt）
-- 🔀 双端推送：Gitee 已推送（main `dd7e919..0064325` + tag `v1.9.1`）；
-  GitHub 本轮未推成 —— 本机经代理访问 github.com 的 **HTTPS POST 被 reset**（curl GET 正常），
-  而 `ssh.github.com:443` 通路可用，但本机公钥（SHA256:avxN9qfP…）未登记到 GitHub 账号，
-  走 SSH 也是 Permission denied(publickey)。待用户在 GitHub 添加该公钥后即可补推
+- ✅ 双端已推送：本地 = Gitee main = GitHub main = `13af036`；标签 22 个两端齐平，
+  `v1.9.1` 为注释对象 `59af3243`（顺带补齐 GitHub 侧漏推的 `v1.6.0 / v1.7.0 / v1.7.1`）
+- ✅ 双端 Release 已发布（正文同一份 `docs/release-notes/v1.9.1-release-notes.md`，附件 1,953,283 B）：
+  - GitHub <https://github.com/Dyse-Sofqi/The-Celestial-Diviner/releases/tag/v1.9.1>
+    （`gh release create ... --latest`，资产 state=uploaded，尺寸一致）
+  - Gitee <https://gitee.com/sofqi/The-Celestial-Diviner/releases/tag/v1.9.1>
+    （release id **1257895** + 附件 id **3545326**，尺寸一致）
+- ⚠️ **GitHub 推送通道（重要，以后发版照此走）**：本机经代理访问 github.com 的 **HTTPS POST 一律被
+  reset**（`Recv failure: Connection was reset`，GET 正常；换 gh 令牌凭据、HTTP/1.1、加大 postBuffer
+  均无效）→ 只能用 SSH over 443：
+  `git push ssh://git@ssh.github.com:443/Dyse-Sofqi/The-Celestial-Diviner.git main --follow-tags`
+  （已把 `origin` 的 URL 改成这个形式，日常 `git push origin` 即可；本机公钥指纹
+  `SHA256:avxN9qfP5Vva/5yy2Z9/7xHUHiGBtve55iJjM7ZbI4A`，2026-10-30 已登记到 GitHub 账号）
+  - `gh` CLI 本身可用（API 走 HTTPS GET/POST 正常，`release create` 上传资产也成功），
+    坏的只是 git 的 smart-HTTP 推送端点
 - ⚠️ 待办：25H2 机器上过一遍导引判定
 
 
