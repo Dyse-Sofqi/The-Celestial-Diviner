@@ -95,6 +95,17 @@
   **任何版本更新总结、任何随版本变化的功能提示都不进公告**；版本变化归 CHANGELOG / 发布说明，
   场景化提示归它出现的那个界面
 
+### 坑 5 · CHANGELOG 一旦推上 main，备用通道立刻开始"预告"一个还不存在的下载包（v1.9.2 遇到）
+
+- 🔍 机理：`FetchFromRawChangelogAsync` 用 raw CHANGELOG 首个 `## vX.Y.Z` 当最新版，并按命名约定
+  直接拼 `releases/download/<tag>/TheCelestialDiviner-<ver>-win64.zip`。所以**只要 changelog 上线，
+  备用通道立刻宣告新版本**，与 Release 是否建好无关
+- 💥 本次实测：CHANGELOG 先推，Gitee Release 后建 → 那段窗口里备用通道直链 **HTTP 404**
+  （对照 1.9.1 为 200）；此时若用户正好撞上主通道限流（403 很常见）就会走到备用通道 →
+  点「有更新」下载失败
+- ✅ 发版顺序（以后照此走）：**先打包 → 先建双端 Release（或与 push 同时完成）→ 最后推 main**；
+  至少不要把 CHANGELOG 单独提前很久推上去
+
 ## 发版 v1.9.2（2026-11-01）
 
 - 📦 csproj `Version` / `FileVersion` → **1.9.2 / 1.9.2.0**；CHANGELOG 标题定版 `## v1.9.2 — 2026-11-01`
@@ -109,7 +120,14 @@
   sha256 `f76176bf1ac990a9a408b6bda0518f146aa89c91ad8b5b9d88d4bf104f90b9bb`
 - ✅ 内嵌资源校验：新 exe 内已无「DD 驱动下载：连不上是常态」，已含 `## v1.9.2 — 2026-11-01`
 - ✅ 自测（反射测试台，临时工程已删）：验包 3 项 + 整目录备份 1 项 + 状态回执 4 项全过
-- ⚠️ 待办：双端推送 + 建 Release；bat 本体需实机验证一次真实更新
+- ✅ 双端已推送：本地 = Gitee main = GitHub main = `412f6ce`；标签 `v1.9.2` 两端齐平
+- ✅ GitHub Release <https://github.com/Dyse-Sofqi/The-Celestial-Diviner/releases/tag/v1.9.2>
+  （资产 `TheCelestialDiviner-1.9.2-win64.zip`，1,960,965 B，state=uploaded）
+- ✅ Gitee Release <https://gitee.com/sofqi/The-Celestial-Diviner/releases/tag/v1.9.2>
+  （release id **1263231** + 附件 id **3561344**，尺寸一致）
+- ✅ 双通道实测（发版后 5 分钟内）：主通道 `releases/latest` → `v1.9.2`、附件在列；
+  备用通道直链 `releases/download/v1.9.2/TheCelestialDiviner-1.9.2-win64.zip` → **HTTP 200 / 1,960,965 B**
+- ⚠️ 待办：bat 本体需实机验证一次真实更新（本机安全策略禁止调用 cmd.exe）
 
 ## 发版 v1.9.1（2026-10-30）
 
