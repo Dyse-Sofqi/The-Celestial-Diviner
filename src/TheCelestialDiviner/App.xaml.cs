@@ -96,6 +96,20 @@ public partial class App : Application
                     + $"ProcessRenderMode={System.Windows.Media.RenderOptions.ProcessRenderMode}"
                     + $"（Tier 0 = 无硬件加速；鼠标钩子={(!InputHookService.SuppressMouseHook ? "启用" : "已禁用")}）。");
 
+        // 运行依赖自检：net48 下 System.Text.Json 是外挂 dll 链，只替换 exe / 解压不完整 /
+        // 杀软隔离 / 放进别的程序目录，都会在 ConfigService 首次被触碰时炸成
+        // "类型初始值设定项引发异常"——用户拿不到任何可操作的线索。这里提前做一次
+        // 功能性探测，把"缺哪个文件、怎么修"直接说清楚，再退出。
+        var dependencyError = DependencyCheck.Probe();
+        if (dependencyError is not null)
+        {
+            Logger.Error("运行依赖自检失败。", dependencyError);
+            MessageBox.Show(DependencyCheck.BuildMessage(DependencyCheck.MissingFiles(), dependencyError),
+                "衍天高手", MessageBoxButton.OK, MessageBoxImage.Error);
+            Shutdown();
+            return;
+        }
+
         // 服务组装（手动 DI，规模小无需容器）。
         _configService = new ConfigService();
         _hookService = new InputHookService();
@@ -108,6 +122,15 @@ public partial class App : Application
 
         _mainWindow = new MainWindow(_vm, this);
         _mainWindow.Show();
+
+        // 更新结果回执：上一次「有更新」是成功、失败并已回滚，还是压根没生效（脚本被拦）。
+        // 标记一次性消费，不会每次启动都打扰；成功后只记日志。
+        var updateNote = UpdateService.ConsumeUpdateState();
+        if (updateNote is not null)
+        {
+            Logger.Warn("上次自动更新需要用户处理：" + updateNote);
+            MessageBox.Show(updateNote, "衍天高手", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
 
         // 全局兜底：后台线程异常记录日志（不打断主流程）。
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
@@ -339,9 +362,16 @@ public partial class App : Application
         _handlingDispatcherException = true;
         try
         {
-            Logger.Error("UI 线程未处理异常。", e.Exception);
-            Logger.Error("异常堆栈：" + (e.Exception.StackTrace ?? "(无堆栈)"));
-            MessageBox.Show($"发生内部错误：{e.Exception.Message}", "衍天高手",
+            // TypeInitializationException / FileNotFoundException 这类包装异常，
+            // Message 本身不携带任何线索（"类型初始值设定项引发异常"），真因在
+            // InnerException 里：日志用 ToString() 落全量内层堆栈，弹窗用展开后的成因链。
+            Logger.Error("UI 线程未处理异常。", e.Exception);   // Logger 内部会展开内层异常链
+            Logger.Error("异常明细（含内层堆栈）：" + e.Exception);
+            var hint = ExceptionText.IsDependencyRelated(e.Exception)
+                ? $"{Environment.NewLine}{Environment.NewLine}程序目录可能缺少运行组件或版本不匹配，"
+                  + $@"请完全退出后删除本目录，重新解压完整的发布包（配置保存在 %APPDATA%\{Constants.AppFolderName}，不受影响）。"
+                : string.Empty;
+            MessageBox.Show($"发生内部错误：{ExceptionText.Describe(e.Exception)}{hint}", "衍天高手",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         finally

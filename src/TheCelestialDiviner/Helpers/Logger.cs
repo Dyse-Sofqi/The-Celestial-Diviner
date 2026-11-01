@@ -48,9 +48,9 @@ public static class Logger
     /// <summary>记录一条警告日志。</summary>
     public static void Warn(string message) => Write("WARN", message);
 
-    /// <summary>记录一条错误日志（含异常）。</summary>
+    /// <summary>记录一条错误日志（含异常，沿 InnerException 链展开真因）。</summary>
     public static void Error(string message, Exception? ex = null)
-        => Write("ERROR", ex is null ? message : $"{message} | {ex.GetType().Name}: {ex.Message}");
+        => Write("ERROR", ex is null ? message : $"{message} | {ExceptionText.Describe(ex)}");
 
     private static void Write(string level, string message)
     {

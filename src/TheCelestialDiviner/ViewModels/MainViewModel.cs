@@ -1666,7 +1666,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         AddLog($"开始下载更新包 {check.AssetName}…");
         var zip = await UpdateService.DownloadAsync(check);
         AddLog("更新包就绪，程序将退出并自动完成安装重启。");
-        UpdateService.PrepareAndLaunchUpdater(zip);
+        UpdateService.PrepareAndLaunchUpdater(zip, check.Version);   // 验包 / 预检 / 备份 全在此，失败则抛异常不退出
         UpdateRestartRequested?.Invoke();
     }
 

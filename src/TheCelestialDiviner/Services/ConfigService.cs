@@ -12,7 +12,20 @@ namespace TheCelestialDiviner.Services;
 /// </summary>
 public sealed class ConfigService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    /// <summary>
+    /// 序列化选项：**延迟到首次真正读写配置时创建**。
+    /// net48 下 System.Text.Json 是外挂依赖链，若发布包不完整 / 被安全软件隔离 /
+    /// 同名旧 dll 顶替，放在静态字段初始化器里会直接把整个类型标记为"初始化失败"：
+    /// 此后任何对 ConfigService 的访问都只能拿到 TypeInitializationException，
+    /// 连 Load / Save 自己的 try-catch 都救不回来（异常发生在进入方法之前）。
+    /// 放进 Lazy 后，依赖问题退化为一次普通异常，被 Load / Save 的 catch 吃掉，
+    /// 程序仍能启动（回落默认配置）并留下可读日志。
+    /// </summary>
+    private static readonly Lazy<JsonSerializerOptions> JsonOptionsHolder = new(CreateJsonOptions);
+
+    private static JsonSerializerOptions JsonOptions => JsonOptionsHolder.Value;
+
+    private static JsonSerializerOptions CreateJsonOptions() => new()
     {
         WriteIndented = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
@@ -51,11 +64,18 @@ public sealed class ConfigService
                 config.VisualizerOpacity = Compat.Clamp(config.VisualizerOpacity, 0, 100);
                 return config;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionText.IsDependencyRelated(ex))
             {
-                // 配置损坏：备份原件，返回新配置。
+                // 配置内容损坏（JSON 语法 / 字段类型 / 迁移期空引用）：备份原件，返回新配置。
                 Logger.Error("配置文件解析失败，已备份并生成新配置。", ex);
                 BackupCorruptedFile();
+                return new AppConfig();
+            }
+            catch (Exception ex)
+            {
+                // 运行依赖（System.Text.Json 链）或 IO / 权限问题：原文件大概率是好的，
+                // 不动它——否则用户修好环境后配置也没了。
+                Logger.Error("配置加载失败（疑似运行依赖问题，未改动原配置文件）。", ex);
                 return new AppConfig();
             }
         }

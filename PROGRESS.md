@@ -66,6 +66,51 @@
   要 Interception → 首次安装 + 重启。普通 / 扫描码 / 消息三条不受影响，可自由切
 - 📌 待验证（需用户配合）：卸载 Interception + 重启后 DD 是否恢复 —— 这是这条结论的最后一块拼图
 
+### 坑 3 · 自更新脚本丢了退出码 → 半新半旧的目录照样被启动（v1.9.2 修）
+
+- 📋 2026-11-01 用户反馈：点「有更新」升级后首次启动弹「ConfigService 的类型初始值设定项引发异常」
+- 🔍 根因链：ConfigService 只有两个静态字段（`JsonOptions` / `Gate`），`Gate` 不可能抛 →
+  异常必然在 `new JsonSerializerOptions{...}` 里，即 net48 下 System.Text.Json 8.0.5 外挂 DLL 链加载失败。
+  负向实验（删 `System.Text.Encodings.Web.dll` + `System.Runtime.CompilerServices.Unsafe.dll`）复现出
+  `FileNotFoundException: 未能加载文件或程序集 System.Text.Encodings.Web, Version=8.0.0.0`
+- 💡 放大器：旧脚本 `xcopy /e /y /q /i >nul 2>&1` 之后**不判 errorlevel 就 `start`**。xcopy 默认遇错即停，
+  任何一处写入失败（杀软拦截 / 文件被占 / 只读属性 / 磁盘满）都会得到"半新半旧"的目录，
+  而程序照样被拉起来 —— 半成品被当成成品启动
+- ✅ 处理：验包（清单 / 0 字节）→ 可写性预检 → 整目录备份 → robocopy（判退出码 + 重试 4 轮）→
+  逐项清点关键文件 → 失败回滚并重启旧版本 → 状态标记回执（失败 / 未生效下次启动如实告知）
+- ⚠️ 两个**只在走查里**抓到的坑（后端不可执行 bat 时尤其要逐行读）：
+  ① `AppContext.BaseDirectory` 恒以 `\` 结尾，拼进命令行成 `"C:\app\"` → 反斜杠转义掉引号，
+  robocopy 收到坏路径（不裁掉尾部反斜杠，**每次更新都会失败回滚**）；
+  ② 生成的 bat 末行缺 CRLF 会吞掉最后一条命令（自删除失效）→ 改用 `(goto) 2>nul & del "%~f0"`
+- 📌 遗留：bat 本体未能在开发机执行（安全策略禁止调用 cmd.exe），发版前应实机走一次真实更新
+
+### 坑 4 · 注释区公告被当成"版本更新日志"用（v1.9.2 归位）
+
+- 📋 历史包袱：Notice.md 里曾长期挂着「点选项检查升级 1.7.x 版本：…建议尽快更新」的更新总结，
+  以及「键帽进 OBS（v1.8.7）」这类**随版本变化的功能提示**
+- 💥 后果：① 公告随每次发版变成过期信息（用户看到的"新功能"可能早就不是新的；而且公告有远端缓存，
+  改晚了用户还在看旧文案）；② 1.9.1 把「DD 驱动下载：连不上是常态」写进公告 —— 那段话的本意是
+  **在用户正在下载驱动时**出现（下载确认框 + `DdFetchStatus` 进度行本来就有），放公告就成了与场景无关的常驻噪音
+- ✅ 约定（长期有效）：**Notice.md / Notice2.md 只放固定内容** —— 门派文案、计算器链接、交流群号。
+  **任何版本更新总结、任何随版本变化的功能提示都不进公告**；版本变化归 CHANGELOG / 发布说明，
+  场景化提示归它出现的那个界面
+
+## 发版 v1.9.2（2026-11-01）
+
+- 📦 csproj `Version` / `FileVersion` → **1.9.2 / 1.9.2.0**；CHANGELOG 标题定版 `## v1.9.2 — 2026-11-01`
+- 📄 新增 `docs/release-notes/v1.9.2-release-notes.md`（使用范围声明 / 本轮重点 / 升级方式 / 已知问题 / 使用说明）
+- 🛡️ 更新流程加固（本轮主体，见坑 3）：验包 / 可写性预检 / 整目录备份 / robocopy + 退出码 + 重试 /
+  清点 / 回滚 / 状态回执；新增 `Services/DependencyCheck.cs`（启动依赖自检）与
+  `Helpers/ExceptionText.cs`（异常链展开，Logger 与弹窗共用）
+- 🧹 公告归位（见坑 4）：Notice.md / Notice2.md 删除常驻 DD 提示，只保留固定文案
+- ✅ 构建 Debug / Release 0 警告 0 错误
+- 📦 `dist/TheCelestialDiviner-1.9.2-win64/` 21 项（含 `interception\` 三文件，**不含**闭源 DD 驱动）
+- 📦 `dist/TheCelestialDiviner-1.9.2-win64.zip`：23 个文件 / 1,960,965 B，
+  sha256 `f76176bf1ac990a9a408b6bda0518f146aa89c91ad8b5b9d88d4bf104f90b9bb`
+- ✅ 内嵌资源校验：新 exe 内已无「DD 驱动下载：连不上是常态」，已含 `## v1.9.2 — 2026-11-01`
+- ✅ 自测（反射测试台，临时工程已删）：验包 3 项 + 整目录备份 1 项 + 状态回执 4 项全过
+- ⚠️ 待办：双端推送 + 建 Release；bat 本体需实机验证一次真实更新
+
 ## 发版 v1.9.1（2026-10-30）
 
 - 📦 csproj `Version` / `FileVersion` → **1.9.1 / 1.9.1.0**；CHANGELOG 标题定版 `## v1.9.1 — 2026-10-30`
