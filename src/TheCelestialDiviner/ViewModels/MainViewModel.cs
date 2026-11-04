@@ -99,6 +99,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// </summary>
     public event Func<string, bool>? DdDriverFetchConfirmRequested;
 
+    /// <summary>驱动预检拦截 / 安装结果提示（标题, 正文）：View 用普通消息框展示，不需要用户确认。</summary>
+    public event Action<string, string>? DriverNoticeRequested;
+
     /// <summary>
     /// 「选哪条驱动路线」导引请求（View 弹选择窗口）：
     /// 返回 4 = Interception / 3 = DD / 0 = 暂用普通模式 / -1 = 直接关窗（等同于暂不）。
@@ -320,6 +323,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         // 所以这里只负责"装好 + 提示重启"，不在安装后强行切模式（重启前切了也用不了）。
         InstallInterceptionDriverCommand = RelayCommand.Create(RequestInterceptionInstall);
         UninstallInterceptionDriverCommand = RelayCommand.Create(RequestInterceptionUninstall);
+        RepairInterceptionRegistrationCommand = RelayCommand.Create(RequestInterceptionRepair);
         SetKeycapSchemeCommand = new RelayCommand(o =>
         {
             if (o is string name) KeycapSchemeName = name;
@@ -387,7 +391,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         // 「重启后自动切换」待办（3 = DD / 4 = Interception）：把"重启后还得记得再手动选一次"这步包办。
         // 来源：①互斥弹窗里确认卸载 Interception（→3）；②首次导引里选了要装 Interception（→4）。
         // 判据一律用 IsDriverPresent：/uninstall 只删注册项，驱动要到重启才摘掉，
-        // 那段窗口里 DriverInstalled 已是 false，但切过去依旧是"假状态"。
+        // 那段窗口里 KeyboardRegistered 已是 false，但切过去依旧是"假状态"。
         var pendingMode = _config.PendingModeAfterReboot;
         if (pendingMode == 0 && _config.PendingDdAfterReboot) pendingMode = 3;   // 旧字段迁移
         if (pendingMode is 3 or 4)
@@ -633,7 +637,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         Application.Current?.Dispatcher.BeginInvoke(() =>
         {
             RefreshInterceptionDriverState();
-            if (!InterceptionDriverService.DriverInstalled) return;
+            if (!InterceptionDriverService.AnyRegistered) return;
+
+            // 记账：下次启动就能区分"本程序装的"和"不知道谁装的残留"（孤儿提示的判据之一）。
+            _config.InterceptionInstalledByApp = true;
+            _config.InterceptionInstallAppVersion = UpdateService.DisplayVersion;
+            _config.InterceptionInstallUtc = DateTime.UtcNow;
+            SaveConfig();
+
             if (InterceptionDriverService.State == InterceptionDriverService.DriverState.Ready)
             {
                 FinishDdFetchStatus("Interception 驱动已就绪，可在「选项 → 键盘注入」里选择该模式。", 10);
@@ -650,22 +661,105 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// </summary>
     private void RequestInterceptionInstall()
     {
-        var confirmed = DdDriverFetchConfirmRequested?.Invoke(
-            "Interception 是一条开源的物理级注入路线（oblitum/Interception，LGPL 3.0），"
-            + "驱动由官方 GitHub Release 提供、带原作者数字签名，本程序只做原版下载与安装。\n\n"
-            + "代价与限制：\n"
-            + "· 它替换的是系统键盘类过滤驱动，**安装完成后必须重启电脑**才生效；\n"
-            + "· 与 DD 驱动二选一（同一时刻只用一条注入路线）；\n"
-            + "· 开启「内存完整性 / 内核隔离」的系统可能拒绝加载该驱动。\n\n"
-            + "官方文件已随程序内置（interception\\ 目录），安装不需要联网。\n\n"
-            + "是否现在安装？") == true;
-        if (confirmed)
+        // 已注册且库在位 = 真装好了，没什么可做的。
+        if (InterceptionDriverService.KeyboardRegistered && InterceptionDriverService.DllPresent)
         {
+            AddLog("Interception 驱动已在系统里，无需重复安装。只是不想用了可直接切换注入模式，或卸载它。");
+            RefreshInterceptionDriverState();
+            return;
+        }
+
+        // 只剩鼠标类 = 上次安装半途失败：不让再装（会在鼠标类上叠第二份），引导走干净路径。
+        if (InterceptionDriverService.AnyRegistered && !InterceptionDriverService.KeyboardRegistered)
+        {
+            AddLog("系统里只注册了鼠标类过滤驱动（键盘类没有）：请先「卸载 Interception 驱动」并重启，再重新安装。");
+            RefreshInterceptionDriverState();
+            return;
+        }
+
+        // 预检只在"真的要新增注册项"时做。已注册但库缺失的补救只是补文件，不新增注册项，
+        // 此时拦下来反而会让用户没法恢复（HVCI 机器上本来也装不进去，但这里没在装）。
+        var needsInstall = !InterceptionDriverService.KeyboardRegistered;
+        if (needsInstall)
+        {
+            var preflight = DriverPreflight.Evaluate(IsAdmin);
+            if (preflight.HasBlocking)
+            {
+                Logger.Warn("Interception 安装被预检拦下：" + preflight.ToText().Replace("\n", " / ").Replace("\r", ""));
+                DriverNoticeRequested?.Invoke("现在无法安装 Interception 驱动", preflight.ToText());
+                AddLog("已取消安装：预检发现问题，需要先处理（详见弹窗）。");
+                return;
+            }
+
+            var warningText = preflight.ToText();
+            var confirmedInstall = DdDriverFetchConfirmRequested?.Invoke(
+                "Interception 是一条开源的物理级注入路线（oblitum/Interception，LGPL 3.0），"
+                + "驱动由官方 GitHub Release 提供、带原作者数字签名，本程序只做原版下载与安装。\n\n"
+                + "代价与限制：\n"
+                + "· 它替换的是系统键盘与鼠标的类过滤驱动，**安装完成后必须重启电脑**才生效；\n"
+                + "· 与 DD 驱动二选一（同一时刻只用一条注入路线）；\n"
+                + "· 开启「内存完整性 / 内核隔离」的系统会拒绝加载该驱动。\n\n"
+                + "官方文件已随程序内置（interception\\ 目录），安装不需要联网。\n"
+                + (warningText.Length > 0 ? "\n" + warningText + "\n" : "")
+                + "\n是否现在安装？") == true;
+            if (!confirmedInstall)
+            {
+                AddLog("已取消安装 Interception 驱动。需要时可再次从「选项 → 键盘注入 → 安装 Interception 驱动…」发起。");
+                return;
+            }
+
             InterceptionDriverService.StartPrepare();
             RefreshInterceptionDriverState();
             return;
         }
-        AddLog("已取消安装 Interception 驱动。需要时可再次从「选项 → 键盘注入 → 安装 Interception 驱动…」发起。");
+
+        // 走到这里：驱动已注册、但 interception.dll 不在位。只补库文件，不重跑安装器。
+        var confirmedRestore = DdDriverFetchConfirmRequested?.Invoke(
+            "检测到 Interception 驱动已经装在系统里，但程序需要的 interception.dll 不在位"
+            + "（常见原因：被杀毒软件当成键盘记录器隔离，或手工删掉了）。\n\n"
+            + "接下来只会把随包的官方库文件补回 %APPDATA%\\TheCelestialDiviner\\drivers\\interception\\，"
+            + "**不会重新安装驱动**（驱动已经在系统里，重装只会在过滤链上叠状态）。\n\n"
+            + "是否现在补全？") == true;
+        if (!confirmedRestore)
+        {
+            AddLog("已取消补全 Interception 库文件。");
+            return;
+        }
+
+        InterceptionDriverService.StartPrepare();
+        RefreshInterceptionDriverState();
+    }
+
+    /// <summary>
+    /// 检查并修复过滤链（UI 线程）：去空项 → 按安装前快照补回丢失项 → 去重 → 补系统默认类驱动。
+    /// 这是唯一会写注册表的手动入口，只在用户显式点击时执行；不碰驱动文件、不调安装器。
+    /// </summary>
+    private void RequestInterceptionRepair()
+    {
+        if (!IsAdmin)
+        {
+            DriverNoticeRequested?.Invoke("需要管理员权限",
+                "修复要写系统注册表，需要管理员权限。\n\n"
+                + "请关闭本程序，右键 TheCelestialDiviner.exe →「以管理员身份运行」，再执行修复。");
+            AddLog("已取消修复：当前不是管理员权限。");
+            return;
+        }
+
+        var before = DriverStateStore.LoadBefore();
+        var actions = InterceptionRegistration.Repair(before);
+
+        RefreshInterceptionDriverState();
+        if (actions.Count == 0)
+        {
+            AddLog("驱动注册检查完成：键盘 / 鼠标两类过滤链都是干净的，无需修复。");
+            return;
+        }
+
+        foreach (var action in actions) Logger.Info("驱动注册修复：" + action);
+        AddLog("驱动注册已修复（重启后彻底生效）：" + string.Join("；", actions));
+        DriverNoticeRequested?.Invoke("驱动注册已修复",
+            "已对键盘 / 鼠标类的过滤链做了以下处理：\n\n· " + string.Join("\n· ", actions)
+            + "\n\n重启电脑后彻底生效。");
     }
 
     /// <summary>
@@ -674,11 +768,23 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// </summary>
     private void RequestInterceptionUninstall()
     {
+        // 先拦权限：非管理员时官方安装器只会返回一个看不懂的退出码，
+        // 用户看到"卸载未完成（exit=5）"只会更慌。
+        if (!IsAdmin)
+        {
+            DriverNoticeRequested?.Invoke("需要管理员权限",
+                "卸载系统级驱动需要管理员权限。\n\n"
+                + "请关闭本程序，右键 TheCelestialDiviner.exe →「以管理员身份运行」，再执行卸载。");
+            AddLog("已取消卸载：当前不是管理员权限。");
+            return;
+        }
+
         var confirmed = DdDriverFetchConfirmRequested?.Invoke(
-            "将调用官方安装器卸载 Interception 驱动（移除键盘类过滤驱动注册）。\n\n"
+            "将调用官方安装器卸载 Interception 驱动（移除键盘类 + 鼠标类的过滤驱动注册）。\n\n"
             + "· 卸载后同样需要重启电脑才彻底生效；\n"
-            + "· 卸载后该注入模式不可用，可改回 DD 驱动或普通模式；\n"
-            + "· 只是不用了、不想重启的话，直接切到别的注入模式即可，不必卸载。\n\n"
+            + "· 卸载后该注入模式不可用，可改回 DD 驱动（如果这台机器上 DD 可用）；\n"
+            + "· 普通 / 扫描码 / 消息模式对剑网三无效，卸载后想继续用本工具只能换另一条物理级驱动。\n"
+            + "· 只是暂时不用了不必卸载 —— 切到普通模式不影响你正常打字（但剑网三内不会出键）。\n\n"
             + "确认卸载？") == true;
         if (!confirmed) return;
 
@@ -687,13 +793,26 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         RefreshInterceptionDriverState();
         if (ok)
         {
-            AddLog("Interception 驱动已卸载：请重启电脑，重启后键盘类过滤驱动才会彻底移除。");
+            _config.InterceptionInstalledByApp = false;
+            _config.InterceptionInstallAppVersion = "";
+            _config.InterceptionInstallUtc = null;
+            SaveConfig();
+            AddLog("Interception 驱动已卸载：请重启电脑，重启后键盘 / 鼠标类过滤驱动才会彻底移除。");
             FinishDdFetchStatus("Interception 驱动已卸载：请重启电脑。", 30);
             return;
         }
+
+        // 部分卸载（只清掉一侧）是独立的一种结果：要说清楚哪一类还残留，
+        // 否则用户看到"卸载未完成"却不知道鼠标为什么还坏着。
         var reason = InterceptionDriverService.LastError ?? "未知原因";
         AddLog($"Interception 驱动卸载未完成（{reason}）。");
         FinishDdFetchStatus($"Interception 驱动卸载未完成：{reason}", 25);
+        DriverNoticeRequested?.Invoke("卸载未完成", reason
+            + "\n\n如果重启后仍然如此，可用「检查与修复驱动注册…」清理残留，或按下面的命令手动恢复：\n"
+            + "reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4D36E96B-E325-11CE-BFC1-08002BE10318}\" "
+            + "/v UpperFilters /t REG_MULTI_SZ /d kbdclass /f\n"
+            + "reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4D36E96F-E325-11CE-BFC1-08002BE10318}\" "
+            + "/v UpperFilters /t REG_MULTI_SZ /d mouclass /f");
     }
 
     /// <summary>导引是否已在本会话跑过（防重复弹窗）。</summary>
@@ -731,7 +850,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         {
             if (advice.NoPhysicalRouteAvailable && KeyboardMode is 3 or 4)
             {
-                FinishDdFetchStatus($"当前环境不适合物理级注入（{advice.OsName} + 内核完整性开关）：建议改用普通模式。", 30);
+                FinishDdFetchStatus($"当前环境无法使用物理级注入（{advice.OsName} + 内核完整性开关）："
+                                    + "需先关闭内存完整性并重启，否则剑网三里不会出键。", 30);
             }
             else if (advice.Is25H2Plus && KeyboardMode == 3)
             {
@@ -811,7 +931,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
                 break;
             default:
                 KeyboardMode = 0;
-                AddLog("驱动导引：已选择暂用普通模式（可随时在「选项 → 键盘注入」里改）。");
+                AddLog("驱动导引：已选择暂不安装（注意：普通模式在剑网三里不出键）。"
+                       + "可随时在「选项 → 键盘注入」里选驱动。");
                 break;
         }
     }
@@ -1114,6 +1235,78 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         // DD 驱动缺失引导：窗口可见后弹出确认（用户发起官方渠道下载，程序仅做下载器）。
         if (_ddAutoActivate && !DdDriverService.IsAutoFetchRunning)
             RequestDdDriverFetch();
+
+        // 驱动注册自检（后台、不弹窗）：识别"系统里有驱动但没有安装记录"的残留与过滤链异常。
+        _ = System.Threading.Tasks.Task.Run(CheckDriverRegistrationOnStartup);
+    }
+
+    /// <summary>
+    /// 启动自检：系统里有过滤驱动注册、但本机没有安装记账时，提示可能是残留。
+    /// 只写日志 + 注释区一句话 —— 启动阶段不打断用户，且措辞是"可能"：
+    /// 用户连 %APPDATA% 一起删掉时，程序无法证明这驱动是自己装的。
+    /// </summary>
+    private void CheckDriverRegistrationOnStartup()
+    {
+        try
+        {
+            if (!InterceptionDriverService.AnyRegistered) return;
+
+            // 悬空项最要紧（注册名在、驱动文件没了 → 整类设备都会报 Code 39），其次才是重复项。
+            // 两者都只在状态栏 + 日志里说，不弹窗：启动阶段不打断用户。
+            var dangling = InterceptionRegistration.DanglingClasses();
+            var duplicated = InterceptionRegistration.AllClasses
+                .Where(InterceptionRegistration.HasDuplicate)
+                .Select(InterceptionRegistration.Label)
+                .ToArray();
+
+            string? hint = null;
+            if (dangling.Length > 0)
+            {
+                Logger.Warn("启动自检：" + string.Join("、", dangling) + "的过滤驱动文件缺失（悬空项），整类设备可能报 Code 39。");
+                hint = $"驱动注册异常：{string.Join("、", dangling)}的驱动文件缺失，可能导致键鼠失灵 —— "
+                       + "可用「选项 → 键盘注入 → 检查与修复驱动注册…」修复";
+            }
+            else if (duplicated.Length > 0)
+            {
+                Logger.Warn("启动自检：" + string.Join("、", duplicated) + "的过滤链里有重复项。");
+                hint = $"驱动注册有重复项（{string.Join("、", duplicated)}）—— "
+                       + "可用「选项 → 键盘注入 → 检查与修复驱动注册…」清理";
+            }
+
+            if (hint is not null)
+            {
+                PostLog(hint);
+                PostStatus(hint, 30);
+            }
+
+            var looksOrphan = !_config.InterceptionInstalledByApp
+                              && !DriverStateStore.HasRecord
+                              && !DriverStateStore.HasStagingArtifacts;
+            if (!looksOrphan) return;
+
+            Logger.Warn("启动自检：系统里注册了 Interception 过滤驱动，但本机没有本程序的安装记录"
+                        + "（可能是旧版本残留，或其它输入工具装的）。");
+            PostLog("检测到系统里还留着 Interception 驱动，但没有本程序的安装记录："
+                    + "如果不再使用，可在「选项 → 键盘注入」里卸载。");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"启动自检失败（忽略）：{ex.Message}");
+        }
+    }
+
+    /// <summary>后台线程写日志：<see cref="AddLog"/> 会改 ObservableCollection，必须回 UI 线程。</summary>
+    private void PostLog(string message)
+    {
+        try { Application.Current?.Dispatcher.BeginInvoke(() => AddLog(message)); }
+        catch { /* 退出时序：窗口已关，丢弃即可 */ }
+    }
+
+    /// <summary>后台线程写注释区状态（同样必须回 UI 线程）。</summary>
+    private void PostStatus(string message, int seconds)
+    {
+        try { Application.Current?.Dispatcher.BeginInvoke(() => FinishDdFetchStatus(message, seconds)); }
+        catch { /* 退出时序：窗口已关，丢弃即可 */ }
     }
 
     // ---------- 钩子事件接入（由 View 绑定；钩子线程直通调用，不经 UI 封送） ----------
@@ -1987,18 +2180,25 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// Interception 驱动是否可用（x64 库在位 + 键盘类上线了该过滤驱动）：决定菜单项能否点选。
+    /// Interception 驱动是否可用（x64 库在位 + **键盘类**上线了该过滤驱动）：决定菜单项能否点选。
     /// 装完没重启也算可用 —— 点选时由 EnsureReady 给出"请重启"这种可执行原因。
     /// </summary>
     public bool IsInterceptionDriverAvailable => InterceptionDriverService.IsAvailable;
 
+    /// <summary>
+    /// 系统里是否有该驱动的注册项（键盘或鼠标任一）。与上面那个是两个问题：
+    /// 卸载入口必须用它 —— 否则"键盘类好了、鼠标类还残留"的机器会失去唯一的清理入口。
+    /// </summary>
+    public bool IsInterceptionDriverInstalled => InterceptionDriverService.AnyRegistered;
+
     /// <summary>Interception 官方包是否正在下载 / 安装（安装入口据此转「安装中…」并禁用）。</summary>
     public bool IsInterceptionDriverPreparing => InterceptionDriverService.IsPreparing;
 
-    /// <summary>重算 Interception 驱动可用 / 安装中状态并通知 UI。</summary>
+    /// <summary>重算 Interception 驱动可用 / 已安装 / 安装中状态并通知 UI。</summary>
     public void RefreshInterceptionDriverState()
     {
         OnPropertyChanged(nameof(IsInterceptionDriverAvailable));
+        OnPropertyChanged(nameof(IsInterceptionDriverInstalled));
         OnPropertyChanged(nameof(IsInterceptionDriverPreparing));
     }
 
@@ -2146,6 +2346,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
 
     /// <summary>底栏设置菜单：卸载 Interception 驱动（调官方安装器 /uninstall，同样需重启）。</summary>
     public ICommand UninstallInterceptionDriverCommand { get; }
+
+    /// <summary>底栏设置菜单：检查并修复 Interception 过滤链（去重 / 补回丢失项 / 补系统默认类驱动）。</summary>
+    public ICommand RepairInterceptionRegistrationCommand { get; }
 
     /// <summary>底栏设置菜单：切换键帽配色方案（参数 = KeycapSchemes.All 中的方案名）。</summary>
     public ICommand SetKeycapSchemeCommand { get; }

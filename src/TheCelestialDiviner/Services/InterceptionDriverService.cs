@@ -65,12 +65,8 @@ public static class InterceptionDriverService
     /// <summary>官方命令行安装器（x86，兼容 32 / 64 位系统；驱动本体以资源形式内嵌在它里面）。</summary>
     private const string InstallerFileName = "install-interception.exe";
 
-    /// <summary>键盘类过滤驱动注册的服务名（官方安装器固定用它，也是回滚判据）。</summary>
-    private const string KeyboardServiceName = "keyboard";
-
-    /// <summary>键盘设备类 GUID（UpperFilters 挂在它下面）。</summary>
-    private const string KeyboardClassKey =
-        @"SYSTEM\CurrentControlSet\Control\Class\{4D36E96B-E325-11CE-BFC1-08002BE10318}";
+    // 服务名与两个设备类的 GUID 统一收在 InterceptionRegistration 里：
+    // 官方安装器改的是键盘 + 鼠标<b>两个</b>类，状态判定必须两边都看。
 
     /// <summary>官方 v1.0.1 的 x64 interception.dll 指纹（与 GitHub Release 资产逐字节一致）。</summary>
     private const string KnownDllSha256 = "AB88164C11B1B48488772D4C3BFAA4509D5B0AE9DBC5A691DC4F96F0260443C8";
@@ -150,6 +146,7 @@ public static class InterceptionDriverService
     private static string? _loadedPath;
     private static int _keyboardDevice;      // 已解析的键盘设备号（0 = 未解析）
     private static int _lastLatencyLogTick;
+    private static int _lastFailLogTick;
 
     /// <summary>已加载的 DLL 路径（未加载为 null）。</summary>
     public static string? LoadedPath { get { lock (Gate) return _loadedPath; } }
@@ -169,23 +166,32 @@ public static class InterceptionDriverService
     /// <summary>用户态库是否在位（不算驱动是否安装）。</summary>
     public static bool DllPresent => ProbeDll(out _) is not null;
 
-    /// <summary>驱动是否已安装（键盘类 UpperFilters 里有 keyboard 项 + System32\drivers\keyboard.sys 占位）。</summary>
-    public static bool DriverInstalled => ReadKeyboardUpperFilters().Any(
-        f => string.Equals(f, KeyboardServiceName, StringComparison.OrdinalIgnoreCase));
-
     /// <summary>
-    /// 驱动是否**仍在系统里**：已安装，或已卸载但还没重启（注册项删了、内核里仍挂着）。
-    /// 这是"与 DD 冲突"的正确判据 —— 只看 <see cref="DriverInstalled"/> 会在
-    /// "卸载了但没重启"这段窗口里误判为"已经没有冲突"，从而放出假的 DD 模式。
+    /// 键盘类是否注册了该过滤驱动 —— **注入可用性**的判据（本程序只往键盘注入）。
+    /// 与「系统里有没有这个驱动」是两个问题：官方安装器会同时改鼠标类，
+    /// 只清掉鼠标侧时键盘侧仍为 true，此时程序该说"鼠标类有残留"，而不是"一切正常"。
     /// </summary>
-    public static bool IsDriverPresent => DriverInstalled || IsReady || TryProbeContext();
+    public static bool KeyboardRegistered => InterceptionRegistration.IsRegistered(DeviceClass.Keyboard);
+
+    /// <summary>鼠标类是否注册（官方安装器一并写入，是爆炸半径的另一半）。</summary>
+    public static bool MouseRegistered => InterceptionRegistration.IsRegistered(DeviceClass.Mouse);
+
+    /// <summary>任一类注册 = 系统里有这个驱动（菜单可见性 / 孤儿判定的判据）。</summary>
+    public static bool AnyRegistered => InterceptionRegistration.AnyRegistered;
 
     /// <summary>
-    /// 菜单项能否点选：库在位且驱动已安装。装完还没重启也算可用 ——
+    /// 驱动是否**仍在系统里**：已注册，或已卸载但还没重启（注册项删了、内核里仍挂着），
+    /// 或本次会话仍持有可用的上下文。这是"与 DD 冲突"的正确判据 —— 只看
+    /// <see cref="KeyboardRegistered"/> 会在"卸载了但没重启"这段窗口里误判为"已经没有冲突"。
+    /// </summary>
+    public static bool IsDriverPresent => AnyRegistered || IsReady || TryProbeContext();
+
+    /// <summary>
+    /// 菜单项能否点选：库在位且**键盘类**已注册。装完还没重启也算可用 ——
     /// 点选时由 <see cref="EnsureReady"/> 给出"请重启"这种可执行的具体原因，
     /// 比灰着不给点更有指导意义。
     /// </summary>
-    public static bool IsAvailable => DllPresent && DriverInstalled;
+    public static bool IsAvailable => DllPresent && KeyboardRegistered;
 
     /// <summary>驱动当前状态（读注册表 + 探测设备，供 UI 展示）。</summary>
     public static DriverState State
@@ -195,7 +201,7 @@ public static class InterceptionDriverService
             // 本进程已持有上下文 = 必然已加载；此时再探测设备可能因独占共享失败，
             // 不能据此回判成"需重启"。
             if (IsReady) return DriverState.Ready;
-            if (!DriverInstalled) return DriverState.NotInstalled;
+            if (!KeyboardRegistered) return DriverState.NotInstalled;
             return TryProbeContext() ? DriverState.Ready : DriverState.NeedsReboot;
         }
     }
@@ -230,7 +236,7 @@ public static class InterceptionDriverService
 
             // "已卸载但还没重启"是个合法的过渡态：注册项删了，驱动仍挂在键盘栈上 ——
             // 本次会话继续可用（别把用户当场踢回普通模式），下次开机会自然失效。
-            if (!DriverInstalled)
+            if (!KeyboardRegistered)
             {
                 var stillLoaded = TryProbeContext();
                 if (!stillLoaded)
@@ -292,6 +298,7 @@ public static class InterceptionDriverService
             }
 
             _keyboardDevice = device;
+            HookPowerEvents();
             Logger.Info($"Interception 驱动就绪（{Path.GetFileName(_loadedPath)}，键盘设备 #{device}）。");
             return true;
         }
@@ -311,6 +318,52 @@ public static class InterceptionDriverService
             _keyboardDevice = 0;
             // 不 FreeLibrary：进程退出时随进程回收，避免与其他线程的绑定失效错位。
         }
+    }
+
+    // ---------- 睡眠唤醒 ----------
+
+    private static bool _powerHooked;
+
+    /// <summary>
+    /// 首次就绪后挂一次电源事件。睡眠唤醒会让 USB 设备重新枚举、设备号一路递增
+    /// （免费版只有 10 个槽位，见官方 issue #181 / #25），上下文会指向已经不存在的设备 ——
+    /// 现场表现是"设备管理器里一切正常，但按键没反应"。重建上下文只要毫秒级，
+    /// 比让用户对着这个状态猜要好得多。
+    /// </summary>
+    private static void HookPowerEvents()
+    {
+        if (_powerHooked) return;
+        _powerHooked = true;
+        try { Microsoft.Win32.SystemEvents.PowerModeChanged += OnPowerModeChanged; }
+        catch (Exception ex) { Logger.Warn($"订阅电源事件失败（唤醒后需重新选择注入模式）：{ex.Message}"); }
+    }
+
+    private static void OnPowerModeChanged(object? sender, Microsoft.Win32.PowerModeChangedEventArgs e)
+    {
+        if (e.Mode != Microsoft.Win32.PowerModes.Resume) return;
+        _ = System.Threading.Tasks.Task.Run(() =>
+        {
+            try
+            {
+                Shutdown();                       // 内部取 Gate（可重入），先放掉旧上下文
+                if (!KeyboardRegistered) return;
+                var ok = EnsureReady();
+                if (!ok)
+                {
+                    Logger.Warn($"睡眠唤醒：Interception 上下文重建失败（{LastError}）。");
+                    return;
+                }
+
+                Logger.Info($"睡眠唤醒：Interception 上下文已重建（键盘设备 #{_keyboardDevice}）。");
+                if (_keyboardDevice >= 8)
+                    Logger.Warn($"Interception 键盘设备号 #{_keyboardDevice}（免费版上限 10）："
+                                + "设备槽位接近耗尽，建议重启电脑。");
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"睡眠唤醒后重建 Interception 上下文失败（忽略）：{ex.Message}");
+            }
+        });
     }
 
     private static void FreeAll()
@@ -457,6 +510,14 @@ public static class InterceptionDriverService
 
             if (!seh && sent == 1) return true;
             EchoGuard.CancelNote(vk, down, note);
+
+            // 与 DD 同理：注入失败原本静默，现场无法区分"驱动不收"和"连发逻辑停了"。
+            if (unchecked(Environment.TickCount - _lastFailLogTick) > 2000)
+            {
+                _lastFailLogTick = Environment.TickCount;
+                Logger.Warn($"Interception 注入失败（vk=0x{vk:X2}, down={down}, ret={sent}"
+                            + $"{(seh ? "，SEH 异常" : "")}）：若持续出现，说明驱动侧已不再接受注入。");
+            }
             return false;
         }
     }
@@ -568,9 +629,10 @@ public static class InterceptionDriverService
             attempt++;
             try
             {
-                PrepareOnce(attempt);
-                Report(PrepareStage.Succeeded, attempt,
-                    "Interception 驱动已安装：请重启电脑，重启后即可在「键盘注入」里选择它。");
+                var notice = PrepareOnce(attempt);
+                var message = "Interception 驱动已安装：请重启电脑，重启后即可在「键盘注入」里选择它。";
+                if (!string.IsNullOrEmpty(notice)) message += "（" + notice + "）";
+                Report(PrepareStage.Succeeded, attempt, message);
                 Logger.Info("Interception 驱动安装完成，等待重启生效。");
                 return;
             }
@@ -592,14 +654,20 @@ public static class InterceptionDriverService
         }
     }
 
-    private static void PrepareOnce(int attempt)
+    /// <summary>
+    /// 一次安装尝试：补全官方文件 → 幂等闸 → 快照 → 官方安装器 → 校验 / 最小回滚。
+    /// 返回需要补进结果文案的说明（null = 一切干净）。
+    /// </summary>
+    private static string? PrepareOnce(int attempt)
     {
         var stagedDll = Path.Combine(StagingDir, DllFileName);
         var stagedInstaller = Path.Combine(StagingDir, InstallerFileName);
         Directory.CreateDirectory(StagingDir);
 
-        // 1. 取官方文件：优先随包（interception\ 目录，LGPL 允许再分发）—— 不联网、不依赖 GitHub；
-        //    随包缺失（源码构建 / 精简发布包）时才走官方 Release 下载。
+        // 1. 先补全官方文件（**与装没装过无关**）。
+        //    驱动已注册、但 interception.dll 被杀软隔离 / 用户误删的机器上，用户点"安装"其实
+        //    只需要把库补回来 —— 这一步必须照跑，否则会把用户卡进"库没了 → 模式点不了 →
+        //    又没有入口修"的死角（这是 1.9.1 升级上来的用户最可能踩的坑之一）。
         if (HasBundled)
         {
             Report(PrepareStage.Verifying, attempt, "正在校验随包官方文件（interception.dll）…");
@@ -618,15 +686,83 @@ public static class InterceptionDriverService
 
         VerifyOfficialDll(stagedDll);
 
-        // 2. 官方安装器 /install（静默，无交互：无 pause / 提示输入）。
+        // 2. 幂等闸：键盘类已注册 = 注入本来就能用，不跑安装器（库文件上一步已经补好）。
+        //    官方安装器没有「已安装就跳过」的分支，二次运行会不会留下重复项取决于它的实现细节
+        //    （二进制里既能读到"读现有值再写回"的痕迹，也看不到去重逻辑）。与其赌它幂等，
+        //    不如自己拦住 —— 这条同时挡掉「删了程序目录但驱动还在」的重装场景。
+        if (KeyboardRegistered)
+        {
+            Logger.Info("Interception：键盘类已注册该过滤驱动，跳过安装器（幂等，仅补全库文件）。");
+            return "驱动本来就在系统里，已补全随包库文件，没有重复安装";
+        }
+
+        // 只剩鼠标类 = 上一次安装半途失败留下的残局。此时再跑安装器只会在鼠标类上叠第二份，
+        // 宁可停下来让用户走「卸载 → 重启 → 重装」的干净路径。
+        if (AnyRegistered)
+            throw new NoRetryException(
+                "系统里只注册了鼠标类过滤驱动（键盘类没有），已中止安装以免重复写入。"
+                + "请先卸载 Interception 驱动并重启，再重新安装。");
+
+        // 3. 硬闸：内核完整性开着时装进去，只会把整类键鼠拖下水（注册了却加载不了 = Code 39）。
+        //    UI 预检可能被绕过（导引、菜单、以后新增的调用点都直接调 StartPrepare），
+        //    所以真正的拦截点放在这里 —— 这一条比任何提示都管用。
+        var kernelBlocker = DriverPreflight.KernelIntegrityItem();
+        if (kernelBlocker is not null)
+            throw new NoRetryException("已拒绝安装：" + kernelBlocker.Detail.Replace("\n", " "));
+
+        // 4. 快照：读不到就不动手 —— 不做没有快照的改动，否则出问题无从回滚。
+        var before = InterceptionRegistration.CaptureAll();
+        if (before.Any(s => !s.Readable))
+            throw new NoRetryException(
+                "无法读取键盘 / 鼠标类的过滤链注册表项，已中止安装（不做没有快照的改动）。"
+                + "请确认本程序以管理员身份运行后重试。");
+
+        // 5. 记账（安装前状态 + 本次用的库指纹），出问题时这是唯一的取证入口。
+        DriverStateStore.Save(before, installedByUs: true, dllSha256: TryHashFile(stagedDll) ?? "");
+
+        // 6. 官方安装器 /install（静默，无交互：无 pause / 提示输入）。
         Report(PrepareStage.Installing, attempt, "Interception 驱动准备中：正在安装驱动（官方安装器）…");
         var (exitCode, output) = RunInstaller(stagedInstaller, "/install");
-        var installed = DriverInstalled;
-        if (!installed)
+        if (!KeyboardRegistered && !MouseRegistered)
             throw new Exception($"官方安装器未完成安装（exit={exitCode}）{Shorten(output)}");
 
-        Logger.Info($"Interception 官方安装器执行完成（exit={exitCode}），键盘类 UpperFilters 已注册。");
+        Logger.Info($"Interception 官方安装器执行完成（exit={exitCode}），键盘 / 鼠标类过滤链已更新。");
         // 安装成功但设备尚未加载（本次会话内必然如此）＝ 等重启，属正常终态。
+
+        // 7. 校验 + 最小回滚
+        return VerifyAfterInstall(before);
+    }
+
+    /// <summary>
+    /// 安装后校验（四项：原有项仍在 / 目标项不重复 / 无空项 / 类型仍是 REG_MULTI_SZ）。
+    /// 只有「原有项被覆盖」会自动回滚 —— 那是安装器弄坏了别人的东西，属于止血；
+    /// 重复项 / 类型异常只报不改，因为程序悄悄改注册表的风险大于收益。
+    /// </summary>
+    private static string? VerifyAfterInstall(IReadOnlyList<ClassFilterSnapshot> before)
+    {
+        var check = InterceptionRegistration.Verify(before);
+
+        if (check.NeedsRestore)
+        {
+            var restored = InterceptionRegistration.RestoreMissing(before);
+            var detail = restored.Length > 0
+                ? $"安装器覆盖了原本挂在该类上的其它过滤驱动（{string.Join("、", check.LostEntries)}），"
+                  + $"已自动恢复 {string.Join("、", restored)}"
+                : $"安装器覆盖了原本挂在该类上的其它过滤驱动（{string.Join("、", check.LostEntries)}），"
+                  + "但自动恢复未成功，请用「检查与修复驱动注册…」手动处理";
+            Logger.Warn("Interception 安装校验：" + detail + "。");
+            return detail;
+        }
+
+        if (check.HasProblems)
+        {
+            Logger.Error("Interception 安装校验发现问题：" + check.Describe() + "。");
+            return "过滤链有异常（" + check.Describe()
+                   + "），可用「选项 → 键盘注入 → 检查与修复驱动注册…」修复";
+        }
+
+        Logger.Info("Interception 安装校验通过（两类过滤链原有项完整、无重复、类型正常）。");
+        return null;
     }
 
     /// <summary>
@@ -764,10 +900,24 @@ public static class InterceptionDriverService
         try
         {
             var (code, output) = RunInstaller(installer, "/uninstall");
-            var removed = !DriverInstalled;
-            Logger.Info($"Interception 卸载完成（exit={code}，注册项已清除={removed}）{Shorten(output)}");
-            if (!removed) LastError = $"卸载未完成（exit={code}）{Shorten(output)}";
-            return removed;
+
+            // 判据看两个类：官方安装器同时注册了 keyboard 与 mouse，
+            // 只清掉一侧就报"卸载完成"，用户会带着一半残留继续用（鼠标不动、程序说好着呢）。
+            var remaining = InterceptionRegistration.AllClasses
+                .Where(InterceptionRegistration.IsRegistered)
+                .Select(InterceptionRegistration.Label)
+                .ToArray();
+
+            if (remaining.Length == 0)
+            {
+                DriverStateStore.Clear();
+                Logger.Info($"Interception 卸载完成（exit={code}，键盘 / 鼠标两类注册项均已清除）{Shorten(output)}");
+                return true;
+            }
+
+            LastError = $"卸载未完成：{string.Join("、", remaining)}仍残留该过滤驱动注册（exit={code}）{Shorten(output)}";
+            Logger.Warn(LastError);
+            return false;
         }
         catch (Exception ex)
         {
@@ -855,21 +1005,6 @@ public static class InterceptionDriverService
         catch
         {
             return null;
-        }
-    }
-
-    /// <summary>键盘类 UpperFilters（REG_MULTI_SZ，读不到返回空数组）。</summary>
-    private static string[] ReadKeyboardUpperFilters()
-    {
-        try
-        {
-            using var key = Registry.LocalMachine.OpenSubKey(KeyboardClassKey);
-            return key?.GetValue("UpperFilters") as string[] ?? Array.Empty<string>();
-        }
-        catch (Exception ex)
-        {
-            Logger.Warn($"读取键盘类 UpperFilters 失败：{ex.Message}");
-            return Array.Empty<string>();
         }
     }
 

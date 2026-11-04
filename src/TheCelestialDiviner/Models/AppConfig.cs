@@ -325,8 +325,9 @@ public sealed class AppConfig
     /// v17：主题语音方案（提示音按主题绑定，随主题切换；取代全局 CustomSounds）；
     /// v18：键帽 Web 叠加源（OBS 浏览器源透明键帽）；
     /// v19：桌面悬浮层静音开关强制回默认关闭（历史值只由开发构建自动写入）；
-    /// v20：独立关闭热键（默认未设置）。</summary>
-    public const int CurrentVersion = 20;
+    /// v20：独立关闭热键（默认未设置）；
+    /// v21：Interception 驱动安装记账（是否本程序装的 / 版本 / 时间）。</summary>
+    public const int CurrentVersion = 21;
 
     /// <summary>配置文件版本号（预留迁移能力）。</summary>
     public int Version { get; set; } = CurrentVersion;
@@ -443,6 +444,19 @@ public sealed class AppConfig
     /// 前台游戏 + OBS 捕获下分层窗口与 DWM 争抢可能秒级卡顿（仅影响桌面观感，录制画面
     /// 由 OBS 浏览器源渲染不受影响）；接受不了桌面键帽冻结的可在 config.json 置 true。</summary>
     public bool WebOverlayMuteDesktop { get; set; }
+
+    /// <summary>
+    /// Interception 驱动是否由本程序安装过（安装成功置 true，完整卸载置 false）。
+    /// 只用于"系统里有驱动注册、但本机没有安装记录"的孤儿提示，不参与注入逻辑；
+    /// 与 <c>driver-state.json</c>（安装前快照）互补：那份是证据，这份是人可见的意图。
+    /// </summary>
+    public bool InterceptionInstalledByApp { get; set; }
+
+    /// <summary>安装 Interception 时的程序版本（排查"什么时候装的、哪个版本装的"）。</summary>
+    public string InterceptionInstallAppVersion { get; set; } = "";
+
+    /// <summary>安装 Interception 的 UTC 时间（null = 没有记录）。</summary>
+    public DateTime? InterceptionInstallUtc { get; set; }
 
     /// <summary>所有输入源方案（键为输入源标识字符串；镜像当前档位 Profiles[ActiveProfile]）。</summary>
     public Dictionary<string, KeyScheme> Schemes { get; set; } = new(StringComparer.Ordinal);

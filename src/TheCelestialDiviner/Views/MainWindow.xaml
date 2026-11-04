@@ -903,7 +903,9 @@
                                       Command="{Binding SetKeyboardModeCommand}"
                                       CommandParameter="{Binding RelativeSource={RelativeSource Self}, Path=Tag}"
                                       IsEnabled="{Binding IsInterceptionDriverAvailable}"/>
-                            <!-- 安装 Interception 驱动：未安装时出现（官方 Release 原版包 + 官方安装器，装完需重启）；
+                            <!-- 安装 Interception 驱动：**不可用**时出现（未装、或装了但 interception.dll
+                                 被杀软隔离 / 误删）。后者必须保留这个入口 —— 那种机器上模式项是灰的，
+                                 点这里能把随包库补回来（安装器会被幂等闸跳过），否则用户彻底没有补救路径；
                                  安装期间整体替换 Header 并禁用 -->
                             <MenuItem Tag="action" Command="{Binding InstallInterceptionDriverCommand}">
                                 <MenuItem.Style>
@@ -930,13 +932,18 @@
                                         <Setter Property="Header" Value="卸载 Interception 驱动…"/>
                                         <Setter Property="Visibility" Value="Collapsed"/>
                                         <Style.Triggers>
-                                            <DataTrigger Binding="{Binding IsInterceptionDriverAvailable}" Value="True">
+                                            <DataTrigger Binding="{Binding IsInterceptionDriverInstalled}" Value="True">
                                                 <Setter Property="Visibility" Value="Visible"/>
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
                                 </MenuItem.Style>
                             </MenuItem>
+                            <!-- 检查与修复驱动注册：**常驻**，不依赖是否已安装。它是"键盘鼠标已经坏了"时的
+                                 自救入口（去重 / 按快照补回被覆盖的过滤项 / 补回系统默认类驱动），
+                                 必须永远点得到；只动注册表，不调安装器、不碰驱动文件 -->
+                            <MenuItem Header="检查与修复驱动注册…" Tag="action" Style="{StaticResource MenuSubStyle}"
+                                      Command="{Binding RepairInterceptionRegistrationCommand}"/>
                         </MenuItem>
                         <MenuItem x:Name="KeycapSchemeMenu" Header="键帽配色" Style="{StaticResource MenuSubStyle}"
                                   ItemsSource="{Binding KeycapSchemeNames}"

@@ -66,12 +66,12 @@ public static class SystemDriverAdvisor
         return Environment.OSVersion.Version.Build;
     }
 
-    /// <summary>键盘类 GUID（UpperFilters 挂在它下面）。</summary>
-    private const string KeyboardClassKey =
-        @"SYSTEM\CurrentControlSet\Control\Class\{4D36E96B-E325-11CE-BFC1-08002BE10318}";
-
     /// <summary>键盘栈上"本来就该在"的过滤项：系统类驱动 + Interception 自己注册的名字。</summary>
     private static readonly string[] KnownFilters = { "kbdclass", "keyboard" };
+
+    /// <summary>鼠标栈上"本来就该在"的过滤项。Interception 的官方安装器会同时改鼠标类，
+    /// 所以冲突判定不能只看键盘 —— 鼠标类被第三方 filter 撑爆时，用户看到的是"鼠标不动了"。</summary>
+    private static readonly string[] KnownMouseFilters = { "mouclass", "mouse" };
 
     /// <summary>一条建议（字段全部只读快照，供 UI 与日志直接消费）。</summary>
     public sealed class Advice
@@ -103,8 +103,14 @@ public static class SystemDriverAdvisor
         /// <summary>键盘类 UpperFilters 原始内容。</summary>
         public IReadOnlyList<string> KeyboardFilters { get; init; } = Array.Empty<string>();
 
+        /// <summary>鼠标类 UpperFilters 原始内容（官方安装器同样会改它）。</summary>
+        public IReadOnlyList<string> MouseFilters { get; init; } = Array.Empty<string>();
+
         /// <summary>非系统自带、非 Interception 的第三方键盘过滤项（潜在冲突源）。</summary>
         public IReadOnlyList<string> ForeignFilters { get; init; } = Array.Empty<string>();
+
+        /// <summary>非系统自带、非 Interception 的第三方鼠标过滤项。</summary>
+        public IReadOnlyList<string> ForeignMouseFilters { get; init; } = Array.Empty<string>();
 
         /// <summary>推荐路线：3 = DD / 4 = Interception / 0 = 暂用普通模式。</summary>
         public int RecommendedMode { get; init; }
@@ -135,9 +141,15 @@ public static class SystemDriverAdvisor
         var sacState = ReadDword(@"SYSTEM\CurrentControlSet\Control\CI\Policy", "VerifiedAndReputablePolicyState");
         var sac = sacState is 1 or 2;
 
-        var filters = ReadKeyboardFilters();
+        var filters = ReadFilters(InterceptionRegistration.KeyboardClassKey);
         var foreign = filters
             .Where(f => !KnownFilters.Contains(f, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+
+        // 鼠标类同样要读：官方安装器会一起把 mouse 挂上去，只盯键盘会漏掉一半现场。
+        var mouseFilters = ReadFilters(InterceptionRegistration.MouseClassKey);
+        var foreignMouse = mouseFilters
+            .Where(f => !KnownMouseFilters.Contains(f, StringComparer.OrdinalIgnoreCase))
             .ToArray();
 
         var interceptionPresent = SafeInterceptionPresent();
@@ -155,13 +167,16 @@ public static class SystemDriverAdvisor
         }
         else if (hvci || kss || sac)
         {
-            // 内核完整性三件套任一开启：两条物理级路线都进不来，别把用户往"装完还是不能用"上推。
+            // 内核完整性三件套任一开启：两条物理级路线都加载不了。
+            // **不能把普通模式当退路推荐** —— 本程序服务于剑网三，普通 / 扫描码 / 消息模式
+            // 在剑网三里根本不出键，推荐它等于让用户白折腾一轮；这里只如实说明"没有可用路线"。
             recommended = 0;
             reasons.Add("这台机器的内核完整性开关是开着的，物理级驱动装上也加载不了");
             if (hvci) reasons.Add("· 内存完整性（HVCI）：开启");
             if (kss) reasons.Add("· 内核模式硬件强制堆栈保护：开启");
             if (sac) reasons.Add("· Smart App Control：评估 / 强制状态");
-            warnings.Add("想用物理级注入，需要先关掉上面这些并重启（Win11 25H2 全新安装常默认开启）");
+            reasons.Add("而普通 / 扫描码 / 消息模式对剑网三无效，所以这台机器上暂时没有可用路线");
+            warnings.Add("要用本工具，只能先关掉上面这些开关并重启（Win11 25H2 全新安装常默认开启）");
             if (ddAvailable) warnings.Add("即使关掉开关，25H2 上 DD 驱动仍有 0x50 蓝屏风险，建议优先 Interception");
         }
         else if (is25)
@@ -191,6 +206,15 @@ public static class SystemDriverAdvisor
                          + "可能与注入驱动冲突，若出现按键无反应 / 停不下来，先查这里");
         }
 
+        if (foreignMouse.Length > 0)
+        {
+            warnings.Add($"鼠标类上还挂着其他过滤驱动（{string.Join(" / ", foreignMouse)}）："
+                         + "同类里任一过滤驱动加载失败会让整类设备一起失效，鼠标不动时先查这里");
+        }
+
+        // 0 不叫"普通模式"：剑网三里它不出键，叫普通模式会让人以为能用。
+        var recommendedLabel = recommended == 0 ? "暂不安装（需先关闭内核完整性）" : ModeLabel(recommended);
+
         return new Advice
         {
             Build = build,
@@ -202,9 +226,11 @@ public static class SystemDriverAdvisor
             InterceptionPresent = interceptionPresent,
             DdAvailable = ddAvailable,
             KeyboardFilters = filters,
+            MouseFilters = mouseFilters,
             ForeignFilters = foreign,
+            ForeignMouseFilters = foreignMouse,
             RecommendedMode = recommended,
-            RecommendedLabel = ModeLabel(recommended),
+            RecommendedLabel = recommendedLabel,
             Reasons = reasons,
             Warnings = warnings
         };
@@ -215,6 +241,7 @@ public static class SystemDriverAdvisor
         => $"系统 {a.OsName}（Build {a.Build}）；HVCI={(a.HvciOn ? "开" : "关")}"
            + $"、ShadowStacks={(a.ShadowStacksOn ? "开" : "关")}、SAC={(a.SmartAppControlOn ? "开" : "关")}；"
            + $"键盘过滤链 [{(a.KeyboardFilters.Count == 0 ? "读不到" : string.Join(",", a.KeyboardFilters))}]；"
+           + $"鼠标过滤链 [{(a.MouseFilters.Count == 0 ? "读不到" : string.Join(",", a.MouseFilters))}]；"
            + $"Interception={(a.InterceptionPresent ? "在" : "无")}、DD库={(a.DdAvailable ? "在" : "无")}；"
            + $"推荐 {a.RecommendedLabel}";
 
@@ -237,17 +264,17 @@ public static class SystemDriverAdvisor
         return $"Windows（Build {build}）";
     }
 
-    /// <summary>读键盘类 UpperFilters（REG_MULTI_SZ；读不到返回空集合）。</summary>
-    private static string[] ReadKeyboardFilters()
+    /// <summary>读某个设备类的 UpperFilters（REG_MULTI_SZ；读不到返回空集合）。</summary>
+    private static string[] ReadFilters(string classKeyPath)
     {
         try
         {
-            using var key = Registry.LocalMachine.OpenSubKey(KeyboardClassKey);
+            using var key = Registry.LocalMachine.OpenSubKey(classKeyPath);
             return key?.GetValue("UpperFilters") as string[] ?? Array.Empty<string>();
         }
         catch (Exception ex)
         {
-            Logger.Warn($"导引：读取键盘类 UpperFilters 失败：{ex.Message}");
+            Logger.Warn($"导引：读取 {classKeyPath} 的 UpperFilters 失败：{ex.Message}");
             return Array.Empty<string>();
         }
     }

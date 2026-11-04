@@ -7,7 +7,7 @@ namespace TheCelestialDiviner.Views;
 /// <summary>
 /// 「该装哪种驱动」的选择窗口（系统导引的一次性入口）。
 /// 只负责展示 <see cref="SystemDriverAdvisor.Advice"/> 并回传用户选择，不碰驱动、不改配置。
-/// 返回值：4 = Interception / 3 = DD / 0 = 暂用普通模式 / -1 = 直接关窗（等同于暂不）。
+/// 返回值：4 = Interception / 3 = DD / 0 = 暂不安装（会落到普通模式，**剑网三内不出键**）/ -1 = 直接关窗（等同于暂不）。
 /// </summary>
 public partial class DriverChoiceDialog : Window
 {

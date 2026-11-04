@@ -679,6 +679,7 @@ public static class DdDriverService
 
     private static int _autoFetchRunning;   // Interlocked 单飞标志（0 空闲 / 1 进行中）
     private static int _lastDdLatencyLogTick;   // DD_key 耗时告警限频（Environment.TickCount）
+    private static int _lastDdFailLogTick;      // DD_key 注入失败告警限频（同上）
 
     /// <summary>驱动自动获取是否正在进行（供 UI / VM 判断，无需精确）。</summary>
     public static bool IsAutoFetchRunning => Volatile.Read(ref _autoFetchRunning) == 1;
@@ -967,6 +968,15 @@ public static class DdDriverService
             }
             if (!seh && ret == 0) return true;
             EchoGuard.CancelNote(vk, down, note);
+
+            // 注入失败原本是静默的（调度器不看返回值），现场只能听到"按键没反应"这种描述，
+            // 无法区分"驱动不再接受注入"和"回环把开关翻了"。补一条限频日志把这两种情况分开。
+            if (unchecked(Environment.TickCount - _lastDdFailLogTick) > 2000)
+            {
+                _lastDdFailLogTick = Environment.TickCount;
+                Logger.Warn($"DD_key 注入失败（vk=0x{vk:X2}, down={down}, ret={ret}{(seh ? "，SEH 异常" : "")}）："
+                            + "若持续出现，说明驱动侧已不再接受注入（系统内核策略或驱动状态异常），不是连发逻辑的问题。");
+            }
             return false;
         }
     }
