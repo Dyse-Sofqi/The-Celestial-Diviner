@@ -106,6 +106,43 @@
 - ✅ 发版顺序（以后照此走）：**先打包 → 先建双端 Release（或与 push 同时完成）→ 最后推 main**；
   至少不要把 CHANGELOG 单独提前很久推上去
 
+### 坑 6 · `Environment.TickCount` 回绕成负数 → 四个录入入口静默失效（2026-11-05 用户反馈）
+
+- 🔍 症状：用户报「之前的方案全部消失了，点『从左侧键盘增删按键方案』没反应」，
+  补充细节是**点完键鼠区一点都没变灰**（管理态的全部图块会降到 0.45 透明度）
+- 🎯 定位：变灰绑定 `PickingActive`，没变灰 = `StartPicking()` 根本没跑到 `PickingActive = true`。
+  四个入口（管理方案 / 总开关键 / 切换方案热键 / 独立关闭热键）开头都是这句：
+  `if (Environment.TickCount - _lastPickingExitTick < 150) return;`
+  而 `_lastPickingExitTick` 初值是 **0**，`Environment.TickCount` 是 **int**
+- 💥 机理：TickCount 满 **24.9 天**回绕成负数（2^31 ms），于是 `负数 - 0` 恒为负、恒 `< 150`
+  → **四个入口全部早退，且无日志、无 UI 变化**。更狠的是它自己解不开：要写
+  `_lastPickingExitTick` 必须先进管理态，而进管理态正被这句挡住（死锁）。
+  Windows 10/11「快速启动」不清零内核 uptime，长期不关机的机器很容易落在
+  开机 24.9~49.7 天这个负区间（占 49.7 天周期的一半）
+- ✅ 修复：统一到 `InPickingExitCooldown()`，差值改成 `unchecked((uint)TickCount - (uint)_last)`
+  （无符号差值跨越回绕点仍正确）；`KeycapOverlayWindow.IsPulseActive` 同一写法一并修
+  （`_lastPulseTick = 0` 时键帽会被永久判成"发射中"）
+- ✅ 顺带去掉两处"点了没反应"：`StartPicking` 二次点击 = 退出管理态（不再只依赖钩子的
+  "点击空白处"路径，钩子没装也能退出）；其它录入态下点管理按钮改为直接接管，不再静默 return
+- ⚠️ 教训：**凡是"初值 0 + 相减 + 小于阈值"的时间判断，都必须按无符号回绕处理**；
+  `int` 毫秒时基的 24.9 天回绕不是理论问题——它只在半数机器上必然发生，所以本地永远测不出来
+
+## 待发 · 修复录入入口 TickCount 回绕（2026-11-05，未定版本号）
+
+- 🐞 根因见坑 6；改动 4 个文件：
+  - `ViewModels/MainViewModel.Collections.cs`：新增 `InPickingExitCooldown()`（无符号差值 +
+    冷却期日志），四个入口统一走它；`StartPicking` 增加"已在管理态 = 退出"分支
+    （不再只靠钩子空白路径）；三个热键入口从"已录入态就静默 return"改为 `CancelPicking()` 后接管
+  - `Views/MainWindow.xaml`：删掉 `PickingKind = SetMasterKey` 时把管理按钮 `IsEnabled=False`
+    的触发器（录入态卡住会把按钮一起锁死，看着就是"点了没反应"）
+  - `Views/KeycapOverlayWindow.xaml.cs`：`IsPulseActive` 同样改无符号差值
+  - `ViewModels/MainViewModel.cs`：字段注释同步
+- ✅ `dotnet build -c Release` 0 警告 0 错误
+- ⏳ 待办：本机 uptime 仅 0.14 天测不出这条路径，需在 uptime ≥ 24.9 天的机器上验证
+  （或临时把 `InPickingExitCooldown` 的基准改成负数复现）
+- 📌 用户另一个症状（方案全部消失）与本条无直接因果，仍按"档位/模式过滤 / config.json.bak /
+  日志关键字"三路排查，未改动相关逻辑
+
 ## 发版 v1.9.2（2026-11-01）
 
 - 📦 csproj `Version` / `FileVersion` → **1.9.2 / 1.9.2.0**；CHANGELOG 标题定版 `## v1.9.2 — 2026-11-01`

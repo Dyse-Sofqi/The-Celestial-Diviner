@@ -222,6 +222,27 @@ public sealed partial class MainViewModel
     private const string s_dualManagePrompt =
         "双宏成对录入：左键选第 1 键，再左键选第 2 键（成对生效）· 再左键点已有方案的第 1 键取消整对（右键同样）· Esc 或点击空白处退出";
 
+    /// <summary>退出选择态后的重入冷却（毫秒）：防"退出管理态"那一次物理点击在抬起时把管理态重新打开。</summary>
+    private const int PickingExitCooldownMs = 150;
+
+    /// <summary>
+    /// 是否仍处于「刚退出选择态」的冷却窗口内。
+    /// **必须用无符号差值比较**：<c>Environment.TickCount</c> 是 int，系统连续运行满 24.9 天会回绕成负数。
+    /// 历史实现写成 <c>TickCount - _lastPickingExitTick &lt; 150</c>（有符号），而字段初值是 0 ——
+    /// 在 TickCount 为负的那半个回绕周期里（开机 24.9~49.7 天，Windows 快速启动下 uptime 不清零，
+    /// 长期不重启的机器很容易落进这个区间），差值恒为负、恒小于 150，于是
+    /// **「从左侧键盘增删按键方案」以及三处热键录入入口全部静默 return**：
+    /// 点按钮没有任何反应、键鼠区不变灰、日志也不留痕（用户反馈 2026-11-05）。
+    /// 换成 <c>uint</c> 后差值是真实的毫秒数，跨越回绕点依然正确。
+    /// </summary>
+    private bool InPickingExitCooldown()
+    {
+        var elapsed = unchecked((uint)Environment.TickCount - (uint)_lastPickingExitTick);
+        if (elapsed >= PickingExitCooldownMs) return false;
+        Logger.Info($"录入入口忽略：处于退出冷却（{elapsed}ms < {PickingExitCooldownMs}ms）。");
+        return true;
+    }
+
     /// <summary>判断方案是否为"目标键 = 触发键自身"的连发方案（新版唯一方案形态）。</summary>
     private static bool IsSelfRepeatScheme(InputSource source, KeyScheme scheme)
     {
@@ -417,10 +438,21 @@ public sealed partial class MainViewModel
     /// </summary>
     public void StartPicking()
     {
-        if (PickingActive) return;
-        // “退出管理方案”的点击先由钩子路径处理（非图块 = 空白处退出），随后同一物理点击
-        // 作为陈旧 WPF 点击落回本按钮（退出时按钮恢复可用）：冷却期内忽略再次进入。
-        if (Environment.TickCount - _lastPickingExitTick < 150) return;
+        // 冷却判定必须**先于** PickingActive：退出管理态的那一次物理点击，按下时已被钩子路径
+        // 处理成"空白处退出"，抬起时才落回本按钮；若不先拦冷却，这次陈旧点击会立刻把管理态
+        // 重新打开（表现为"退不出去"）。
+        if (InPickingExitCooldown()) return;
+
+        // 已在管理态 → 这一次点击就是"退出管理方案"。
+        // 不依赖全局鼠标钩子：钩子未安装 / 被安全软件拦截时，原先只能靠点键鼠区空白处退出，
+        // 按钮本身点了没反应（StartPicking 被 PickingActive 守卫吞掉）。
+        if (PickingActive)
+        {
+            // 双宏成对录入中 TryExitPicking 只放弃暂存的第 1 键、不退出（须成对完成后再点一次），
+            // 无论退没退成都必须在此结束，否则紧接着的进入逻辑会把管理态重新打开。
+            if (PickingKind == PickKind.AddScheme) { TryExitPicking(); return; }
+            CancelPicking();   // 其它录入态（热键设置）→ 直接接管为方案管理
+        }
 
         PickingActive = true;
         PickingKind = PickKind.AddScheme;
@@ -437,9 +469,10 @@ public sealed partial class MainViewModel
     /// <summary>进入键位录入选择态（设置全局开关热键；单次录入即完成并退出）。</summary>
     public void StartMasterKeyPicking()
     {
-        if (PickingActive) return;
-        // 同 StartPicking：退出冷却防止退出选择态的陈旧点击立刻把热键录入重新打开。
-        if (Environment.TickCount - _lastPickingExitTick < 150) return;
+        // 冷却判定见 InPickingExitCooldown；已在其它录入态则先退出再进入——原先这里
+        // `if (PickingActive) return;` 会让按钮点击完全无反馈（用户以为按钮坏了）。
+        if (InPickingExitCooldown()) return;
+        CancelPicking();
         PickingActive = true;
         PickingKind = PickKind.SetMasterKey;
         _dualFirstPick = null;
@@ -454,9 +487,8 @@ public sealed partial class MainViewModel
     /// </summary>
     public void StartCycleKeyPicking()
     {
-        if (PickingActive) return;
-        // 同 StartPicking：退出冷却防止退出选择态的陈旧点击立刻把热键录入重新打开。
-        if (Environment.TickCount - _lastPickingExitTick < 150) return;
+        if (InPickingExitCooldown()) return;
+        CancelPicking();
         PickingActive = true;
         PickingKind = PickKind.SetCycleKey;
         _dualFirstPick = null;
@@ -473,9 +505,8 @@ public sealed partial class MainViewModel
     /// </summary>
     public void StartCloseKeyPicking()
     {
-        if (PickingActive) return;
-        // 同 StartPicking：退出冷却防止退出选择态的陈旧点击立刻把热键录入重新打开。
-        if (Environment.TickCount - _lastPickingExitTick < 150) return;
+        if (InPickingExitCooldown()) return;
+        CancelPicking();
         PickingActive = true;
         PickingKind = PickKind.SetCloseKey;
         _dualFirstPick = null;

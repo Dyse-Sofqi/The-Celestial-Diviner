@@ -1263,9 +1263,10 @@
                                     <DataTrigger Binding="{Binding PickingKind}" Value="AddScheme">
                                         <Setter Property="Content" Value="退出管理方案"/>
                                     </DataTrigger>
-                                    <DataTrigger Binding="{Binding PickingKind}" Value="SetMasterKey">
-                                        <Setter Property="IsEnabled" Value="False"/>
-                                    </DataTrigger>
+                                    <!-- 注：曾在此禁用按钮（PickingKind = SetMasterKey 时 IsEnabled=False），
+                                         结果"设置全局开关热键"的录入态无法结束（窗口失焦时 Esc 收不到）就把
+                                         这枚按钮一起锁死 —— 用户看到的是"点了没反应"。录入态切换改由
+                                         StartPicking 内部处理（先退出旧态再进入管理态），不在这里禁用。 -->
                                 </Style.Triggers>
                             </Style>
                         </Button.Style>

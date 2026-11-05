@@ -669,7 +669,9 @@ public sealed partial class KeycapOverlayWindow : Window
     private void ScheduleApply()
     {
         var now = Environment.TickCount;
-        var elapsed = unchecked(now - _lastApplyTick);
+        // 无符号差值：`_lastApplyTick` 初值为 0，而 TickCount 满 24.9 天回绕为负 ——
+        // 有符号差值会得到"负的已过时间"，于是定时器间隔被算成 ≈24.8 天，键帽画面永久冻结。
+        var elapsed = unchecked((uint)now - (uint)_lastApplyTick);
         if (elapsed >= ApplyIntervalMs)
         {
             DrainPending();
@@ -677,7 +679,7 @@ public sealed partial class KeycapOverlayWindow : Window
         }
         if (_applyScheduled) return;
         _applyScheduled = true;
-        _applyTimer.Interval = TimeSpan.FromMilliseconds(ApplyIntervalMs - elapsed);
+        _applyTimer.Interval = TimeSpan.FromMilliseconds(ApplyIntervalMs - (int)elapsed);
         _applyTimer.Start();
     }
 
@@ -888,8 +890,11 @@ public sealed partial class KeycapOverlayWindow : Window
         /// <summary>连发发射中（最近 600ms 内有脉冲）：键帽由脉冲驱动，快照协调不得移除 / 抬起 / 按压。
         /// 窗口只需覆盖单次脉冲按压时长（HoldMs ≤ 100ms）；连发间隔已放宽到
         /// <see cref="Constants.MaxIntervalMs"/>（90000ms），不再按"最慢周期"整周期保活——
-        /// 长间隔下脉冲之间键帽正常进入 1.2s 空闲宽限淡出，下次脉冲经 CancelRetire 复用重建。</summary>
-        public bool IsPulseActive => Environment.TickCount - _lastPulseTick < 600;
+        /// 长间隔下脉冲之间键帽正常进入 1.2s 空闲宽限淡出，下次脉冲经 CancelRetire 复用重建。
+        /// 差值用 uint：TickCount 满 24.9 天回绕为负时，有符号差值会让 <c>_lastPulseTick = 0</c>
+        /// 的键帽永远判成"发射中"（键帽不淡出、不跟随快照）。</summary>
+        public bool IsPulseActive =>
+            unchecked((uint)Environment.TickCount - (uint)_lastPulseTick) < 600;
 
         public KeycapControl(string label, ImageSource? icon = null, bool isReminder = false)
         {

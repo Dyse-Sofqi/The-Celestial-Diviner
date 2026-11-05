@@ -80,7 +80,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private ToggleSection _pickingSection = ToggleSection.Normal;  // 本次选择态录入的分区快照
     private InputSource? _dualFirstPick;               // 双宏两步录入：已选的第 1 键
     private string _pickingPromptText = "请选择按键";  // 选择态提示条文字
-    private int _lastPickingExitTick;                  // 最近一次退出选择态的时刻（Environment.TickCount，退出冷却防陈旧点击重进）
+    private int _lastPickingExitTick;                  // 最近一次退出选择态的时刻（Environment.TickCount；比较必须用无符号差值见 InPickingExitCooldown）
     private volatile bool _masterKeyHeld;              // 总开关键按下沿标记（仅钩子线程读写；按住自动重复只响应第一次，抬起复位）
     private volatile bool _cycleKeyHeld;               // 切换方案热键按下沿标记（同上）
     private volatile bool _closeKeyHeld;               // 独立关闭热键按下沿标记（同上）
