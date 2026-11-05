@@ -127,19 +127,33 @@
 - ⚠️ 教训：**凡是"初值 0 + 相减 + 小于阈值"的时间判断，都必须按无符号回绕处理**；
   `int` 毫秒时基的 24.9 天回绕不是理论问题——它只在半数机器上必然发生，所以本地永远测不出来
 
-## 待发 · 修复录入入口 TickCount 回绕（2026-11-05，未定版本号）
+## 发版 v1.9.4（2026-11-05）
 
-- 🐞 根因见坑 6；改动 4 个文件：
+- 🐞 根因见坑 6；改动 5 个文件：
   - `ViewModels/MainViewModel.Collections.cs`：新增 `InPickingExitCooldown()`（无符号差值 +
     冷却期日志），四个入口统一走它；`StartPicking` 增加"已在管理态 = 退出"分支
     （不再只靠钩子空白路径）；三个热键入口从"已录入态就静默 return"改为 `CancelPicking()` 后接管
   - `Views/MainWindow.xaml`：删掉 `PickingKind = SetMasterKey` 时把管理按钮 `IsEnabled=False`
     的触发器（录入态卡住会把按钮一起锁死，看着就是"点了没反应"）
-  - `Views/KeycapOverlayWindow.xaml.cs`：`IsPulseActive` 同样改无符号差值
+  - `Views/KeycapOverlayWindow.xaml.cs`：`IsPulseActive` 与 `ScheduleApply` 的节流都改无符号差值
+    （后者在负区间会把下次重绘排到约 24.8 天后 = 键帽画面冻结）
   - `ViewModels/MainViewModel.cs`：字段注释同步
-- ✅ `dotnet build -c Release` 0 警告 0 错误
-- ⏳ 待办：本机 uptime 仅 0.14 天测不出这条路径，需在 uptime ≥ 24.9 天的机器上验证
-  （或临时把 `InPickingExitCooldown` 的基准改成负数复现）
+- 🔁 逻辑验证（Python 复刻 C# 整型语义）：仅"last=0 + TickCount 为负"这一组旧实现误判，其余三组新旧一致
+- ✅ `dotnet build -c Release` 0 警告 0 错误；`FileVersion=1.9.4.0`
+- 📦 csproj `Version` / `FileVersion` → **1.9.4 / 1.9.4.0**；CHANGELOG 标题定版 `## v1.9.4 — 2026-11-05`
+- 📄 新增 `docs/release-notes/v1.9.4-release-notes.md`（使用范围声明 / 症状与根因 / 升级方式 /
+  「方案全部消失」的排查指引 / 已知问题）
+- 📦 `dist/TheCelestialDiviner-1.9.4-win64/` 21 项（含 `interception\` 三文件，**不含**闭源 DD 驱动）
+- 📦 `dist/TheCelestialDiviner-1.9.4-win64.zip`：23 个文件 / 1,980,468 B，
+  sha256 `c55336c11e71c3fca2d3dae64eb8f90366bdcd21195921b614fddf63aab43fa2`
+- ✅ commit `b64b6c1`，标签 `v1.9.4`；Gitee main = GitHub main = 本地
+- ✅ Gitee Release <https://gitee.com/sofqi/The-Celestial-Diviner/releases/tag/v1.9.4>
+  （release id 1276774 / 附件 id 3602484）；GitHub Release 同名标签，资产 state=uploaded
+- ✅ 通道验证：Gitee API `releases/latest` → `v1.9.4`；Gitee 直链 HEAD 200；
+  raw CHANGELOG（备用通道）已显示 `## v1.9.4`
+- ⚠️ 本机 curl 访问 github.com 直链返回 000（本项目已知网络限制，非包问题），以 `gh release view`
+  的 `uploaded` 状态为准
+- ⏳ 未做：uptime ≥ 24.9 天的真实机器验证（本机 0.14 天测不到这条路径）
 - 📌 用户另一个症状（方案全部消失）与本条无直接因果，仍按"档位/模式过滤 / config.json.bak /
   日志关键字"三路排查，未改动相关逻辑
 
