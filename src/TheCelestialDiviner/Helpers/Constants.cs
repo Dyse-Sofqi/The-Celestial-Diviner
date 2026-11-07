@@ -55,6 +55,33 @@ public static class Constants
     /// <summary>录制目标键的超时（毫秒）。</summary>
     public const int RecordTimeoutMs = 5000;
 
+    // ---------- Hold 自环释放探测（物理级注入模式专用，见 TaskSchedulerService） ----------
+    // 背景：DD / Interception 注入与物理按键在系统层不可区分，EchoGuard 靠"同键同方向
+    // FIFO 名额"消除回环。回环 RTT（DD 实测 80~360ms）大于连发周期时名额队列深度 ≥2，
+    // 物理松键几乎必然被当成回环吞掉，且注入/回环 1:1 锁步使位移回环永不浮出——
+    // 任务松键后无限连发。探测原理：按住期间物理自动重复按下会持续穿过队列刷新存活
+    // 信号；信号消失后暂停注入把队列排干，被吞的释放必然浮出，再监听一小窗区分
+    // "仍按住"（有事件）与"已松开"（静默）。
+
+    /// <summary>存活信号超时（毫秒）：源键超过该时长无任何事件到达调度器（含被防抖
+    /// 忽略的自动重复）即视为"可能已松开"，触发一次释放探测。按住期间系统自动重复
+    /// （默认 ~31ms/次）会持续刷新，正常不触发；取 600ms 覆盖系统最慢重复档的常见区间，
+    /// 同时把"松开 → 停止"的延迟控制在这个量级。</summary>
+    public const int ProbeLivenessMs = 600;
+
+    /// <summary>探测监听窗（毫秒）：队列排干后观察源键是否有事件到达——有 = 仍按住
+    /// （恢复连发），静默 = 已松开（停止任务）。150ms ≥ 默认自动重复间隔（~31ms）的
+    /// 4 倍，按住时至少能等到数次自动重复。</summary>
+    public const int ProbeListenMs = 150;
+
+    /// <summary>探测排干等待的额外余量（毫秒）：排干时长 = 回环 RTT + 连发周期 + 此值，
+    /// 保证最后一次注入的回环（最迟注入时刻 + RTT，注入距停发 ≤ 一个周期）必然落网。</summary>
+    public const int ProbeDrainExtraMs = 60;
+
+    /// <summary>探测排干等待上限（毫秒）：回环 RTT 估计异常膨胀时封顶，避免单次探测
+    /// 停发过久（探测停发期间连发节奏中断）。</summary>
+    public const int ProbeMaxDrainMs = 800;
+
     /// <summary>注释区公告远端地址（Gitee raw 文件）：软件启动时查询更新，
     /// 成功拉取且内容有变化才覆盖本地缓存；没更新 / 失败保持旧内容。</summary>
     public const string NoticeRemoteUrl = "https://gitee.com/sofqi/The-Celestial-Diviner/raw/main/Notice.md";

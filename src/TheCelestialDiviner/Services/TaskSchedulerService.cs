@@ -41,6 +41,19 @@ public sealed class RunningTask
 
     /// <summary>标记一次点击结束。</summary>
     public void EndClick() => Interlocked.Decrement(ref _inFlight);
+
+    /// <summary>释放探测存活信号：源键任意事件（含被防抖忽略的自动重复）穿过 EchoGuard
+    /// 到达调度器时置位。钩子线程写、任务线程读清，volatile 保证可见。
+    /// 探测在监听窗前清零、窗内读取——置位即"仍按住"（见 TaskSchedulerService.TaskLoop）。</summary>
+    public volatile bool SenseEventSeen;
+
+    /// <summary>源键最近一次事件到达时刻（Environment.TickCount，与项目其它 TickCount
+    /// 时基一致；差值一律 unchecked 相减防回绕）。钩子线程写、任务线程读，探测触发
+    /// 判断"存活信号沉默多久"用。</summary>
+    public volatile int LastSourceEventTick;
+
+    /// <summary>释放探测启用说明是否已记过日志（仅任务线程读写，无需同步）。</summary>
+    public bool ProbeAnnounced;
 }
 
 /// <summary>
@@ -53,6 +66,10 @@ public sealed class RunningTask
 /// - 轮转互斥（ToggleSection.Rotate）：Rotate 分区某键启动时，自动停止该分区其他运行中的任务。
 /// 键盘自动重复产生的连续 WM_KEYDOWN 只视为一次按下（防误切换）。
 /// 滚轮输入源视为“即按即松”的脉冲（每次滚动 = 一次按下+释放）。
+/// Hold 自环释放探测：物理级注入模式（DD / Interception）下回环 RTT 大于连发周期时，
+/// EchoGuard 的 FIFO 名额队列深度 ≥2，物理松键会被当成回环吞掉且位移回环永不浮出，
+/// 任务松键后无限连发。按住期间物理自动重复会持续穿过队列刷新存活信号，信号沉默
+/// 即触发一次"排干 + 监听"探测：有事件 = 仍按住（恢复连发），静默 = 已松开（停止）。
 /// </summary>
 public sealed class TaskSchedulerService
 {
@@ -174,6 +191,10 @@ public sealed class TaskSchedulerService
     {
         lock (_gate)
         {
+            // 释放探测存活信号（须先于一切早退刷新）：被防抖忽略的自动重复、总开关
+            // 停用期间的按下都算"源键仍在活动"，探测据此区分按住与松开。
+            MarkProbeEvent(source);
+
             if (!_masterEnabled) return;
 
             // 防键盘自动重复：按住期间重复的 down 不再处理。
@@ -284,6 +305,9 @@ public sealed class TaskSchedulerService
     {
         lock (_gate)
         {
+            // 存活信号与按下路径同源刷新（穿过的释放事件也是"源键在活动"的证据）。
+            MarkProbeEvent(source);
+
             _downSources.Remove(source);
             if (!_masterEnabled) return;
             if (!_sourceMap.TryGetValue(source, out var tasks)) return;
@@ -295,6 +319,19 @@ public sealed class TaskSchedulerService
             }
 
             NotifyFiringChangedLocked();
+        }
+    }
+
+    /// <summary>刷新释放探测存活信号（须在锁内调用）：源键任意事件到达即置位信号并
+    /// 刷新时刻戳。仅键盘自环 Hold 任务消费这些信号，其余任务被置位无害（门控不命中）。</summary>
+    private void MarkProbeEvent(InputSource source)
+    {
+        if (!_sourceMap.TryGetValue(source, out var tasks)) return;
+        var now = Environment.TickCount;
+        foreach (var t in tasks)
+        {
+            t.SenseEventSeen = true;
+            t.LastSourceEventTick = now;
         }
     }
 
@@ -426,6 +463,24 @@ public sealed class TaskSchedulerService
                     continue;
                 }
 
+                // Hold 自环释放探测（深管道物理注入模式的松键丢失兜底，见 RunReleaseProbe）：
+                // 仅在门控命中且存活信号沉默超阈值时运行。按住期间穿过的自动重复会持续
+                // 刷新信号，正常不触发（零节奏代价）；信号沉默 ≈ 已松开但释放被回环吞掉。
+                if (!isToggle &&
+                    unchecked(Environment.TickCount - task.LastSourceEventTick) > Constants.ProbeLivenessMs &&
+                    IsReleaseProbeEligible(task))
+                {
+                    if (!task.ProbeAnnounced)
+                    {
+                        task.ProbeAnnounced = true;
+                        OnLog($"按压连发 [{InputNameMapper.GetTargetName(task.Configs[0])}] 启用释放探测" +
+                              $"（回环 RTT≈{EchoGuard.RttEwmaMs}ms 超过连发周期，物理释放可能被回环名额吞没）。");
+                    }
+                    sw.Reset();
+                    RunReleaseProbe(task);
+                    continue;
+                }
+
                 // 发射一次完整输入（按住 HoldMs → 抬起）；多目标依次轮换。
                 var cfg = task.Configs[phase];
                 task.BeginClick();
@@ -460,6 +515,70 @@ public sealed class TaskSchedulerService
                 Thread.Sleep(100);
             }
         }
+    }
+
+    /// <summary>
+    /// Hold 自环释放探测的门控：仅"自环 + 物理级注入 + 回环管道深于连发周期"时启用。
+    /// 非自环（目标≠源）的源键上没有注入名额，物理释放天然直达；Interception
+    /// （RTT≈0~16ms）名额队列深度 ≤1，FIFO 守恒成立（物理释放要么直接通过、要么由
+    /// 位移回环立即补上），均无需探测；SendInput 模式事件带魔数标记、钩子精确过滤，
+    /// 更不涉及。
+    /// </summary>
+    private bool IsReleaseProbeEligible(RunningTask task)
+    {
+        if (task.Configs.Count != 1) return false;
+        var cfg = task.Configs[0];
+        if (cfg.Kind != TargetKind.Keyboard) return false;
+        if (task.Source.Kind != InputKind.Keyboard) return false;
+        if (cfg.VirtualKey != task.Source.VirtualKey) return false;   // 自环才有回环名额
+        if (!InputSimulatorService.IsPhysicalInjectionMode) return false;
+        return EchoGuard.RttEwmaMs > cfg.HoldMs + cfg.IntervalMs;     // 名额队列深度 > 1 才会吞释放
+    }
+
+    /// <summary>
+    /// 释放探测（任务线程调用，不持 _gate；等待全部可被 Wake 打开——停止 / 方案重建 /
+    /// 总开关关闭立即让位）：暂停注入，先排干回环名额队列（此后到达的源键事件必然是
+    /// 物理输入，不会再被名额吞掉），再监听一小窗：有事件 = 仍按住（恢复连发），
+    /// 静默 = 已松开（停止任务并清按住表）。真正的松开裁决由监听窗给出；排干的作用
+    /// 是保证监听窗内的事件判定可靠。停发期间连发节奏中断一次（约 RTT + 周期 + 210ms），
+    /// 仅在存活信号沉默时发生——按住期间穿过的自动重复会持续刷新信号，正常不触发。
+    /// </summary>
+    private void RunReleaseProbe(RunningTask task)
+    {
+        var cfg = task.Configs[0];
+        var drainMs = Math.Min(EchoGuard.RttEwmaMs + cfg.HoldMs + cfg.IntervalMs + Constants.ProbeDrainExtraMs,
+                               Constants.ProbeMaxDrainMs);
+
+        // 排干：等在途回环全部落网。期间任务被停（总开关 / 方案重建 / 其它 Hold 释放
+        // 引发的状态翻转）则直接让出，由主循环重新评估。
+        var drain = Stopwatch.StartNew();
+        while (!task.StopRequested && task.Active && drain.ElapsedMilliseconds < drainMs)
+        {
+            if (task.Wake.WaitOne((int)(drainMs - drain.ElapsedMilliseconds))) break;
+        }
+        if (task.StopRequested || !task.Active) return;
+
+        // 监听窗：清掉排干期间累积的信号，只认窗口内新到达的事件（此时队列已空，
+        // 到达即物理输入——按住 = 自动重复穿过，松开 = 静默）。
+        task.SenseEventSeen = false;
+        var listen = Stopwatch.StartNew();
+        while (!task.StopRequested && task.Active && listen.ElapsedMilliseconds < Constants.ProbeListenMs)
+        {
+            if (task.Wake.WaitOne((int)(Constants.ProbeListenMs - listen.ElapsedMilliseconds))) break;
+        }
+        if (task.StopRequested || !task.Active || task.SenseEventSeen) return;
+
+        // 静默：判定物理释放已被回环名额吞没。持锁停止任务并清按住表——清表让极端
+        // 误判（仍按住但自动重复恰好缺席，如系统关闭了自动重复）可经下一次物理按下
+        // 走既有"新按下"路径立即复活，不会卡死。
+        lock (_gate)
+        {
+            if (!task.Active) return;
+            Deactivate(task);
+            _downSources.Remove(task.Source);
+            NotifyFiringChangedLocked();
+        }
+        OnLog($"按压连发 [{InputNameMapper.GetTargetName(task.Configs[0])}] 的物理释放被回环名额吞没，已由释放探测停止。");
     }
 
     /// <summary>解析配置字典键为输入源（格式：K:VK:EXT 或 M:MouseInput）。</summary>

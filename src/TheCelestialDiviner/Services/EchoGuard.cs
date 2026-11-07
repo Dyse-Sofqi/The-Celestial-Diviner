@@ -67,6 +67,14 @@ public static class EchoGuard
     }
 
     /// <summary>
+    /// 当前回环往返延迟估计（毫秒，EWMA 实测自适应）。int 读原子，无需锁。
+    /// 消费方（TaskSchedulerService 的 Hold 释放探测）用它判断回环名额队列的深浅：
+    /// RTT 大于连发周期时队列深度 ≥2，物理释放会被 FIFO 吞掉且位移回环永不浮出，
+    /// 需要启用释放探测；Interception（RTT ≈ 0~16ms）深度 ≤1、守恒成立，探测自动关闭。
+    /// </summary>
+    public static int RttEwmaMs => _expectedRttMs;
+
+    /// <summary>
     /// 一次注入的待决回环名额：登记时刻 + 驱动调用耗时（调用返回后回填）。
     /// 耗时单列出来是为了把"到达延迟"拆成两段——延迟里含驱动调用本身的阻塞时间，
     /// 只看总数会把驱动卡顿误判成 win32k 队列积压。
