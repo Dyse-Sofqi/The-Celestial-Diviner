@@ -210,6 +210,34 @@
 - ⚠️ 边界：dll 物理缺失 / 目录只读救不了（照旧完整提示）；即使外部工具每次开机重铺缓存，
   自愈每轮自动跑，用户无感；Toggle 自环"按下被吞"是同源疾病未修（见坑 1 不变量 7）
 
+## 发版 v1.9.5（2026-11-07）
+
+- 🐞 两项修复，根因分别见上面两节待发记录（Hold 自环释放探测 / 依赖自愈）；
+  改动 5 个源文件：Constants / EchoGuard / TaskSchedulerService（释放探测三处联动）、
+  App / DependencyCheck（自愈 + 弹窗分流 + 启动日志）
+- ✅ `dotnet publish -c Release` 成功；`FileVersion=1.9.5.0`；内嵌 CHANGELOG 含 v1.9.5 节、
+  无「未发布」残留（exe 字节扫描，UTF-8 内嵌资源口径）
+- 📦 csproj `Version` / `FileVersion` → **1.9.5 / 1.9.5.0**
+- 📄 `docs/release-notes/v1.9.5-release-notes.md`（使用范围声明 / 两个顽疾的症状与根因 /
+  升级方式 / 已知问题——Toggle 自环"按下被吞"同源疾病未修、关闭自动重复的节奏性停顿、
+  25H2 DD 自动停止沿自 1.9.4）
+- 📦 `dist/TheCelestialDiviner-1.9.5-win64/` 21 项（含 `interception\` 三文件，**不含**闭源
+  DD 驱动；非 exe 项与 1.9.4 逐字节一致，仅 exe 不同）
+- 📦 `dist/TheCelestialDiviner-1.9.5-win64.zip`：23 个文件 / 2,011,516 B，
+  sha256 `6ea267eb64c9e2855c1f2d0356137b113fc952513b9394bbf8339dd6248c7118`
+- ✅ commit `bf1fd99`（Hold 修复）→ `357ac85`（v1.9.5 发版），标签 `v1.9.5`（注释对象
+  `b9b04496` → 剥离 357ac85）
+- ✅ Gitee Release <https://gitee.com/sofqi/The-Celestial-Diviner/releases/tag/v1.9.5>
+  （release id **1283574** / 附件 id **3623123**，2,011,516 B）；GitHub Release
+  <https://github.com/Dyse-Sofqi/The-Celestial-Diviner/releases/tag/v1.9.5>（asset state=uploaded，
+  API digest sha256 与本地一致）
+- ✅ 通道验证：Gitee API `releases/latest` → `v1.9.5`；Gitee 直链 302→200 / Content-Length
+  2,011,516；raw CHANGELOG（备用通道）首个版本标题已显示 `## v1.9.5 — 2026-11-07`
+- ✅ 坑 5 顺序执行：先打包 → push gitee（main + 标签）→ 立刻建 Gitee Release → push origin
+  → gh release create；Gitee 标签重写坑未复发（Release 创建后 ls-remote 复核注释对象完好）
+- ⏳ 未做：实机协议验证（按住 q ≥5s 松开 ~1s 内停、qef 同按同松全停等，见待发节的协议清单）；
+  依赖自愈的实机复现（需一个把 exe 改名运行的下载/启动器环境，机制链已由微型测试覆盖）
+
 ## 发版 v1.9.4（2026-11-05）
 
 - 🐞 根因见坑 6；改动 5 个文件：
