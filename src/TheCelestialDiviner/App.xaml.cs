@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Windows;
@@ -33,6 +34,38 @@ public partial class App : Application
 
     /// <summary>钩子服务引用（录制器事件源）。</summary>
     public InputHookService Hooks => _hookService;
+
+    /// <summary>
+    /// 依赖自愈的接力启动：config 已补齐但本次进程的绑定已定型（config 只在进程启动时被
+    /// CLR 读一次），重启一次才能正常绑定。用 cmd 的 ping 延迟 + start（与自更新脚本同一
+    /// 手法）：直接 Process.Start 会撞上旧进程还没退出——新进程抢不到单实例互斥体，
+    /// 会误弹"已在运行"。接力进程带 --self-repaired 标记，若仍失败止步于提示，不会无限
+    /// 重启。返回是否成功发出。
+    /// </summary>
+    private static bool TryRelaunchSelf()
+    {
+        try
+        {
+            var exePath = DependencyCheck.ExePath;
+            var dir = Path.GetDirectoryName(exePath);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = "/c ping -n 3 127.0.0.1 >nul & start \"\" "
+                            + (string.IsNullOrEmpty(dir) ? "" : $"/D \"{dir}\" ")
+                            + $"\"{exePath}\" --self-repaired",
+                UseShellExecute = true,
+                WindowStyle = ProcessWindowStyle.Hidden
+            });
+            Logger.Info("依赖自愈：config 已补齐，自动重启一次以让绑定重定向生效。");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn("依赖自愈：自动重启失败，回退为提示用户手动打开：" + ex.Message);
+            return false;
+        }
+    }
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -90,6 +123,10 @@ public partial class App : Application
         if (args.Any(a => string.Equals(a, "--no-intercept", StringComparison.OrdinalIgnoreCase)))
             InterceptionDriverService.SuppressDriver = true;
 
+        // 启动现场（版本 + 实际运行的 exe 全路径）：exe 被改名 / 被下载工具放进缓存目录时，
+        // 这行是定位"到底在跑哪个文件"的第一线索（依赖自检的提示语也会带上它）。
+        Logger.Info($"启动：版本 {UpdateService.DisplayVersion}，程序 {DependencyCheck.ExePath}");
+
         // 渲染能力（一次性记录）：Tier 0 = 没有硬件加速（WPF 全程软件光栅化，拖动必然发涩）。
         // 混合显卡 / 4K / 远程桌面等环境容易落到 Tier 0，排查拖动问题时先看这一行。
         Logger.Info($"WPF 渲染能力：Tier={System.Windows.Media.RenderCapability.Tier >> 16}，"
@@ -98,14 +135,34 @@ public partial class App : Application
 
         // 运行依赖自检：net48 下 System.Text.Json 是外挂 dll 链，只替换 exe / 解压不完整 /
         // 杀软隔离 / 放进别的程序目录，都会在 ConfigService 首次被触碰时炸成
-        // "类型初始值设定项引发异常"——用户拿不到任何可操作的线索。这里提前做一次
-        // 功能性探测，把"缺哪个文件、怎么修"直接说清楚，再退出。
+        // "类型初始值设定项引发异常"。这里提前做一次功能性探测：通过才继续启动；
+        // 失败时先尝试自愈（补齐改名副本缺的 config）并自动重启接力，救不回才给出
+        // "缺哪个文件、怎么修"的完整提示再退出。
         var dependencyError = DependencyCheck.Probe();
         if (dependencyError is not null)
         {
             Logger.Error("运行依赖自检失败。", dependencyError);
-            MessageBox.Show(DependencyCheck.BuildMessage(DependencyCheck.MissingFiles(), dependencyError),
-                "衍天高手", MessageBoxButton.OK, MessageBoxImage.Error);
+            var missing = DependencyCheck.MissingFiles();
+            var alreadyRelaunched = args.Any(a => string.Equals(a, "--self-repaired", StringComparison.OrdinalIgnoreCase));
+            var restored = DependencyCheck.TryRestoreConfig();
+
+            if (restored is not null && missing.Count == 1)
+            {
+                // config 是唯一缺失项且已补齐：config 在进程启动时已被 CLR 读取定型，
+                // 本次救不回来；自动重启一次即可正常绑定（详见 TryRelaunchSelf）。
+                // 接力进程若仍失败（config 又被外部清掉），止步于提示，不会无限重启。
+                if (alreadyRelaunched || !TryRelaunchSelf())
+                {
+                    Logger.Info("依赖自愈：无法/不宜再次自动重启，提示用户手动打开。");
+                    MessageBox.Show(DependencyCheck.BuildRepairedMessage(restored),
+                        "衍天高手", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            }
+            else
+            {
+                MessageBox.Show(DependencyCheck.BuildMessage(missing, dependencyError),
+                    "衍天高手", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
             Shutdown();
             return;
         }
