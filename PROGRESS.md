@@ -318,6 +318,34 @@
 - ⚠️ 边界：dll 物理缺失 / 目录只读救不了（照旧完整提示）；即使外部工具每次开机重铺缓存，
   自愈每轮自动跑，用户无感；Toggle 自环"按下被吞"是同源疾病未修（见坑 1 不变量 7）
 
+## 发版 v1.9.8（2026-11-09）
+
+- 🚀 录入反馈与键位提示——一轮「看得见」的改进（设计见上面待发节）：录入拒绝上提示条
+  （24 处）+ 热键失败保持录入态、热键占用提示可操作 + 总开关四档位全查、停用方案
+  模式色虚线轮廓、WASD / 修饰键方案风险提醒（不拦截）、侧键文案补齐；五笔提交
+  `697d507` → `c3a23b8` → `8a88b39` → `df9c309` → `a7f039a`
+- ✅ `dotnet publish -c Release` 成功；`FileVersion=1.9.8.0`；内嵌 CHANGELOG 含 v1.9.8 节、
+  无「## 未发布」标题残留（exe 字节扫描）
+- 📦 csproj `Version` / `FileVersion` → **1.9.8 / 1.9.8.0**
+- 📄 `docs/release-notes/v1.9.8-release-notes.md`（使用范围声明 / 五项改进的用户视角说明 /
+  升级方式 / 已知问题沿袭：多宏 >2 键降级清除、侧键热键旧版失效、Toggle 自环按下被吞、
+  25H2 DD 自动停止）
+- 📦 `dist/TheCelestialDiviner-1.9.8-win64/` 21 项（含 `interception\` 三文件，**不含**闭源
+  DD 驱动；非 exe 项与 1.9.7 逐字节一致，仅 exe 不同）
+- 📦 `dist/TheCelestialDiviner-1.9.8-win64.zip`：23 个文件 / 2,017,244 B，
+  sha256 `c15b180a6e6f80c86d9730fa11c1bb71c32b2aab626c281a68f47d99b161f571`
+- ✅ commit `7c4baf4`（v1.9.8 发版），标签 `v1.9.8`（注释对象 585b444 → 剥离 7c4baf4）
+- ✅ Gitee Release <https://gitee.com/sofqi/The-Celestial-Diviner/releases/tag/v1.9.8>
+  （release id **1288465** / 附件 id **3636319**，2,017,244 B）；GitHub Release
+  <https://github.com/Dyse-Sofqi/The-Celestial-Diviner/releases/tag/v1.9.8>（asset state=uploaded，
+  API digest sha256 与本地一致）
+- ✅ 通道验证：Gitee API `releases/latest` → `v1.9.8`；Gitee 直链 200 / Content-Length
+  2,017,244；raw CHANGELOG（备用通道）首个版本标题已显示 `## v1.9.8 — 2026-11-09`
+- ✅ 坑 5 顺序执行：先打包 → push gitee（main + 标签）→ 立刻建 Gitee Release → push origin
+  → gh release create；标签重写坑未复发（ls-remote 复核注释对象完好）
+- ⏳ 未做：实机协议验证（提示条反馈 / 虚线轮廓切换 / WASD 修饰键警告 / 侧键热键重设，
+  清单见待发节——开发机已构建验证，实机交用户日常使用覆盖）
+
 ## 发版 v1.9.7（2026-11-08）
 
 - 🚀 三个热键支持鼠标侧键 1 / 侧键 2（设计见上面待发节）；配置 v22（Kind/Mouse 字段默认键盘）
