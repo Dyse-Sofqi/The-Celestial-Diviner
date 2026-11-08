@@ -293,6 +293,31 @@
 - ⚠️ 边界：dll 物理缺失 / 目录只读救不了（照旧完整提示）；即使外部工具每次开机重铺缓存，
   自愈每轮自动跑，用户无感；Toggle 自环"按下被吞"是同源疾病未修（见坑 1 不变量 7）
 
+## 发版 v1.9.7（2026-11-08）
+
+- 🚀 三个热键支持鼠标侧键 1 / 侧键 2（设计见上面待发节）；配置 v22（Kind/Mouse 字段默认键盘）
+- ✅ `dotnet publish -c Release` 成功；`FileVersion=1.9.7.0`；内嵌 CHANGELOG 含 v1.9.7 节、
+  无「## 未发布」标题残留（exe 字节扫描）
+- 📦 csproj `Version` / `FileVersion` → **1.9.7 / 1.9.7.0**
+- 📄 `docs/release-notes/v1.9.7-release-notes.md`（使用范围声明 / 侧键玩法 / 左右中键与滚轮
+  不收的原因 / 兼容性（v22 自动补齐 + 降级侧键失效提示）/ 升级方式 / 已知问题沿袭）
+- 📦 `dist/TheCelestialDiviner-1.9.7-win64/` 21 项（含 `interception\` 三文件，**不含**闭源
+  DD 驱动；非 exe 项与 1.9.6 逐字节一致，仅 exe 不同）
+- 📦 `dist/TheCelestialDiviner-1.9.7-win64.zip`：23 个文件 / 2,015,375 B，
+  sha256 `3c318653afd82769f4a5ae716a0747055a4d3fcf4b511a94e0fcea2cbbfa69c5`
+- ✅ commit `eb671d9`（热键侧键特性）→ `ca2d8ea`（v1.9.7 发版），标签 `v1.9.7`
+  （注释对象 a9fcec8 → 剥离 ca2d8ea）
+- ✅ Gitee Release <https://gitee.com/sofqi/The-Celestial-Diviner/releases/tag/v1.9.7>
+  （release id **1287553** / 附件 id **3634182**，2,015,375 B）；GitHub Release
+  <https://github.com/Dyse-Sofqi/The-Celestial-Diviner/releases/tag/v1.9.7>（asset state=uploaded，
+  API digest sha256 与本地一致）
+- ✅ 通道验证：Gitee API `releases/latest` → `v1.9.7`；Gitee 直链 200 / Content-Length
+  2,015,375；raw CHANGELOG（备用通道）首个版本标题已显示 `## v1.9.7 — 2026-11-08`
+- ✅ 坑 5 顺序执行：先打包 → push gitee（main + 标签）→ 立刻建 Gitee Release → push origin
+  → gh release create；标签重写坑未复发（ls-remote 复核注释对象完好）
+- ⏳ 未做：实机协议验证（侧键设总开关 / 启停 / 图块高亮 / 右键取消 / F9 回归 /
+  切换方案与独立关闭同测 / 滚轮中键拒绝提示，清单见待发节——交用户日常使用覆盖）
+
 ## 发版 v1.9.6（2026-11-08）
 
 - 🚀 多宏开关（设计见上面待发节）：双宏开关升级 2~6 键、触发键位只标记不占用、允许重复、
