@@ -490,8 +490,8 @@ public sealed partial class MainViewModel
         PickingKind = PickKind.SetMasterKey;
         _multiPickKeys.Clear();
         PickingPromptText = GlobalSwitchSource is not null
-            ? "请选择全局开关热键（左键键位 / 直接按键设置 · 右键原键位取消 · Esc 取消）"
-            : "请选择全局开关热键（左键键位 / 直接按键设置 · Esc 取消）";
+            ? "请选择全局开关热键（左键键位 / 鼠标侧键 / 直接按键设置 · 右键原键位取消 · Esc 取消）"
+            : "请选择全局开关热键（左键键位 / 鼠标侧键 / 直接按键设置 · Esc 取消）";
         HintText = "正在录入总开关键：点击左侧键鼠（含鼠标侧键图块），或直接按下键盘按键（Esc 取消）";
         AddLog("开始设置全局开关热键：左键点击左侧键鼠（含鼠标侧键 1 / 侧键 2）或直接按键完成设置，"
                + "右键已设置的键位取消（Esc 取消）。");
@@ -509,8 +509,8 @@ public sealed partial class MainViewModel
         PickingKind = PickKind.SetCycleKey;
         _multiPickKeys.Clear();
         PickingPromptText = _config.ProfileCycle.HasKey
-            ? "请选择切换方案热键（左键键位 / 直接按键设置 · 右键原键位取消 · Esc 取消）"
-            : "请选择切换方案热键（左键键位 / 直接按键设置 · Esc 取消）";
+            ? "请选择切换方案热键（左键键位 / 鼠标侧键 / 直接按键设置 · 右键原键位取消 · Esc 取消）"
+            : "请选择切换方案热键（左键键位 / 鼠标侧键 / 直接按键设置 · Esc 取消）";
         HintText = "正在录入切换方案热键：左键点击左侧键鼠（含鼠标侧键图块），或直接按下键盘按键（Esc 取消）";
         AddLog("开始设置切换方案热键：左键点击左侧键鼠（含鼠标侧键 1 / 侧键 2）或直接按键完成设置，"
                + "右键已设置的键位取消（Esc 取消）。");
@@ -528,8 +528,8 @@ public sealed partial class MainViewModel
         PickingKind = PickKind.SetCloseKey;
         _multiPickKeys.Clear();
         PickingPromptText = _config.IndependentClose.HasKey
-            ? "请选择独立关闭热键（左键键位 / 直接按键设置 · 右键原键位取消 · Esc 取消）"
-            : "请选择独立关闭热键（左键键位 / 直接按键设置 · Esc 取消）";
+            ? "请选择独立关闭热键（左键键位 / 鼠标侧键 / 直接按键设置 · 右键原键位取消 · Esc 取消）"
+            : "请选择独立关闭热键（左键键位 / 鼠标侧键 / 直接按键设置 · Esc 取消）";
         HintText = "正在录入独立关闭热键：左键点击左侧键鼠（含鼠标侧键图块），或直接按下键盘按键（Esc 取消）";
         AddLog("开始设置独立关闭热键：左键点击左侧键鼠（含鼠标侧键 1 / 侧键 2）或直接按键完成设置，"
                + "右键已设置的键位取消（Esc 取消）。");
