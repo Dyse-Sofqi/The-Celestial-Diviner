@@ -623,6 +623,30 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>
+    /// 方案键位选择风险提醒（WASD 移动键 / 修饰键；仅常规方案与多宏开关键位——
+    /// 多宏触发键位是纯输出、不截获输入，无需提醒）。返回提醒文案；null = 该键位无风险。
+    /// **提醒不拦截**：方案照常创建，文案进提示条 + 日志（提示条持续到下一次录入动作），
+    /// 设置与否由用户自行取舍。
+    /// </summary>
+    private static string? SchemePlacementWarning(InputSource source)
+    {
+        if (source.Kind != InputKind.Keyboard) return null;
+        return source.VirtualKey switch
+        {
+            // W / A / S / D：游戏常用移动键。
+            0x57 or 0x41 or 0x53 or 0x44 =>
+                $"[{InputNameMapper.GetSourceName(source)}] 是游戏常用移动键，不建议设置方案："
+                + "方案触发会与正常移动互相干扰；且按压模式方案按住期间会暂停所有开关模式键位的连发"
+                + "（任一按压连发中全局暂停开关，松开恢复——移动中开关键全部停摆）。",
+            // LShift / RShift / LCtrl / RCtrl / LAlt / RAlt / LWin / RWin：修饰键。
+            0xA0 or 0xA1 or 0xA2 or 0xA3 or 0xA4 or 0xA5 or 0x5B or 0x5C =>
+                $"[{InputNameMapper.GetSourceName(source)}] 是修饰键，不建议单独设置方案："
+                + "它与其他键位直接形成组合键（如 Ctrl+C），每次按下——包括组合键场合——都会触发本方案。",
+            _ => null
+        };
+    }
+
+    /// <summary>
     /// 多宏录入：第 1 键 = 开关键位（只校验 + 暂存，不落盘）；之后每次左键 = 追加一个触发键位，
     /// 满 2 键（MultiMinTargets）即落盘成立，已成立方案继续追加即时落盘刷新，
     /// 最多 6 键（MultiMaxTargets，含开关键位；重复键位照常消耗额度）。
@@ -653,7 +677,14 @@ public sealed partial class MainViewModel
                 else
                 {
                     _multiPickKeys.Add(source);
-                    PickingPromptText =
+                    // WASD / 修饰键开关键位：警告替换暂存提示（仍要设置 → 继续追加触发键位即可）。
+                    var placementWarning = SchemePlacementWarning(source);
+                    if (placementWarning is not null)
+                    {
+                        placementWarning += "（仍要设置：继续左键追加触发键位；Esc 换键）";
+                        AddLog(placementWarning);
+                    }
+                    PickingPromptText = placementWarning ??
                         $"多宏录入：已选开关键位 [{InputNameMapper.GetSourceName(source)}]，请左键追加触发键位（2 键即成立，Esc 换键）";
                 }
             }
@@ -863,6 +894,14 @@ public sealed partial class MainViewModel
         var sectionName = _selectedMode == TriggerMode.Toggle ? $"（{SectionName(_pickingSection)}）" : "";
         AddLog($"连发键 [{InputNameMapper.GetSourceName(source)}] 已{(existed ? "更新" : "添加")}"
                + $"（{modeName}模式{sectionName}，按压 {hold}ms / 间隔 {interval}ms）。");
+
+        // WASD / 修饰键风险提醒：不拦截创建，但提示条置顶显示（持续到下一次录入动作）+ 日志留痕。
+        var placementWarning = SchemePlacementWarning(source);
+        if (placementWarning is not null)
+        {
+            AddLog(placementWarning);
+            PickingPromptText = placementWarning;
+        }
     }
 
     /// <summary>
