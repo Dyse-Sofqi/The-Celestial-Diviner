@@ -78,7 +78,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     private TriggerMode _selectedMode = TriggerMode.Toggle; // 方案面板当前标签模式
     private ToggleSection _selectedSection = ToggleSection.Normal; // 方案面板当前开关分区
     private ToggleSection _pickingSection = ToggleSection.Normal;  // 本次选择态录入的分区快照
-    private InputSource? _dualFirstPick;               // 双宏两步录入：已选的第 1 键
+    private readonly List<InputSource> _multiPickKeys = new();   // 多宏录入：[0] = 开关键位，其余 = 已追加的触发键位（仅 [0] 时方案未成立、不落盘）
     private string _pickingPromptText = "请选择按键";  // 选择态提示条文字
     private int _lastPickingExitTick;                  // 最近一次退出选择态的时刻（Environment.TickCount；比较必须用无符号差值见 InPickingExitCooldown）
     private volatile bool _masterKeyHeld;              // 总开关键按下沿标记（仅钩子线程读写；按住自动重复只响应第一次，抬起复位）
@@ -1116,7 +1116,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// <summary>选择态提示条是否显示（与选择态同步，但不在非选择态显示占位）。</summary>
     public Visibility PickingPromptVisible => PickingActive ? Visibility.Visible : Visibility.Collapsed;
 
-    /// <summary>选择态提示条文字（双宏两步录入时提示当前进度）。</summary>
+    /// <summary>选择态提示条文字（多宏录入时提示当前序列与额度进度）。</summary>
     public string PickingPromptText
     {
         get => _pickingPromptText;
@@ -1143,11 +1143,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    /// <summary>开关分区子标签是否可见（仅开关模式显示：常规 / 轮转 / 双宏）。</summary>
+    /// <summary>开关分区子标签是否可见（仅开关模式显示：常规 / 轮转 / 多宏）。</summary>
     public Visibility SectionTabsVisible =>
         SelectedMode == TriggerMode.Toggle ? Visibility.Visible : Visibility.Collapsed;
 
-    /// <summary>方案面板当前开关分区（常规 / 轮转 / 双宏），新增方案按该分区录入。</summary>
+    /// <summary>方案面板当前开关分区（常规 / 轮转 / 多宏），新增方案按该分区录入。</summary>
     public ToggleSection SelectedSection
     {
         get => _selectedSection;
@@ -1388,8 +1388,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _scheduler.HandleSourceDown(source);   // 调度器自带 _gate 锁，明确支持钩子线程调用
     }
 
-    /// <summary>选择态按下处理（UI 线程）：键盘按键直接录入（Esc 退出；双宏成对录入中
-    /// 先放弃第 1 键，偶数态才退出）；鼠标按下交 View 命中测试（落在键鼠图块上 →
+    /// <summary>选择态按下处理（UI 线程）：键盘按键直接录入（Esc 退出；多宏录入仅暂存了开关键位、
+    /// 方案未成立时先放弃暂存，再次 Esc 才退出）；鼠标按下交 View 命中测试（落在键鼠图块上 →
     /// 右键取消 / 其余键录入，否则请求退出）；滚轮滚动不打断选择态。</summary>
     private void HandleHookDownPicking(InputSource source)
     {
@@ -2629,7 +2629,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     public event Action<Action<double, double>>? AdjustVisualizerRequested;
     /// <summary>
     /// 同步键位可视化注册表（当前档位全部方案键位，含每键显示开关；键位集合变化后调用：
-    /// 启动 / 导入 / 删除 / 总开关键迁移）。双宏方案额外登记辅键源（次键 eye → 该键显示）。
+    /// 启动 / 导入 / 删除 / 总开关键迁移）。多宏方案额外登记全部触发键位源
+    /// （各键位行的 eye → 该键显示；重复键位以首个登记者为准）。
     /// </summary>
     private void SyncVisualizerRegistry()
     {
@@ -2637,10 +2638,15 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         foreach (var (key, scheme) in _config.Schemes)
         {
             entries.Add(new(key, GetVisualEnabled(key)));
-            // 双宏辅键：辅键键帽（连发脉冲 / 物理按下）按次键的 VisualEnabled 独立开关。
-            if (scheme.Section != ToggleSection.Dual || scheme.Targets.Count < 2) continue;
-            if (TargetToSource(scheme.Targets[1]) is { } partner)
-                entries.Add(new(TaskSchedulerService.BuildSourceKey(partner), scheme.Targets[1].VisualEnabled));
+            // 多宏触发键位：各键位键帽（连发脉冲 / 物理按下）按自己的 VisualEnabled 独立开关。
+            if (scheme.Section != ToggleSection.Multi || scheme.Targets.Count < 2) continue;
+            for (var i = 1; i < scheme.Targets.Count; i++)
+            {
+                if (TargetToSource(scheme.Targets[i]) is not { } attached) continue;
+                var attachedKey = TaskSchedulerService.BuildSourceKey(attached);
+                if (entries.Exists(e => e.Key == attachedKey)) continue;   // 重复键位：先登记者生效
+                entries.Add(new(attachedKey, scheme.Targets[i].VisualEnabled));
+            }
         }
         _visualizer.ReplaceRegistry(entries);
     }
@@ -2662,7 +2668,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         AddLog($"键位可视化 [{(source is null ? key : InputNameMapper.GetSourceName(source))}] 已{(visible ? "开启" : "关闭")}。");
     }
 
-    /// <summary>设置方案内指定目标键的可视化开关（双宏辅键行 eye；实时生效 + 落盘）。</summary>
+    /// <summary>设置方案内指定目标键的可视化开关（多宏触发键位行 eye；实时生效 + 落盘）。</summary>
     private void SetTargetVisualEnabled(string key, int targetIndex, bool visible)
     {
         if (!_config.Schemes.TryGetValue(key, out var scheme) ||

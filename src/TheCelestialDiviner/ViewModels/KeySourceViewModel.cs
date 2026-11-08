@@ -28,7 +28,7 @@ public sealed class KeySourceViewModel : INotifyPropertyChanged
     private readonly InputSource _source;
     private string _name;
     private string _targetsSummary = "";
-    private string _dualPartnerSummary = "";   // 双宏辅键配对提示（非空时蓝色标记）
+    private string _multiMarkSummary = "";   // 多宏触发键位标记（"⇄ 开关键位…"，非空 = 该键是某启用多宏方案的触发键位）
     private SourceRegistration _registration = SourceRegistration.Empty;
     private bool _globallyDimmed;
     private bool _isMasterKey;
@@ -44,7 +44,7 @@ public sealed class KeySourceViewModel : INotifyPropertyChanged
     // UpdateTheme 时重建，便于切换档位（含主题预设变化）/ 切换日夜时全局换色）。
     private static Brush s_toggleBrush = MakeBrush(SectThemes.Default.AccentPrimaryHex);   // 开关模式
     private static Brush s_holdBrush = MakeBrush(SectThemes.Default.AccentGoldHex);        // 按压模式
-    private static Brush s_dualBrush = MakeBrush(SectThemes.Default.AccentDualHex);        // 双宏开关
+    private static Brush s_multiBrush = MakeBrush(SectThemes.Default.AccentDualHex);       // 多宏触发键位标记
     private static readonly Brush s_registeredForeground = Brushes.White;
 
     /// <summary>更新主题静态刷子（深色 / 浅色 + 档位外观调色板），随后需对每个实例调 RefreshTheme。</summary>
@@ -53,7 +53,7 @@ public sealed class KeySourceViewModel : INotifyPropertyChanged
         // 强调色与主题资源同源（档位外观解析色）；每次重建刷子，切换档位后重跑即全局生效。
         s_toggleBrush = MakeBrush(look.AccentPrimaryHex);
         s_holdBrush = MakeBrush(look.AccentGoldHex);
-        s_dualBrush = MakeBrush(look.AccentDualHex);
+        s_multiBrush = MakeBrush(look.AccentDualHex);
 
         if (s_isDark == isDark) return;
         s_isDark = isDark;
@@ -61,13 +61,14 @@ public sealed class KeySourceViewModel : INotifyPropertyChanged
         s_emptyForeground = MakeBrush(isDark ? "#AAAAAA" : "#666666");
     }
 
-    /// <summary>按当前注册状态与主题刷新配色。?。</summary>
+    /// <summary>按当前注册状态与主题刷新配色。</summary>
     public void RefreshTheme()
     {
-        if (_dualPartnerSummary.Length > 0)
+        // 多宏触发键位标记仅是"提示"不占用键位：该键有自有方案时注册色优先（标记只进小字），
+        // 无自有方案时才用标记色铺底——与旧双宏辅键的独占配色相反。
+        if (Registration == SourceRegistration.Empty && _multiMarkSummary.Length > 0)
         {
-            // 双宏辅键：蓝色配对提示（优先于注册态配色）。
-            Background = s_dualBrush;
+            Background = s_multiBrush;
             Foreground = s_registeredForeground;
             return;
         }
@@ -128,25 +129,40 @@ public sealed class KeySourceViewModel : INotifyPropertyChanged
     /// <summary>控件图标（鼠标键。?🖱，键盘键为空）。?。</summary>
     public string Icon { get; }
 
-    /// <summary>绑定列表小字：组合方案（"→ A · B"）或双宏辅键（"⇄ A · B"）。</summary>
+    /// <summary>绑定列表小字：自有方案（"→ A · B"）+ 多宏触发键位标记（"⇄ 开关键位…"，有则追加）。</summary>
     public string TargetsSummary
     {
         get => _targetsSummary;
         private set => Set(ref _targetsSummary, value);
     }
 
-    /// <summary>双宏辅键配对提示（非空 = 该键是某启用双宏方案的辅键）。</summary>
-    public string DualPartnerSummary
+    /// <summary>多宏触发键位标记（非空 = 该键是某些启用多宏方案的触发键位；仅提示不占用键位）。</summary>
+    public string MultiMarkSummary
     {
-        get => _dualPartnerSummary;
-        private set => Set(ref _dualPartnerSummary, value);
+        get => _multiMarkSummary;
+        private set => Set(ref _multiMarkSummary, value);
     }
 
-    /// <summary>标记 / 清除双宏辅键状态（summary = "⇄ A · B"；null / 空串清除）。</summary>
-    public void MarkDualPartner(string? summary)
+    /// <summary>
+    /// 标记 / 清除多宏触发键位状态（markSummary = "⇄ A · B"，多个方案共用同键时开关键位名合并；
+    /// null / 空串清除）。**只追加小字不覆盖**：键位有自有方案时保留其 "→ 目标…" 小字，
+    /// 标记接在后面；配色在 RefreshTheme 按注册态优先级决定。
+    /// 调用序约束：ApplyScheme（设置自有方案小字）之后、每轮整体刷新先 ClearMultiMarks 再标记。
+    /// </summary>
+    public void MarkMultiMember(string? markSummary)
     {
-        DualPartnerSummary = summary ?? "";
-        TargetsSummary = summary ?? "";
+        MultiMarkSummary = markSummary ?? "";
+        TargetsSummary = string.IsNullOrEmpty(markSummary)
+            ? TargetsSummary
+            : (TargetsSummary.Length > 0 ? TargetsSummary + "  " : "") + markSummary;
+        RefreshTheme();
+    }
+
+    /// <summary>清除全部多宏触发键位标记（每轮 RefreshAllButtons 先清后标；不触碰自有方案小字）。</summary>
+    public void ClearMultiMarks()
+    {
+        if (MultiMarkSummary.Length == 0) return;
+        MultiMarkSummary = "";
         RefreshTheme();
     }
 
@@ -207,10 +223,11 @@ public sealed class KeySourceViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// 应用方案（编辑确。?/ 删除 / 清空后调用）。?
-    /// 显示模式取第一个目标键的模式；空方案回到未注册状态。?
-    /// 双宏辅键标记（MarkDualPartner）独立于注册态，优先级更高。
-    /// <。</summary>
+    /// 应用方案（编辑确认 / 删除 / 清空后调用）。
+    /// 显示模式取第一个目标键的模式；空方案回到未注册状态。
+    /// 多宏触发键位标记（MarkMultiMember）独立于注册态、只追加小字；
+    /// 配色上自有方案注册色优先，标记色仅用于无自有方案的图块。
+    /// </summary>
     public void ApplyScheme(KeyScheme? scheme)
     {
         if (scheme is null || !scheme.Enabled || scheme.Targets.Count == 0)

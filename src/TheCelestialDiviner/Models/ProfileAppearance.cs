@@ -27,7 +27,7 @@ public sealed class ProfileAppearance
     /// <summary>按压模式配色（#RRGGBB；空 = 主题预设色）。</summary>
     public string AccentGold { get; set; } = "";
 
-    /// <summary>双宏第二配色（#RRGGBB；空 = 主题预设色）。</summary>
+    /// <summary>多宏触发键位标记配色（#RRGGBB；空 = 主题预设色；字段名沿用旧「双宏第二配色」，序列化键同名不改）。</summary>
     public string AccentDual { get; set; } = "";
 
     /// <summary>主题预设。</summary>
@@ -124,7 +124,7 @@ public sealed class ResolvedAppearance
     /// <summary>按压模式配色。</summary>
     public string AccentGoldHex { get; }
 
-    /// <summary>双宏第二配色。</summary>
+    /// <summary>多宏触发键位标记配色（槽位名沿用旧「双宏第二配色」）。</summary>
     public string AccentDualHex { get; }
 
     /// <summary>注释区公告内嵌资源名（随主题：默认 / 衍天 → Notice.md，莫问 → Notice2.md）。</summary>

@@ -177,16 +177,27 @@ public sealed partial class MainViewModel
         foreach (var b in NumpadKeys)
             b.ApplyScheme(_config.Schemes.GetValueOrDefault(TaskSchedulerService.BuildSourceKey(b.Source!)));
 
-        // 双宏辅键标记：先清除全部，再对启用中双宏方案的辅键图块施加蓝色配对提示。
-        foreach (var b in AllSourceButtons()) b.MarkDualPartner(null);
+        // 多宏触发键位标记：先清除全部，再对启用中多宏方案的全部触发键位图块追加 "⇄ 开关键位" 提示。
+        // 仅标记不占用键位资源：触发键位可同时有自己的方案 / 属于多个多宏方案（标记色只用于无自有方案的图块），
+        // 同键多案的开关键位名合并显示。
+        foreach (var b in AllSourceButtons()) b.ClearMultiMarks();
+        var multiMarks = new Dictionary<KeySourceViewModel, List<string>>();
         foreach (var scheme in _config.Schemes.Values)
         {
-            if (scheme.Section != ToggleSection.Dual || !scheme.Enabled || scheme.Targets.Count < 2) continue;
-            var partner = TargetToSource(scheme.Targets[1]);
-            if (partner is null) continue;
-            FindSourceButton(partner)?.MarkDualPartner(
-                $"⇄ {InputNameMapper.GetTargetName(scheme.Targets[0])} · {InputNameMapper.GetTargetName(scheme.Targets[1])}");
+            if (scheme.Section != ToggleSection.Multi || !scheme.Enabled || scheme.Targets.Count < 2) continue;
+            var switchName = InputNameMapper.GetTargetName(scheme.Targets[0]);
+            for (var i = 1; i < scheme.Targets.Count; i++)
+            {
+                if (TargetToSource(scheme.Targets[i]) is not { } attached) continue;
+                var button = FindSourceButton(attached);
+                if (button is null) continue;
+                if (!multiMarks.TryGetValue(button, out var names))
+                    multiMarks[button] = names = new List<string>();
+                if (!names.Contains(switchName)) names.Add(switchName);   // 重复键位 / 同开关多键位只留一个名字
+            }
         }
+        foreach (var (button, names) in multiMarks)
+            button.MarkMultiMember("⇄ " + string.Join(" · ", names));
     }
 
     /// <summary>
@@ -216,11 +227,12 @@ public sealed partial class MainViewModel
 
     private const string s_defaultHint = "点击“从左侧键盘增删按键方案”进入管理模式：左键键位添加方案，再点一次即取消";
 
-    // 选择态提示条文案（管理模式的操作说明；双宏成对录入有独立文案，成对完成 / 放弃第 1 键后回到此处）。
+    // 选择态提示条文案（管理模式的操作说明；多宏录入有独立文案，成立 / 放弃开关键位后回到此处）。
     private const string s_managePrompt =
         "管理方案中：左键键位添加连发，再点一次即取消（右键同样可取消）· Esc 或点击空白处退出";
-    private const string s_dualManagePrompt =
-        "双宏成对录入：左键选第 1 键，再左键选第 2 键（成对生效）· 再左键点已有方案的第 1 键取消整对（右键同样）· Esc 或点击空白处退出";
+    private const string s_multiManagePrompt =
+        "多宏录入：左键选开关键位，再左键依次追加触发键位（2 键即成立 · 最多 6 键 · 可重复）"
+        + "· 右键触发键位 = 移除该键，右键开关键位 = 删除整案 · Esc 或点击空白处退出";
 
     /// <summary>退出选择态后的重入冷却（毫秒）：防"退出管理态"那一次物理点击在抬起时把管理态重新打开。</summary>
     private const int PickingExitCooldownMs = 150;
@@ -258,37 +270,30 @@ public sealed partial class MainViewModel
         };
     }
 
-    /// <summary>判断方案是否为合法双宏开关：Section=Dual、两个目标键、第 1 键 = 触发键自身。</summary>
-    private static bool IsDualMacroScheme(InputSource source, KeyScheme scheme)
+    /// <summary>
+    /// 判断方案是否为合法多宏开关：Section=Multi、键位 2~6（含开关键位）、
+    /// 第 1 键 = 触发键自身、无滚轮 / 修饰键；触发键位允许重复（重复照常消耗额度）。
+    /// </summary>
+    private static bool IsMultiMacroScheme(InputSource source, KeyScheme scheme)
     {
-        if (scheme.Section != ToggleSection.Dual || scheme.Targets.Count != 2) return false;
+        if (scheme.Section != ToggleSection.Multi) return false;
+        if (scheme.Targets.Count < Constants.MultiMinTargets ||
+            scheme.Targets.Count > Constants.MultiMaxTargets) return false;
         var kept = scheme.Targets;
-        // 第 1 键 = 开关键位（自触发）；第 2 键为辅助键，两者均不可为滚轮（无按住语义）。
+        // 第 1 键 = 开关键位（自触发）；所有键位均不可为滚轮（无按住语义）。
         if (kept.Any(t => t.ModCtrl || t.ModShift || t.ModAlt || t.Kind == TargetKind.Wheel)) return false;
         var first = kept[0];
         return source.Kind switch
         {
             InputKind.Keyboard => first.Kind == TargetKind.Keyboard &&
                                   first.VirtualKey == source.VirtualKey && first.Extended == source.Extended,
-            InputKind.Mouse => first.Kind == TargetKind.Mouse && first.Mouse == source.Mouse,
+            InputKind.Mouse   => first.Kind == TargetKind.Mouse && first.Mouse == source.Mouse,
             _ => false
         };
     }
 
-    /// <summary>判断某键是否已被其他双宏方案用作辅键（防两套双宏共用同一辅键）。</summary>
-    private bool IsDualPartnerUsed(InputSource source)
-    {
-        foreach (var scheme in _config.Schemes.Values)
-        {
-            if (scheme.Section != ToggleSection.Dual || scheme.Targets.Count < 2) continue;
-            var partner = TargetToSource(scheme.Targets[1]);
-            if (partner is not null && partner.Equals(source)) return true;
-        }
-        return false;
-    }
-
     /// <summary>
-    /// 迁移旧版方案：仅保留"按键自身连发"方案与合法双宏方案（模式 / 间隔沿用原值），
+    /// 迁移旧版方案：仅保留"按键自身连发"方案与合法多宏方案（模式 / 间隔沿用原值），
     /// 其余（触发键 ≠ 目标键、多目标、修饰键组合）按新版交互移除并记录日志。    /// <summary>
     /// 迁移：切换方案热键的默认值由"未设置"改为 **F10**（v1.8.2）。
     /// **只对从未设置过的用户生效**——已经自定义过键位的用户保持原样，不会被覆盖；
@@ -329,9 +334,9 @@ public sealed partial class MainViewModel
                 kept++;
                 continue;
             }
-            if (IsDualMacroScheme(source, scheme))
+            if (IsMultiMacroScheme(source, scheme))
             {
-                // 双宏保留各目标键的启用状态：第 2 勾选框控制首键是否参与连发，
+                // 多宏保留各键位的启用状态：第 2 勾选框控制开关键位是否参与连发，
                 // 随配置持久化（不再强制全部启用，否则会覆盖用户的取消勾选）。
                 kept++;
                 continue;
@@ -360,15 +365,29 @@ public sealed partial class MainViewModel
             if (source is null) continue;
 
             var captured = key;
-            if (scheme.Section == ToggleSection.Dual)
+            if (scheme.Section == ToggleSection.Multi)
             {
-                // 双宏开关：两行一体（启用勾选只显示在第 1 行），仅开关模式 + 双宏分区可见。
-                if (!IsDualMacroScheme(source, scheme)) continue;
+                // 多宏开关：2~6 行一体（启用勾选只显示在第 1 行），仅开关模式 + 多宏分区可见。
+                if (!IsMultiMacroScheme(source, scheme)) continue;
+                // 每个触发键位（Targets[1..]）一行，独立时序 / 可视化；for 变量需按迭代捕获。
+                var attachedRows = new List<SchemeKeyRowViewModel>();
+                for (var i = 1; i < scheme.Targets.Count; i++)
+                {
+                    var capturedIndex = i;
+                    attachedRows.Add(new SchemeKeyRowViewModel(
+                        InputNameMapper.GetTargetName(scheme.Targets[i]),
+                        scheme.Targets[i].IntervalMs,
+                        scheme.Targets[i].HoldMs,
+                        scheme.Targets[i].VisualEnabled,
+                        ms => UpdateSchemeInterval(captured, ms, capturedIndex),
+                        ms => UpdateSchemeHold(captured, ms, capturedIndex),
+                        visible => SetTargetVisualEnabled(captured, capturedIndex, visible)));
+                }
                 rows.Add((InputNameMapper.GetSourceName(source),
                     new SchemeRowViewModel(
                         source,
                         InputNameMapper.GetSourceName(source),
-                        "双宏",
+                        "多宏",
                         scheme.Targets[0].IntervalMs,
                         scheme.Targets[0].HoldMs,
                         scheme.Enabled,
@@ -376,19 +395,13 @@ public sealed partial class MainViewModel
                         onDelete: () => DeleteScheme(captured),
                         onIntervalChanged: ms => UpdateSchemeInterval(captured, ms, 0),
                         onHoldChanged: ms => UpdateSchemeHold(captured, ms, 0),
-                        isDual: true,
-                        secondKeyName: InputNameMapper.GetTargetName(scheme.Targets[1]),
+                        isMulti: true,
+                        attachedKeys: attachedRows,
                         visualEnabled: GetVisualEnabled(captured),
                         onVisualChanged: visible => SetVisualEnabled(captured, visible),
                         firstKeyFiring: scheme.Targets[0].Enabled,
-                        onFirstKeyFiringChanged: firing => SetDualFirstKeyFiring(captured, firing),
-                        secondIntervalMs: scheme.Targets[1].IntervalMs,
-                        secondHoldMs: scheme.Targets[1].HoldMs,
-                        onSecondIntervalChanged: ms => UpdateSchemeInterval(captured, ms, 1),
-                        onSecondHoldChanged: ms => UpdateSchemeHold(captured, ms, 1),
-                        secondVisualEnabled: scheme.Targets[1].VisualEnabled,
-                        onSecondVisualChanged: visible => SetTargetVisualEnabled(captured, 1, visible),
-                        rowMode: TriggerMode.Toggle, rowSection: ToggleSection.Dual)));
+                        onFirstKeyFiringChanged: firing => SetMultiFirstKeyFiring(captured, firing),
+                        rowMode: TriggerMode.Toggle, rowSection: ToggleSection.Multi)));
                 continue;
             }
 
@@ -448,7 +461,7 @@ public sealed partial class MainViewModel
         // 按钮本身点了没反应（StartPicking 被 PickingActive 守卫吞掉）。
         if (PickingActive)
         {
-            // 双宏成对录入中 TryExitPicking 只放弃暂存的第 1 键、不退出（须成对完成后再点一次），
+            // 多宏录入仅暂存了开关键位（方案未成立）时 TryExitPicking 只放弃暂存、不退出，
             // 无论退没退成都必须在此结束，否则紧接着的进入逻辑会把管理态重新打开。
             if (PickingKind == PickKind.AddScheme) { TryExitPicking(); return; }
             CancelPicking();   // 其它录入态（热键设置）→ 直接接管为方案管理
@@ -456,10 +469,10 @@ public sealed partial class MainViewModel
 
         PickingActive = true;
         PickingKind = PickKind.AddScheme;
-        // 双宏分区仅在开关模式下有效：按压模式录入一律按常规方案（分区子标签此时隐藏）。
+        // 多宏分区仅在开关模式下有效：按压模式录入一律按常规方案（分区子标签此时隐藏）。
         _pickingSection = _selectedMode == TriggerMode.Toggle ? _selectedSection : ToggleSection.Normal;
-        _dualFirstPick = null;
-        PickingPromptText = _pickingSection == ToggleSection.Dual ? s_dualManagePrompt : s_managePrompt;
+        _multiPickKeys.Clear();
+        PickingPromptText = _pickingSection == ToggleSection.Multi ? s_multiManagePrompt : s_managePrompt;
         HintText = "正在管理连发键方案：左键键位添加，再点一次取消，Esc 或点击空白处退出";
         AddLog($"进入方案管理（{_selectedMode switch { TriggerMode.Toggle => "开关模式", _ => "按压模式" }}"
                + $"{(_selectedMode == TriggerMode.Toggle ? " · " + SectionName(_selectedSection) : "")}）："
@@ -475,7 +488,7 @@ public sealed partial class MainViewModel
         CancelPicking();
         PickingActive = true;
         PickingKind = PickKind.SetMasterKey;
-        _dualFirstPick = null;
+        _multiPickKeys.Clear();
         PickingPromptText = "请选择全局开关热键（Esc 取消）";
         HintText = "正在录入总开关键：点击左侧键鼠视图，或直接按下键盘按键（Esc 取消）";
         AddLog("开始设置全局开关热键：点击左侧键鼠或直接按键（Esc 取消）。");
@@ -491,7 +504,7 @@ public sealed partial class MainViewModel
         CancelPicking();
         PickingActive = true;
         PickingKind = PickKind.SetCycleKey;
-        _dualFirstPick = null;
+        _multiPickKeys.Clear();
         PickingPromptText = _config.ProfileCycle.HasKey
             ? "请选择切换方案热键（左键键位 / 直接按键设置 · 右键原键位取消 · Esc 取消）"
             : "请选择切换方案热键（左键键位 / 直接按键设置 · Esc 取消）";
@@ -509,7 +522,7 @@ public sealed partial class MainViewModel
         CancelPicking();
         PickingActive = true;
         PickingKind = PickKind.SetCloseKey;
-        _dualFirstPick = null;
+        _multiPickKeys.Clear();
         PickingPromptText = _config.IndependentClose.HasKey
             ? "请选择独立关闭热键（左键键位 / 直接按键设置 · 右键原键位取消 · Esc 取消）"
             : "请选择独立关闭热键（左键键位 / 直接按键设置 · Esc 取消）";
@@ -523,7 +536,7 @@ public sealed partial class MainViewModel
         if (!PickingActive) return;
         PickingActive = false;
         PickingKind = PickKind.None;
-        _dualFirstPick = null;
+        _multiPickKeys.Clear();
         _lastPickingExitTick = Environment.TickCount;
         PickingPromptText = "请选择按键";
         HintText = s_defaultHint;
@@ -531,15 +544,15 @@ public sealed partial class MainViewModel
 
     /// <summary>
     /// 请求退出选择态（Esc / 点击键鼠区空白处 / “退出管理方案”按钮）。
-    /// 双宏成对录入中（已选第 1 键、未选第 2 键）不退出：先放弃暂存的第 1 键回到偶数态，
-    /// 再次请求才真正退出（成对录入须成对完成后才能退出）。
+    /// 多宏录入仅暂存了开关键位（方案未成立）时不退出：先放弃暂存回到空闲录入态，
+    /// 再次请求才真正退出（已成立的方案随退出保留）。
     /// </summary>
     public void TryExitPicking()
     {
         if (!PickingActive) return;
-        if (PickingKind == PickKind.AddScheme && _pickingSection == ToggleSection.Dual && _dualFirstPick is not null)
+        if (PickingKind == PickKind.AddScheme && _pickingSection == ToggleSection.Multi && _multiPickKeys.Count == 1)
         {
-            AbandonDualFirstPick("成对完成后才能退出管理");
+            AbandonMultiFirstPick("方案成立前（仅开关键位）不退出管理");
             return;
         }
         var wasManaging = PickingKind == PickKind.AddScheme;
@@ -547,19 +560,20 @@ public sealed partial class MainViewModel
         if (wasManaging) AddLog("已退出方案管理。");
     }
 
-    /// <summary>放弃双宏成对录入中暂存的第 1 键，回到选择第 1 键（reason 描述触发来源，写入日志）。</summary>
-    private void AbandonDualFirstPick(string reason)
+    /// <summary>放弃多宏录入中暂存的开关键位，回到选择开关键位（reason 描述触发来源，写入日志）。</summary>
+    private void AbandonMultiFirstPick(string reason)
     {
-        if (_dualFirstPick is not { } pending) return;
-        _dualFirstPick = null;
-        PickingPromptText = s_dualManagePrompt;
-        AddLog($"双宏录入：已放弃第 1 键 [{InputNameMapper.GetSourceName(pending)}]（{reason}）。");
+        if (_multiPickKeys.Count != 1) return;
+        var pending = _multiPickKeys[0];
+        _multiPickKeys.Clear();
+        PickingPromptText = s_multiManagePrompt;
+        AddLog($"多宏录入：已放弃开关键位 [{InputNameMapper.GetSourceName(pending)}]（{reason}）。");
     }
 
     /// <summary>
     /// 键鼠区图块左键点击（WPF 路径）：仅钩子未安装时兜底录入该键。
     /// 钩子正常时点击统一走钩子路径（区分左键添加 / 右键取消 / 空白处退出），
-    /// 此处不得重复录入，否则双宏两步录入会被同一次物理点击触发两次。
+    /// 此处不得重复录入，否则多宏多步录入会被同一次物理点击触发两次。
     /// </summary>
     private void HandleSourceClicked(KeySourceViewModel svm)
     {
@@ -571,48 +585,32 @@ public sealed partial class MainViewModel
     {
         ToggleSection.Normal => "常规开关",
         ToggleSection.Rotate => "轮转开关",
-        ToggleSection.Dual => "双宏开关",
+        ToggleSection.Multi => "多宏开关",
         _ => section.ToString()
     };
 
-    /// <summary>双宏键位合法性校验（wheel / 总开关占用 / 方案占用 / 辅键占用 / 两键相同）。
+    /// <summary>多宏键位通用校验（滚轮 / 总开关 / 切换方案热键 / 独立关闭热键），开关键位与触发键位共用。
     /// 通过返回 true；失败时 reason 记录拒绝原因。</summary>
-    private bool ValidateDualPickKey(InputSource source, InputSource? firstKey, out string reason)
+    private bool ValidateMultiPickCommon(InputSource source, string roleName, out string reason)
     {
         if (source.Kind == InputKind.Mouse && source.Mouse is MouseInput.WheelUp or MouseInput.WheelDown)
         {
-            reason = "滚轮不能作为双宏键（无按住语义），请重选。";
+            reason = $"滚轮不能作为多宏{roleName}（无按住语义），请重选。";
             return false;
         }
         if (GlobalSwitchSource is { } gk && gk.Equals(source))
         {
-            reason = $"[{InputNameMapper.GetSourceName(source)}] 已被总开关占用，不能录入为双宏键，请重选。";
+            reason = $"[{InputNameMapper.GetSourceName(source)}] 已被总开关占用，不能录入为多宏{roleName}，请重选。";
             return false;
         }
         if (ProfileCycleSource is { } ck && ck.Equals(source))
         {
-            reason = $"[{InputNameMapper.GetSourceName(source)}] 已被切换方案热键占用，不能录入为双宏键，请重选。";
+            reason = $"[{InputNameMapper.GetSourceName(source)}] 已被切换方案热键占用，不能录入为多宏{roleName}，请重选。";
             return false;
         }
         if (IndependentCloseSource is { } xk && xk.Equals(source))
         {
-            reason = $"[{InputNameMapper.GetSourceName(source)}] 已被独立关闭热键占用，不能录入为双宏键，请重选。";
-            return false;
-        }
-        if (firstKey is not null && firstKey.Equals(source))
-        {
-            reason = "双宏的两个按键不能相同，请选择其他按键。";
-            return false;
-        }
-        var key = TaskSchedulerService.BuildSourceKey(source);
-        if (_config.Schemes.ContainsKey(key))
-        {
-            reason = $"[{InputNameMapper.GetSourceName(source)}] 已有连发方案（如需改为双宏请先删除原方案），请重选。";
-            return false;
-        }
-        if (IsDualPartnerUsed(source))
-        {
-            reason = $"[{InputNameMapper.GetSourceName(source)}] 已是其他双宏方案的辅键，不能重复使用，请重选。";
+            reason = $"[{InputNameMapper.GetSourceName(source)}] 已被独立关闭热键占用，不能录入为多宏{roleName}，请重选。";
             return false;
         }
         reason = "";
@@ -620,27 +618,39 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>
-    /// 双宏两步成对录入：第 1 键暂存并保持选择态；第 2 键校验后成对生成方案（落盘 + 应用）。
-    /// 管理模式继续保持，可继续成对添加下一组。
+    /// 多宏录入：第 1 键 = 开关键位（只校验 + 暂存，不落盘）；之后每次左键 = 追加一个触发键位，
+    /// 满 2 键（MultiMinTargets）即落盘成立，已成立方案继续追加即时落盘刷新，
+    /// 最多 6 键（MultiMaxTargets，含开关键位；重复键位照常消耗额度）。
+    /// 触发键位只标记不占用键位资源：已有自有方案 / 属于其他多宏方案 / 与序列中已有键位重复均允许。
+    /// 管理模式保持，直至 Esc / 点击空白处退出。
     /// </summary>
-    private void CompleteDualPick(InputSource source)
+    private void CompleteMultiPick(InputSource source)
     {
-        if (_dualFirstPick is null)
+        if (_multiPickKeys.Count == 0)
         {
-            // 左键再点一次 = 取消：该键已是双宏方案（开关键位）时整对删除，与右键等价。
-            var dualKey = TaskSchedulerService.BuildSourceKey(source);
-            if (_config.Schemes.TryGetValue(dualKey, out var existingDual)
-                && existingDual.Section == ToggleSection.Dual)
+            // 左键再点一次 = 取消：该键已是多宏方案（开关键位）时整案删除，与右键等价。
+            var multiKey = TaskSchedulerService.BuildSourceKey(source);
+            if (_config.Schemes.TryGetValue(multiKey, out var existingMulti)
+                && existingMulti.Section == ToggleSection.Multi)
             {
-                DeleteScheme(dualKey);
+                DeleteScheme(multiKey);
                 return;
             }
 
-            // 第 1 键（开关键位）：只校验 + 暂存，不落盘，继续选择第 2 键。
-            if (ValidateDualPickKey(source, null, out var reason))
+            // 第 1 键（开关键位）：只校验 + 暂存，不落盘，继续追加触发键位。
+            // 开关键位独占：该键不能已有任何方案（触发键位则无此限制）。
+            if (ValidateMultiPickCommon(source, "开关键位", out var reason))
             {
-                _dualFirstPick = source;
-                PickingPromptText = $"已选第 1 键 [{InputNameMapper.GetSourceName(source)}]，请左键选择第 2 键（成对生效，Esc 换第 1 键）";
+                if (_config.Schemes.ContainsKey(multiKey))
+                {
+                    AddLog($"[{InputNameMapper.GetSourceName(source)}] 已有连发方案（如需改为多宏请先删除原方案），请重选。");
+                }
+                else
+                {
+                    _multiPickKeys.Add(source);
+                    PickingPromptText =
+                        $"多宏录入：已选开关键位 [{InputNameMapper.GetSourceName(source)}]，请左键追加触发键位（2 键即成立，Esc 换键）";
+                }
             }
             else
             {
@@ -649,12 +659,21 @@ public sealed partial class MainViewModel
             return;
         }
 
-        var first = _dualFirstPick;
-        // 第 2 键校验失败时保持选择态，允许直接重选。
-        if (!ValidateDualPickKey(source, first, out var reason2)) { AddLog(reason2); return; }
-        _dualFirstPick = null;
-        PickingPromptText = s_dualManagePrompt;   // 回到“选择第 1 键”，管理模式保持
-        // 新方案统一用当前时序档位值（常规 26/26 或极限 11/11）；后续可在方案列表行内修改。
+        // 追加触发键位：额度 → 通用校验 → 追加（满 2 键即成立落盘）。
+        var first = _multiPickKeys[0];
+        if (_multiPickKeys.Count >= Constants.MultiMaxTargets)
+        {
+            AddLog($"多宏 [{InputNameMapper.GetSourceName(first)}] 已达 {Constants.MultiMaxTargets} 键上限，"
+                   + "如需调整请右键移除触发键位后重试。");
+            return;
+        }
+        if (!ValidateMultiPickCommon(source, "触发键位", out var reason2)) { AddLog(reason2); return; }
+
+        _multiPickKeys.Add(source);
+        var keyStr = TaskSchedulerService.BuildSourceKey(first);
+        var established = _multiPickKeys.Count >= Constants.MultiMinTargets;
+
+        // 新键位统一用当前时序档位值（常规 26/26 或极限 11/11）；后续可在方案列表行内修改。
         var interval = _config.DefaultIntervalMs;
         var hold = _config.DefaultHoldMs;
 
@@ -681,22 +700,50 @@ public sealed partial class MainViewModel
             }
         };
 
-        var keyStr = TaskSchedulerService.BuildSourceKey(first);
-        _config.Schemes[keyStr] = new KeyScheme
+        var scheme = established ? _config.Schemes.GetValueOrDefault(keyStr) : null;
+        if (established && scheme is null)
         {
-            Enabled = true,
-            Section = ToggleSection.Dual,
-            Targets = { BuildTarget(first), BuildTarget(source) }
-        };
+            // 首次成立（第 2 键）：Targets[0] = 开关键位（自触发），Targets[1] = 触发键位。
+            scheme = new KeyScheme
+            {
+                Enabled = true,
+                Section = ToggleSection.Multi,
+                Targets = { BuildTarget(first), BuildTarget(source) }
+            };
+            _config.Schemes[keyStr] = scheme;
+        }
+        else if (scheme is { } existing && existing.Section == ToggleSection.Multi)
+        {
+            existing.Targets.Add(BuildTarget(source));
+        }
+        else if (established)
+        {
+            // 理论不可达（暂存时已校验开关键位无方案）：防御性兜底，不落盘避免污染异构方案。
+            AddLog($"多宏 [{InputNameMapper.GetSourceName(first)}] 方案状态异常（开关键位方案缺失 / 类型不符），本次追加未生效。");
+            _multiPickKeys.RemoveAt(_multiPickKeys.Count - 1);
+            return;
+        }
 
-        RefreshAllButtons();
-        ApplyConfigToScheduler();
-        SaveConfig();
-        RefreshSchemeList();
-        SyncVisualizerRegistry();
-        AddLog($"双宏键 [{InputNameMapper.GetSourceName(first)}] + [{InputNameMapper.GetSourceName(source)}]"
-               + $" 已添加：按下 [{InputNameMapper.GetSourceName(first)}] 两键轮流触发，再按一次停止"
-               + $"（按压 {hold}ms / 间隔 {interval}ms）。可继续成对添加，Esc 退出管理。");
+        if (established)
+        {
+            RefreshAllButtons();
+            ApplyConfigToScheduler();
+            SaveConfig();
+            RefreshSchemeList();
+            SyncVisualizerRegistry();
+        }
+
+        var sequence = string.Join(" · ", _multiPickKeys.Select(InputNameMapper.GetSourceName));
+        UpdateMultiPickPrompt();
+        if (_multiPickKeys.Count == Constants.MultiMinTargets)
+            AddLog($"多宏键 [{InputNameMapper.GetSourceName(first)}] 已成立（序列 {sequence}，"
+                   + $"{_multiPickKeys.Count}/{Constants.MultiMaxTargets} 键）：按下 "
+                   + $"[{InputNameMapper.GetSourceName(first)}] 全部键位轮流触发，再按一次停止"
+                   + $"（按压 {hold}ms / 间隔 {interval}ms）。可继续追加，Esc 退出管理。");
+        else
+            AddLog($"多宏 [{InputNameMapper.GetSourceName(first)}] 已追加触发键位 "
+                   + $"[{InputNameMapper.GetSourceName(source)}]（序列 {sequence}，"
+                   + $"{_multiPickKeys.Count}/{Constants.MultiMaxTargets} 键）。");
     }
 
     /// <summary>
@@ -735,10 +782,10 @@ public sealed partial class MainViewModel
             return;
         }
 
-        // 双宏分区：两步成对录入（暂存 / 成对落盘 / 模式保持交给 CompleteDualPick）。
-        if (_pickingSection == ToggleSection.Dual)
+        // 多宏分区：暂存开关键位 / 追加触发键位（模式保持交给 CompleteMultiPick）。
+        if (_pickingSection == ToggleSection.Multi)
         {
-            CompleteDualPick(source);
+            CompleteMultiPick(source);
             return;
         }
 
@@ -764,11 +811,6 @@ public sealed partial class MainViewModel
         if (IndependentCloseSource is { } xk && xk.Equals(source))
         {
             AddLog($"[{InputNameMapper.GetSourceName(source)}] 已被独立关闭热键占用，不能录入为连发键。");
-            return;
-        }
-        if (IsDualPartnerUsed(source))
-        {
-            AddLog($"[{InputNameMapper.GetSourceName(source)}] 已是双宏方案的辅键，不能单独注册为连发键。");
             return;
         }
 
@@ -823,8 +865,10 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>
-    /// 管理模式中右键键位：取消该键位的方案。双宏方案被任一键位（开关键位或辅键）右键时
-    /// 整对取消（取消一个 = 取消一对）；双宏成对录入中右键暂存的第 1 键 = 放弃该键重新选择。
+    /// 管理模式中右键键位。多宏语义：右键暂存中的开关键位 = 放弃暂存重新选择；
+    /// 右键已成立多宏方案的开关键位 = 整案删除；右键其触发键位 = 仅从序列移除首个该键
+    ///（剩余不足 2 键整案自动删除——对旧 2 键多宏即整案消失）。录入态优先作用于当前录入方案；
+    /// 其余键位按"自有方案删除 → 他案触发键位移除"。
     /// 切换方案热键录入中右键已设置的键位 = 取消恢复缺省（右键其他键位仅提示）。
     /// </summary>
     public void RemovePickAt(InputSource source)
@@ -861,31 +905,107 @@ public sealed partial class MainViewModel
 
         if (!PickingActive || PickingKind != PickKind.AddScheme) return;
 
-        // 成对录入中：右键暂存的第 1 键 = 放弃暂存，回到选择第 1 键。
-        if (_pickingSection == ToggleSection.Dual && _dualFirstPick is { } pending && pending.Equals(source))
+        // 多宏录入中：右键暂存的开关键位（方案未成立）= 放弃暂存，回到选择开关键位。
+        if (_pickingSection == ToggleSection.Multi && _multiPickKeys.Count == 1 && _multiPickKeys[0].Equals(source))
         {
-            AbandonDualFirstPick("右键取消");
+            AbandonMultiFirstPick("右键取消");
             return;
+        }
+
+        // 多宏录入中优先作用于当前录入方案（开关键位 = _multiPickKeys[0]）。
+        var currentKey = _pickingSection == ToggleSection.Multi && _multiPickKeys.Count > 0
+            ? TaskSchedulerService.BuildSourceKey(_multiPickKeys[0])
+            : null;
+        if (currentKey is not null && currentKey == TaskSchedulerService.BuildSourceKey(source)
+            && _config.Schemes.ContainsKey(currentKey))
+        {
+            // 右键当前方案的开关键位 = 整案删除，录入态回到空闲（重新选择开关键位）。
+            _multiPickKeys.Clear();
+            PickingPromptText = s_multiManagePrompt;
+            DeleteScheme(currentKey);
+            return;
+        }
+        if (currentKey is not null
+            && _config.Schemes.TryGetValue(currentKey, out var currentScheme)
+            && currentScheme.Section == ToggleSection.Multi)
+        {
+            var currentIndex = FindAttachedIndex(currentScheme, source);
+            if (currentIndex >= 0)
+            {
+                RemoveMultiAttached(currentKey, currentIndex);
+                // 同步暂存序列（Targets[i] ↔ _multiPickKeys[i]，追加顺序一致）：
+                // 整案已随移除删除（跌破 2 键）时只保留开关键位（回到未成立态）。
+                if (!_config.Schemes.ContainsKey(currentKey))
+                    _multiPickKeys.RemoveRange(1, _multiPickKeys.Count - 1);
+                else
+                    _multiPickKeys.RemoveAt(currentIndex);
+                UpdateMultiPickPrompt();
+                return;
+            }
         }
 
         var key = TaskSchedulerService.BuildSourceKey(source);
         if (_config.Schemes.ContainsKey(key))
         {
-            DeleteScheme(key);   // 双宏方案在 DeleteScheme 内整对取消（含配对日志）
+            DeleteScheme(key);   // 多宏方案在 DeleteScheme 内整案取消（含键位日志）
             return;
         }
 
-        // 键位自身无方案：若是某双宏方案的辅键，同样整对取消（取消一个 = 取消一对）。
+        // 键位自身无方案：若是某多宏方案的触发键位，仅从该方案移除首个该键
+        //（剩余不足 2 键 = 整案删除；同键属多案时按字典序命中第一个）。
         foreach (var (ownerKey, scheme) in _config.Schemes.ToList())
         {
-            if (scheme.Section != ToggleSection.Dual || scheme.Targets.Count < 2) continue;
-            var partner = TargetToSource(scheme.Targets[1]);
-            if (partner is null || !partner.Equals(source)) continue;
-            DeleteScheme(ownerKey);
+            if (scheme.Section != ToggleSection.Multi || scheme.Targets.Count < 2) continue;
+            var attachedIndex = FindAttachedIndex(scheme, source);
+            if (attachedIndex < 0) continue;
+            RemoveMultiAttached(ownerKey, attachedIndex);
             return;
         }
 
         AddLog($"[{InputNameMapper.GetSourceName(source)}] 没有已注册的方案可取消。");
+    }
+
+    /// <summary>在多宏方案中查找触发键位（Targets[1..]）首个与 source 匹配的下标（无则 -1）。</summary>
+    private static int FindAttachedIndex(KeyScheme scheme, InputSource source)
+    {
+        for (var i = 1; i < scheme.Targets.Count; i++)
+        {
+            if (TargetToSource(scheme.Targets[i]) is { } attached && attached.Equals(source)) return i;
+        }
+        return -1;
+    }
+
+    /// <summary>
+    /// 从多宏方案移除指定下标的触发键位：剩余键位不足 <see cref="Constants.MultiMinTargets"/>（2）时
+    /// 整案删除（与旧双宏右键辅键等价），否则按"摘除单键"刷新（配置 → 调度器 → 落盘 → 列表 / 标记 / 可视化）。
+    /// </summary>
+    private void RemoveMultiAttached(string key, int targetIndex)
+    {
+        if (!_config.Schemes.TryGetValue(key, out var scheme) || scheme.Section != ToggleSection.Multi) return;
+        if (scheme.Targets.Count <= Constants.MultiMinTargets)
+        {
+            DeleteScheme(key);
+            return;
+        }
+        var removedName = InputNameMapper.GetTargetName(scheme.Targets[targetIndex]);
+        scheme.Targets.RemoveAt(targetIndex);
+        RefreshAllButtons();
+        ApplyConfigToScheduler();
+        SaveConfig();
+        RefreshSchemeList();
+        SyncVisualizerRegistry();
+        var switchName = TaskSchedulerService.ParseSourceKey(key) is { } src
+            ? InputNameMapper.GetSourceName(src) : key;
+        AddLog($"多宏 [{switchName}] 已移除触发键位 [{removedName}]"
+               + $"（剩余 {scheme.Targets.Count}/{Constants.MultiMaxTargets} 键）。");
+    }
+
+    /// <summary>刷新多宏录入提示条（当前序列 + 额度计数）。</summary>
+    private void UpdateMultiPickPrompt()
+    {
+        var sequence = string.Join(" · ", _multiPickKeys.Select(InputNameMapper.GetSourceName));
+        PickingPromptText = $"多宏录入：[{sequence}]（{_multiPickKeys.Count}/{Constants.MultiMaxTargets}）"
+                            + "，继续左键追加触发键位（Esc 退出管理）";
     }
 
     /// <summary>取方案内待更新目标：targetIndex &lt; 0 = 全部目标（常规单目标方案）；否则仅该索引（越界返回空）。</summary>
@@ -897,7 +1017,7 @@ public sealed partial class MainViewModel
                 : Array.Empty<TargetKeyConfig>();
 
     /// <summary>方案行内编辑连发间隔：更新目标键配置 → 重建任务实时生效 → 落盘。
-    /// targetIndex &lt; 0 = 全部目标；≥ 0 = 仅该目标（双宏两键各自独立编辑，互不影响）。</summary>
+    /// targetIndex &lt; 0 = 全部目标；≥ 0 = 仅该目标（多宏各键位独立编辑，互不影响）。</summary>
     private void UpdateSchemeInterval(string key, int intervalMs, int targetIndex = -1)
     {
         if (!_config.Schemes.TryGetValue(key, out var scheme)) return;
@@ -916,7 +1036,7 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>方案行内编辑按压时长：更新目标键配置 → 重建任务实时生效 → 落盘。
-    /// targetIndex &lt; 0 = 全部目标；≥ 0 = 仅该目标（双宏两键各自独立编辑，互不影响）。</summary>
+    /// targetIndex &lt; 0 = 全部目标；≥ 0 = 仅该目标（多宏各键位独立编辑，互不影响）。</summary>
     private void UpdateSchemeHold(string key, int holdMs, int targetIndex = -1)
     {
         if (!_config.Schemes.TryGetValue(key, out var scheme)) return;
@@ -977,30 +1097,30 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>
-    /// 双宏第二勾选框：首键位是否参与连发（写入首目标键 Enabled，随配置持久化）。
-    /// 取消勾选后首键仅作启停触发键：调度器重建任务时过滤未启用目标，
-    /// 双宏任务只剩次键 → 按首键启动 / 停止次键单独连发（不再交替）。
+    /// 多宏第二勾选框：开关键位是否参与连发（写入首目标键 Enabled，随配置持久化）。
+    /// 取消勾选后开关键位仅作启停触发键：调度器重建任务时过滤未启用目标，
+    /// 多宏任务只剩触发键位序列 → 按开关键位启动 / 停止其连发（不再交替）。
     /// </summary>
-    private void SetDualFirstKeyFiring(string key, bool firing)
+    private void SetMultiFirstKeyFiring(string key, bool firing)
     {
         if (!_config.Schemes.TryGetValue(key, out var scheme) ||
-            scheme.Section != ToggleSection.Dual || scheme.Targets.Count < 1) return;
+            scheme.Section != ToggleSection.Multi || scheme.Targets.Count < 1) return;
         if (scheme.Targets[0].Enabled == firing) return;
         scheme.Targets[0].Enabled = firing;
         ApplyConfigToScheduler();
         SaveConfig();
         var source = TaskSchedulerService.ParseSourceKey(key);
-        AddLog($"双宏 [{(source is null ? key : InputNameMapper.GetSourceName(source))}]"
-               + (firing ? "：首键位恢复参与连发（1-2-1-2 交替）。"
-                         : "：首键位改为仅启停开关（仅次键连发）。"));
+        AddLog($"多宏 [{(source is null ? key : InputNameMapper.GetSourceName(source))}]"
+               + (firing ? "：开关键位恢复参与连发（与触发键位序列交替）。"
+                         : "：开关键位改为仅启停开关（仅触发键位序列连发）。"));
     }
 
-    /// <summary>删除连发键方案（双宏方案任一键位删除时整对取消，日志列出两个键位）。</summary>
+    /// <summary>删除连发键方案（多宏方案整案删除，日志列出开关键位与全部触发键位）。</summary>
     private void DeleteScheme(string key)
     {
-        var dualPartner = _config.Schemes.TryGetValue(key, out var existing) &&
-                          existing.Section == ToggleSection.Dual && existing.Targets.Count >= 2
-            ? TargetToSource(existing.Targets[1])
+        var multiAttached = _config.Schemes.TryGetValue(key, out var existing) &&
+                            existing.Section == ToggleSection.Multi && existing.Targets.Count >= 2
+            ? existing.Targets.Skip(1).Select(InputNameMapper.GetTargetName).ToList()
             : null;
         if (_config.Schemes.Remove(key))
         {
@@ -1010,9 +1130,9 @@ public sealed partial class MainViewModel
             SyncVisualizerRegistry();
             var source = TaskSchedulerService.ParseSourceKey(key);
             var name = source is null ? key : InputNameMapper.GetSourceName(source);
-            AddLog(dualPartner is null
+            AddLog(multiAttached is null
                 ? $"连发键 [{name}] 已删除。"
-                : $"双宏 [{name}] + [{InputNameMapper.GetSourceName(dualPartner)}] 已取消（取消一个 = 取消一对）。");
+                : $"多宏 [{name}]（触发键位：{string.Join(" · ", multiAttached)}）已取消（整案删除）。");
         }
         RefreshSchemeList();
     }
@@ -1140,3 +1260,4 @@ public sealed partial class MainViewModel
         SyncVisualizerRegistry();
     }
 }
+

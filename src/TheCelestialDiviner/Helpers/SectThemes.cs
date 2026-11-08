@@ -45,7 +45,7 @@ public sealed class SectTheme
     /// <summary>按压模式预设色（占「主题金」槽位）。</summary>
     public string AccentGoldHex { get; }
 
-    /// <summary>双宏预设色（占「双宏底色」槽位）。</summary>
+    /// <summary>多宏触发键位标记预设色（占「多宏标记色」槽位；字段名沿用旧「双宏配色」）。</summary>
     public string AccentDualHex { get; }
 
     /// <summary>预设键帽配色方案名。</summary>
@@ -92,7 +92,7 @@ public static class SectThemes
         noticeRemoteUrl: Constants.NoticeRemoteUrl,
         customizable: false);
 
-    /// <summary>莫问高手（下标 2）：青绿预设（青绿开关 / 翠绿按压 / 青碧双宏）。</summary>
+    /// <summary>莫问高手（下标 2）：青绿预设（青绿开关 / 翠绿按压 / 青碧多宏标记）。</summary>
     public static readonly SectTheme MoWen = new(
         name: "莫问",
         displayName: "莫问高手",

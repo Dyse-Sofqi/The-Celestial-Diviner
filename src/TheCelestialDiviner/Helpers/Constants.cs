@@ -52,6 +52,16 @@ public static class Constants
     /// <summary>按压时长上限（毫秒）。</summary>
     public const int MaxHoldMs = 100;
 
+    // ---------- 多宏开关（ToggleSection.Multi） ----------
+
+    /// <summary>多宏方案最少键位数（含开关键位）：开关键位 + 1 个触发键位即成立（与旧双宏的 2 键形态一致，
+    /// 旧配置升级后无需调整即合法）。</summary>
+    public const int MultiMinTargets = 2;
+
+    /// <summary>多宏方案最多键位数（含开关键位）：开关键位 + 最多 5 个触发键位；
+    /// 重复键位照常消耗额度。超过额度的追加录入直接拒绝。</summary>
+    public const int MultiMaxTargets = 6;
+
     /// <summary>录制目标键的超时（毫秒）。</summary>
     public const int RecordTimeoutMs = 5000;
 
@@ -135,7 +145,7 @@ public static class Constants
     // ---------- 主题强调色（全局唯一落点：改这里即可全局生效，无需另处搜索替换） ----------
     // 引用点：
     //   AccentPrimaryHex / AccentGoldHex → App.ApplyTheme 主题资源 + KeySourceViewModel 图块刷子
-    //   AccentDualHex                     → KeySourceViewModel 双宏图块（紫深一档，随主题紫手动同步）
+    //   AccentDualHex                     → KeySourceViewModel 多宏触发键位标记色（紫深一档，随主题紫手动同步）
 
     /// <summary>主题紫（开关模式图块 / 模式标签选中 / 档位选中 / 横幅开启 / 录入提示条）。</summary>
     public const string AccentPrimaryHex = "#836899";
@@ -143,10 +153,11 @@ public static class Constants
     /// <summary>主题金（按压模式图块 / 按压模式分段 / 横幅关闭）。</summary>
     public const string AccentGoldHex = "#cea23a";
 
-    /// <summary>双宏图块底色（主题紫深一档；调主色时按需同步）。</summary>
+    /// <summary>多宏触发键位标记色（主题紫深一档；仅用于无自有方案的标记图块，调主色时按需同步）。
+    /// 字段名沿用旧"双宏配色"（配置序列化键同名，不改名以保旧配置兼容）。</summary>
     public const string AccentDualHex = "#a364ea";
 
-    // ---------- 主题预设「莫问高手」调色板（与上三色同槽位：开关 / 按压 / 双宏） ----------
+    // ---------- 主题预设「莫问高手」调色板（与上三色同槽位：开关 / 按压 / 多宏标记） ----------
     // 引用点与衍天配色完全一致（SectThemes 按门派把槽位映射到同一批资源键），
     // 因此只需在此登记色值，界面各处（图块 / 模式标签 / 档位 / 横幅 / 勾选框 / 热键录入提示）自动跟随。
 
@@ -156,6 +167,6 @@ public static class Constants
     /// <summary>莫问高手：按压模式翠绿（占衍天主题金的槽位）。</summary>
     public const string MoWenAccentGoldHex = "#66BB4D";
 
-    /// <summary>莫问高手：双宏配色青碧（占衍天双宏底色的槽位；与开关模式青绿互为互换后的取值）。</summary>
+    /// <summary>莫问高手：多宏触发键位标记青碧（占衍天多宏标记色的槽位；与开关模式青绿互为互换后的取值）。</summary>
     public const string MoWenAccentDualHex = "#2BE9F6";
 }

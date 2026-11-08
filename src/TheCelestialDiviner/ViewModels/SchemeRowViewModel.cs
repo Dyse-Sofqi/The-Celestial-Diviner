@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using System.ComponentModel;
+using System.Linq;
 using System.Windows.Input;
 using TheCelestialDiviner.Helpers;
 using TheCelestialDiviner.Models;
@@ -7,34 +9,27 @@ namespace TheCelestialDiviner.ViewModels;
 
 /// <summary>
 /// 方案面板中的单行视图模型：一个目标键自身的连发方案
-/// （目标键 = 触发键，按所选模式连发自身）；双宏开关为两行一体，
-/// 第二行（辅键）独立拥有按压时长 / 连发间隔编辑框与可视化开关。
+/// （目标键 = 触发键，按所选模式连发自身）；多宏开关为 2~6 行一体——
+/// 开关键位（首行）拥有启用勾选 / 首键参与连发勾选 / 时序编辑框 / 可视化开关，
+/// 每个触发键位（附属键）一行（<see cref="SchemeKeyRowViewModel"/>），独立时序与可视化开关。
 /// 启用勾选与删除通过回调回写主视图模型（配置 → 调度器 → 落盘）。
 /// </summary>
 public sealed class SchemeRowViewModel : INotifyPropertyChanged
 {
     private bool _enabled;
     private bool _visualEnabled = true;   // 键位可视化显示开关（默认开启）
-    private bool _firstKeyFiring = true;  // 双宏首键位是否参与连发（仅 IsDual 有效）
+    private bool _firstKeyFiring = true;  // 多宏开关键位是否参与连发（仅 IsMulti 有效）
     private string _intervalEdit;         // 连发间隔编辑文本（含清空态 / 非法中间态）
     private string _holdEdit;             // 按压时长编辑文本（含清空态 / 非法中间态）
     private int _intervalMs;
     private int _holdMs;
-    private string _secondIntervalEdit;
-    private string _secondHoldEdit;
-    private int _secondIntervalMs;
-    private int _secondHoldMs;
-    private bool _secondVisualEnabled = true;
 
     public SchemeRowViewModel(InputSource source, string keyName, string modeName,
         int intervalMs, int holdMs, bool enabled, Action<bool> onEnabledChanged, Action onDelete,
         Action<int>? onIntervalChanged = null, Action<int>? onHoldChanged = null,
-        bool isDual = false, string? secondKeyName = null,
+        bool isMulti = false, IEnumerable<SchemeKeyRowViewModel>? attachedKeys = null,
         bool visualEnabled = true, Action<bool>? onVisualChanged = null,
         bool firstKeyFiring = true, Action<bool>? onFirstKeyFiringChanged = null,
-        int secondIntervalMs = 0, int secondHoldMs = 0,
-        Action<int>? onSecondIntervalChanged = null, Action<int>? onSecondHoldChanged = null,
-        bool secondVisualEnabled = true, Action<bool>? onSecondVisualChanged = null,
         TriggerMode rowMode = TriggerMode.Toggle, ToggleSection rowSection = ToggleSection.Normal)
     {
         Source = source;
@@ -55,29 +50,12 @@ public sealed class SchemeRowViewModel : INotifyPropertyChanged
         {
             VisualEnabled = !VisualEnabled;   // 属性 setter 负责回调 OnVisualChanged → VM 落盘
         });
-        IsDual = isDual;
-        SecondKeyName = secondKeyName ?? "";
+        IsMulti = isMulti;
+        AttachedKeys = attachedKeys?.ToList() ?? [];
         _visualEnabled = visualEnabled;
         OnVisualChanged = onVisualChanged ?? (_ => { });
         _firstKeyFiring = firstKeyFiring;
         OnFirstKeyFiringChanged = onFirstKeyFiringChanged ?? (_ => { });
-        // 双宏辅键时序 / 可视化（未提供时沿用常规档默认值，IsDual=false 时无 UI 入口）。
-        _secondIntervalMs = Compat.Clamp(
-            secondIntervalMs > 0 ? secondIntervalMs : Constants.DefaultIntervalMs,
-            Constants.MinIntervalMs, Constants.MaxIntervalMs);
-        _secondIntervalEdit = _secondIntervalMs.ToString();
-        _secondHoldMs = Compat.Clamp(
-            secondHoldMs > 0 ? secondHoldMs : Constants.DefaultHoldMs,
-            Constants.MinHoldMs, Constants.MaxHoldMs);
-        _secondHoldEdit = _secondHoldMs.ToString();
-        _secondVisualEnabled = secondVisualEnabled;
-        OnSecondIntervalChanged = onSecondIntervalChanged ?? (_ => { });
-        OnSecondHoldChanged = onSecondHoldChanged ?? (_ => { });
-        OnSecondVisualChanged = onSecondVisualChanged ?? (_ => { });
-        ToggleSecondVisualCommand = RelayCommand.Create(() =>
-        {
-            SecondVisualEnabled = !SecondVisualEnabled;   // 属性 setter 负责回调 → VM 落盘
-        });
     }
 
     /// <summary>目标输入源（与触发键相同）。</summary>
@@ -173,94 +151,17 @@ public sealed class SchemeRowViewModel : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HoldEdit)));
     }
 
-    // ---------- 双宏辅键（第二行）：按压时长 / 连发间隔 / 可视化，语义与首键完全一致 ----------
-
-    /// <summary>辅键已提交的连发间隔（毫秒；仅 IsDual 有效）。</summary>
-    public int SecondIntervalMs => _secondIntervalMs;
-
-    /// <summary>辅键连发间隔编辑文本（交互语义与 <see cref="IntervalEdit"/> 完全一致）。</summary>
-    public string SecondIntervalEdit
-    {
-        get => _secondIntervalEdit;
-        set
-        {
-            var text = value?.Trim() ?? "";
-            if (_secondIntervalEdit == text) return;
-            _secondIntervalEdit = text;
-            if (int.TryParse(text, out var ms) && ms >= Constants.MinIntervalMs && ms <= Constants.MaxIntervalMs)
-            {
-                if (ms != _secondIntervalMs)
-                {
-                    _secondIntervalMs = ms;
-                    OnSecondIntervalChanged(ms);
-                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SecondIntervalMs)));
-                }
-            }
-        }
-    }
-
-    /// <summary>提交辅键间隔编辑（回车 / 失焦调用）：无效或空 → 回退上次有效值（虚影值）。</summary>
-    public void CommitSecondIntervalEdit()
-    {
-        if (!(int.TryParse(_secondIntervalEdit, out var ms) && ms >= Constants.MinIntervalMs && ms <= Constants.MaxIntervalMs))
-            ms = _secondIntervalMs;
-        _secondIntervalEdit = ms.ToString();
-        if (ms != _secondIntervalMs)
-        {
-            _secondIntervalMs = ms;
-            OnSecondIntervalChanged(ms);
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SecondIntervalMs)));
-        }
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SecondIntervalEdit)));
-    }
-
-    /// <summary>辅键已提交的按压时长（毫秒；仅 IsDual 有效）。</summary>
-    public int SecondHoldMs => _secondHoldMs;
-
-    /// <summary>辅键按压时长编辑文本（交互语义与 <see cref="HoldEdit"/> 完全一致，范围 5~100）。</summary>
-    public string SecondHoldEdit
-    {
-        get => _secondHoldEdit;
-        set
-        {
-            var text = value?.Trim() ?? "";
-            if (_secondHoldEdit == text) return;
-            _secondHoldEdit = text;
-            if (int.TryParse(text, out var ms) && ms >= Constants.MinHoldMs && ms <= Constants.MaxHoldMs)
-            {
-                if (ms != _secondHoldMs)
-                {
-                    _secondHoldMs = ms;
-                    OnSecondHoldChanged(ms);
-                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SecondHoldMs)));
-                }
-            }
-        }
-    }
-
-    /// <summary>提交辅键按压时长编辑（回车 / 失焦调用）：无效或空 → 回退上次有效值（虚影值）。</summary>
-    public void CommitSecondHoldEdit()
-    {
-        if (!(int.TryParse(_secondHoldEdit, out var ms) && ms >= Constants.MinHoldMs && ms <= Constants.MaxHoldMs))
-            ms = _secondHoldMs;
-        _secondHoldEdit = ms.ToString();
-        if (ms != _secondHoldMs)
-        {
-            _secondHoldMs = ms;
-            OnSecondHoldChanged(ms);
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SecondHoldMs)));
-        }
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SecondHoldEdit)));
-    }
-
-    /// <summary>是否双宏开关（两行一体：第二行为辅键的时序 / 可视化控件）。</summary>
-    public bool IsDual { get; }
+    /// <summary>是否多宏开关（多行一体：附属行为各触发键位的时序 / 可视化控件）。</summary>
+    public bool IsMulti { get; }
 
     /// <summary>该行所属的触发模式（开关 / 按压）：可见性过滤用。</summary>
     public TriggerMode RowMode { get; }
 
-    /// <summary>该行所属的开关分区（常规 / 轮转 / 双宏）。</summary>
+    /// <summary>该行所属的开关分区（常规 / 轮转 / 多宏）。</summary>
     public ToggleSection RowSection { get; }
+
+    /// <summary>多宏触发键位行集合（Targets[1..]，每键一行；非多宏方案为空）。</summary>
+    public IReadOnlyList<SchemeKeyRowViewModel> AttachedKeys { get; }
 
     private bool _isVisible = true;
 
@@ -279,9 +180,6 @@ public sealed class SchemeRowViewModel : INotifyPropertyChanged
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsVisible)));
         }
     }
-
-    /// <summary>双宏辅键显示名（仅 IsDual 为 true 时有效）。</summary>
-    public string SecondKeyName { get; }
 
     /// <summary>方案是否启用（勾选框双向）。</summary>
     public bool Enabled
@@ -309,23 +207,10 @@ public sealed class SchemeRowViewModel : INotifyPropertyChanged
         }
     }
 
-    /// <summary>辅键可视化显示开关（双宏第二行 eye；仅控制次键键帽显示，不影响连发）。</summary>
-    public bool SecondVisualEnabled
-    {
-        get => _secondVisualEnabled;
-        set
-        {
-            if (_secondVisualEnabled == value) return;
-            _secondVisualEnabled = value;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SecondVisualEnabled)));
-            OnSecondVisualChanged(value);
-        }
-    }
-
     /// <summary>
-    /// 双宏首键位是否参与连发（第二勾选框，仅 IsDual 有效）：
-    /// 勾选 = 首键与次键 1-2-1-2 交替（默认）；取消 = 首键仅作启停触发键，
-    /// 按下首键启动 / 停止次键单独连发，等效于用首键位启停次键位的连发方案。
+    /// 多宏开关键位是否参与连发（第二勾选框，仅 IsMulti 有效）：
+    /// 勾选 = 开关键位与全部触发键位 1-2-…-n-1 交替（默认）；取消 = 开关键位仅作启停触发键，
+    /// 按下开关键位启动 / 停止触发键位序列的连发。
     /// </summary>
     public bool FirstKeyFiring
     {
@@ -349,20 +234,11 @@ public sealed class SchemeRowViewModel : INotifyPropertyChanged
 
     private Action<bool> OnFirstKeyFiringChanged { get; }
 
-    private Action<int> OnSecondIntervalChanged { get; }
-
-    private Action<int> OnSecondHoldChanged { get; }
-
-    private Action<bool> OnSecondVisualChanged { get; }
-
     /// <summary>删除该方案。</summary>
     public ICommand DeleteCommand { get; }
 
     /// <summary>切换键位可视化显示（eye / eye-off）。</summary>
     public ICommand ToggleVisualCommand { get; }
-
-    /// <summary>切换辅键可视化显示（双宏第二行 eye / eye-off）。</summary>
-    public ICommand ToggleSecondVisualCommand { get; }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 }

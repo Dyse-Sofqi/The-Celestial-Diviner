@@ -1,4 +1,5 @@
-﻿using System.Text.Json.Serialization;
+﻿using System.Text.Json;
+using System.Text.Json.Serialization;
 using TheCelestialDiviner.Helpers;
 using TheCelestialDiviner.Services;
 
@@ -66,8 +67,13 @@ public enum TriggerMode
     Hold
 }
 
-/// <summary>开关模式分区：决定开关方案的连发行为（仅 Mode = Toggle 的方案有效）。</summary>
-[JsonConverter(typeof(JsonStringEnumConverter))]
+/// <summary>
+/// 开关模式分区：决定开关方案的连发行为（仅 Mode = Toggle 的方案有效）。
+/// 序列化走 <see cref="ToggleSectionJsonConverter"/>：**对外名固定沿用历史值 "Dual"**（多宏开关的旧名），
+/// 保证 ≤v1.9.5 的旧版程序读取新版配置不因未知枚举名整份判损
+///（2026-11-08 事故：开发版把枚举名改写为 "Multi" 后，旧版程序读新配置 → 解析失败 → 备份 + 空配置）。
+/// </summary>
+[JsonConverter(typeof(ToggleSectionJsonConverter))]
 public enum ToggleSection
 {
     /// <summary>常规开关：正常的开关模式，单独启停互不影响。</summary>
@@ -76,8 +82,52 @@ public enum ToggleSection
     /// <summary>轮转开关：同分区互斥——开启其他轮转键时自动停止正在运行的轮转键。</summary>
     Rotate,
 
-    /// <summary>双宏开关：一个开关键位控制两个键轮流触发（1-2-1-2…），再按一次一起停止。</summary>
-    Dual
+    /// <summary>多宏开关（历史名「双宏开关」）：一个开关键位控制 2~6 个键轮流触发（1-2-…-n-1…），
+    /// 再按一次一起停止。配置序列化名沿用历史值 "Dual"。</summary>
+    Multi
+}
+
+/// <summary>
+/// <see cref="ToggleSection"/> 的配置序列化转换器（取代 JsonStringEnumConverter）：
+/// **写入恒用历史名 "Dual"**（多宏开关的旧名，≤v1.9.5 与 1.9.6+ 均可读）；
+/// 读取同时接受 "Dual"（历史名）与 "Multi"（1.9.6 开发期短暂写出的内部名，自动收敛），
+/// 以及历史整数槽位（0/1 = 常规/轮转，其余一律多宏——2/3 均为历史 Dual 槽位）。
+/// **不得改回 JsonStringEnumConverter 直接写 "Multi"**：旧版程序遇到未知枚举名会整份判损重建（丢全部方案）。
+/// </summary>
+public sealed class ToggleSectionJsonConverter : JsonConverter<ToggleSection>
+{
+    public override ToggleSection Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String)
+        {
+            return reader.GetString() switch
+            {
+                "Normal" => ToggleSection.Normal,
+                "Rotate" => ToggleSection.Rotate,
+                "Dual" => ToggleSection.Multi,    // 历史名（≤v1.9.5 与 1.9.6+ 均写出）
+                "Multi" => ToggleSection.Multi,   // 1.9.6 开发期写出的内部名，读取兼容
+                var name => throw new JsonException($"未知开关分区值：{name}")
+            };
+        }
+        if (reader.TokenType == JsonTokenType.Number)
+        {
+            return reader.GetInt32() switch
+            {
+                0 => ToggleSection.Normal,
+                1 => ToggleSection.Rotate,
+                _ => ToggleSection.Multi
+            };
+        }
+        throw new JsonException($"开关分区的配置值必须是字符串（读到 {reader.TokenType}）。");
+    }
+
+    public override void Write(Utf8JsonWriter writer, ToggleSection value, JsonSerializerOptions options)
+        => writer.WriteStringValue(value switch
+        {
+            ToggleSection.Normal => "Normal",
+            ToggleSection.Rotate => "Rotate",
+            _ => "Dual"   // 多宏恒写历史名：对外格式不变，旧版程序可读
+        });
 }
 
 /// <summary>
@@ -159,8 +209,8 @@ public sealed class TargetKeyConfig
     public bool Enabled { get; set; } = true;
 
     /// <summary>键位可视化显示开关（该目标键的键帽是否显示，默认开启）。
-    /// 双宏方案两键各有一个 eye 开关：首键沿用方案级 VisualKeys，
-    /// 次键用此字段（方案行第二行的 eye 切换；连发脉冲按此过滤）。</summary>
+    /// 多宏方案各键位独立 eye 开关：开关键位（Targets[0]）沿用方案级 VisualKeys，
+    /// 触发键位用此字段（方案行各键位行的 eye 切换；连发脉冲按此过滤）。</summary>
     public bool VisualEnabled { get; set; } = true;
 
     /// <summary>创建当前实例的副本。</summary>
@@ -186,10 +236,14 @@ public sealed class TargetKeyConfig
 /// <summary>一个输入源的连发方案：源 + 若干目标键（一套方案，编辑即覆盖）。</summary>
 public sealed class KeyScheme
 {
-    /// <summary>绑定的目标键列表（按添加顺序；首个目标键的模式决定该源的显示模式）。</summary>
+    /// <summary>
+    /// 绑定的目标键列表（按添加顺序；首个目标键的模式决定该源的显示模式）。
+    /// 多宏开关 = 2~6 项：Targets[0] = 开关键位（= 触发键自身，方案唯一挂靠点），
+    /// Targets[1..] = 触发键位（只标记不占用键位资源，允许重复，每项消耗一个额度）。
+    /// </summary>
     public List<TargetKeyConfig> Targets { get; set; } = new();
 
-    /// <summary>开关模式分区（常规 / 轮转 / 双宏；仅 Mode = Toggle 的方案有意义，默认常规）。</summary>
+    /// <summary>开关模式分区（常规 / 轮转 / 多宏；仅 Mode = Toggle 的方案有意义，默认常规）。</summary>
     public ToggleSection Section { get; set; } = ToggleSection.Normal;
 
     /// <summary>方案是否启用（停用后该源不响应）。</summary>
@@ -326,7 +380,8 @@ public sealed class AppConfig
     /// v18：键帽 Web 叠加源（OBS 浏览器源透明键帽）；
     /// v19：桌面悬浮层静音开关强制回默认关闭（历史值只由开发构建自动写入）；
     /// v20：独立关闭热键（默认未设置）；
-    /// v21：Interception 驱动安装记账（是否本程序装的 / 版本 / 时间）。</summary>
+    /// v21：Interception 驱动安装记账（是否本程序装的 / 版本 / 时间）。
+    /// （多宏开关 v1.9.6 未推进版本号：格式对外不变，序列化名兼容由 ToggleSectionJsonConverter 处理。）</summary>
     public const int CurrentVersion = 21;
 
     /// <summary>配置文件版本号（预留迁移能力）。</summary>

@@ -5,7 +5,7 @@ using TheCelestialDiviner.Models;
 namespace TheCelestialDiviner.Services;
 
 /// <summary>单个运行中的连发任务（一个任务对应一个逻辑触发单元 + 一条线程；
-/// 双宏开关的两个目标键共用一个任务，线程内轮流触发）。</summary>
+/// 多宏开关的全部目标键共用一个任务，线程内轮流触发）。</summary>
 public sealed class RunningTask
 {
     /// <summary>目标键配置快照（方案编辑时整体重建；按索引轮流触发）。</summary>
@@ -57,7 +57,7 @@ public sealed class RunningTask
 }
 
 /// <summary>
-/// 连发任务调度器：每个启用的目标键一条独立后台线程（双宏开关的两个键共一条），
+/// 连发任务调度器：每个启用的目标键一条独立后台线程（多宏开关的全部键位共一条），
 /// Stopwatch 控制间隔。
 /// 模式逻辑：
 /// - Toggle：注册源按一次启动连发，再按一次停止；
@@ -115,9 +115,11 @@ public sealed class TaskSchedulerService
                 var enabledTargets = scheme.Targets.Where(t => t.Enabled).ToList();
                 if (enabledTargets.Count == 0) continue;
 
-                if (scheme.Section == ToggleSection.Dual)
+                if (scheme.Section == ToggleSection.Multi)
                 {
-                    // 双宏开关：两个目标键共用一个任务，由 TaskLoop 按索引轮流触发（1-2-1-2…）。
+                    // 多宏开关：全部目标键（开关键位 + 触发键位）共用一个任务，
+                    // 由 TaskLoop 按索引轮流触发（1-2-…-n-1…）；首键未勾选参与连发时
+                    // enabledTargets 只剩触发键位 → 按开关键位启停其单独连发。
                     AddTask(new RunningTask
                     {
                         Configs = enabledTargets.Select(t => t.Clone()).ToList(),
@@ -437,7 +439,7 @@ public sealed class TaskSchedulerService
     /// <summary>任务主循环：Stopwatch 控制间隔，状态等待全部事件化（Wake 信号）。
     /// 待机不再轮询（旧版每任务 2ms 空转，十几个任务待机即每秒数千次唤醒）；
     /// 间隔等待同样由信号打断（停止 / 停发 / Hold 暂停广播），超时兜底防信号丢失。
-    /// 多目标任务（双宏开关）按索引轮流触发，未触发时相位归零（重新激活从第 1 键开始）。</summary>
+    /// 多目标任务（多宏开关）按索引轮流触发，未触发时相位归零（重新激活从第 1 键开始）。</summary>
     private void TaskLoop(RunningTask task)
     {
         var sw = new Stopwatch();
@@ -526,6 +528,9 @@ public sealed class TaskSchedulerService
     /// </summary>
     private bool IsReleaseProbeEligible(RunningTask task)
     {
+        // 多宏开关任务（Toggle 激活、无"按住中松键丢失"问题）显式排除：
+        // 兜住 [Q,Q]+首键不参与连发等"启用目标恰为 1 个且 == 源键"的形态，防误入探测。
+        if (task.Section == ToggleSection.Multi) return false;
         if (task.Configs.Count != 1) return false;
         var cfg = task.Configs[0];
         if (cfg.Kind != TargetKind.Keyboard) return false;

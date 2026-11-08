@@ -38,19 +38,30 @@ public partial class MainWindow : Window
         // 不做全局焦点转移 —— 避免打断 ComboBox 下拉 / 列表 / 按钮自身的焦点行为。
         PreviewMouseDown += (_, _) =>
         {
-            if (Keyboard.FocusedElement is not TextBox tb ||
-                tb.DataContext is not SchemeRowViewModel row)
-                return;
+            if (Keyboard.FocusedElement is not TextBox tb) return;
             if (tb.IsMouseOver) return; // 点击编辑框自身：正常编辑，不触发提交
-            row.CommitHoldEdit();
-            row.CommitIntervalEdit();
-            row.CommitSecondHoldEdit();   // 双宏辅键的时序编辑框同样随外部点击提交
-            row.CommitSecondIntervalEdit();
+            switch (tb.DataContext)
+            {
+                case SchemeKeyRowViewModel keyRow:
+                    // 多宏触发键位行的时序编辑框同样随外部点击提交
+                    keyRow.CommitHoldEdit();
+                    keyRow.CommitIntervalEdit();
+                    break;
+                case SchemeRowViewModel row:
+                    row.CommitHoldEdit();
+                    row.CommitIntervalEdit();
+                    foreach (var attached in row.AttachedKeys)
+                    {
+                        attached.CommitHoldEdit();    // 多宏触发键位的时序编辑框同样随外部点击提交
+                        attached.CommitIntervalEdit();
+                    }
+                    break;
+            }
             Keyboard.ClearFocus();      // 非可聚焦目标也能退出编辑态；可聚焦目标随后自行接管焦点
         };
 
         // 钩子未安装时的兜底退出：Esc 退出键位选择态。钩子正常时由钩子路径处理，
-        // 此处不触发，避免同一次按键双重执行（双宏成对录入中会“先放弃第 1 键又立即退出”）。
+        // 此处不触发，避免同一次按键双重执行（多宏录入中会“先放弃开关键位又立即退出”）。
         PreviewKeyDown += (_, e) =>
         {
             if (e.Key != Key.Escape || !_vm.PickingActive || _vm.HookInstalled) return;
@@ -115,92 +126,45 @@ public partial class MainWindow : Window
             CommitIntervalBox(tb);
     }
 
-    /// <summary>把按压时长框的编辑文本提交给行 VM（VM 负责回退逻辑并刷新虚影）。</summary>
+    /// <summary>把按压时长框的编辑文本提交给行 VM（首行与多宏触发键位行共用；VM 负责回退逻辑并刷新虚影）。</summary>
     private static void CommitHoldBox(TextBox tb)
     {
-        if (tb.DataContext is SchemeRowViewModel row)
-            row.CommitHoldEdit();
+        switch (tb.DataContext)
+        {
+            case SchemeRowViewModel row: row.CommitHoldEdit(); break;
+            case SchemeKeyRowViewModel keyRow: keyRow.CommitHoldEdit(); break;
+        }
     }
 
-    /// <summary>把间隔框的编辑文本提交给行 VM（VM 负责回退逻辑并刷新虚影）。</summary>
+    /// <summary>把间隔框的编辑文本提交给行 VM（首行与多宏触发键位行共用；VM 负责回退逻辑并刷新虚影）。</summary>
     private static void CommitIntervalBox(TextBox tb)
     {
-        if (tb.DataContext is SchemeRowViewModel row)
-            row.CommitIntervalEdit();
-    }
-
-    // ---------- 双宏辅键（第二行）时序编辑框：提交逻辑与首行完全对称 ----------
-
-    /// <summary>辅键按压时长框：回车提交（提交绑定并清除焦点）。</summary>
-    private void OnSecondHoldBoxKeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key != Key.Enter) return;
-        if (sender is TextBox tb)
+        switch (tb.DataContext)
         {
-            CommitSecondHoldBox(tb);
-            Keyboard.ClearFocus();
+            case SchemeRowViewModel row: row.CommitIntervalEdit(); break;
+            case SchemeKeyRowViewModel keyRow: keyRow.CommitIntervalEdit(); break;
         }
-        e.Handled = true;
-    }
-
-    /// <summary>辅键间隔框：回车提交（提交绑定并清除焦点）。</summary>
-    private void OnSecondIntervalBoxKeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key != Key.Enter) return;
-        if (sender is TextBox tb)
-        {
-            CommitSecondIntervalBox(tb);
-            Keyboard.ClearFocus();
-        }
-        e.Handled = true;
-    }
-
-    /// <summary>辅键按压时长框失焦：提交编辑（非法 / 空值回退上次有效值 = 虚影值）。</summary>
-    private void OnSecondHoldBoxLostFocus(object sender, RoutedEventArgs e)
-    {
-        if (sender is TextBox tb)
-            CommitSecondHoldBox(tb);
-    }
-
-    /// <summary>辅键间隔框失焦：提交编辑（非法 / 空值回退上次有效值 = 虚影值）。</summary>
-    private void OnSecondIntervalBoxLostFocus(object sender, RoutedEventArgs e)
-    {
-        if (sender is TextBox tb)
-            CommitSecondIntervalBox(tb);
-    }
-
-    /// <summary>把辅键按压时长框的编辑文本提交给行 VM（VM 负责回退逻辑并刷新虚影）。</summary>
-    private static void CommitSecondHoldBox(TextBox tb)
-    {
-        if (tb.DataContext is SchemeRowViewModel row)
-            row.CommitSecondHoldEdit();
-    }
-
-    /// <summary>把辅键间隔框的编辑文本提交给行 VM（VM 负责回退逻辑并刷新虚影）。</summary>
-    private static void CommitSecondIntervalBox(TextBox tb)
-    {
-        if (tb.DataContext is SchemeRowViewModel row)
-            row.CommitSecondIntervalEdit();
     }
 
     // ---------- 方案行勾选框 → 注释区联动（悬停说明替代 Tooltip） ----------
 
     /// <summary>方案行首勾选框说明（启用 / 停用该连发键）。</summary>
     private const string SchemeEnabledComment =
-        "启用 / 停用该连发键（双宏为整体启停：首键与辅键一起生效）。停用后该键位不再响应连发触发。";
+        "启用 / 停用该连发键（多宏为整体启停：开关键位与触发键位一起生效）。停用后该键位不再响应连发触发。";
 
-    /// <summary>双宏第二勾选框说明（首键位是否参与连发）。</summary>
-    private const string DualFirstKeyComment =
-        "首键位是否参与连发：勾选 = 首键与辅键交替连发（1-2-1-2）；取消 = 首键仅作启停开关，"
-        + "按一次启动 / 再按一次停止辅键单独连发（等效于用首键位启停辅键位的连发方案）。";
+    /// <summary>多宏第二勾选框说明（开关键位是否参与连发）。</summary>
+    private const string MultiFirstKeyComment =
+        "开关键位是否参与连发：勾选 = 开关键位与全部触发键位按录入顺序交替连发（1-2-…-n-1）；"
+        + "取消 = 开关键位仅作启停开关，按一次启动 / 再按一次停止触发键位序列连发"
+        + "（等效于用开关键位启停触发键位的连发方案）。";
 
     /// <summary>悬停方案行首勾选框：注释区显示启用 / 停用说明。</summary>
     private void OnSchemeCheckCommentEnter(object sender, System.Windows.Input.MouseEventArgs e)
         => ShowComment(SchemeEnabledComment);
 
-    /// <summary>悬停双宏第二勾选框：注释区显示首键参与连发说明。</summary>
-    private void OnDualFirstKeyCommentEnter(object sender, System.Windows.Input.MouseEventArgs e)
-        => ShowComment(DualFirstKeyComment);
+    /// <summary>悬停多宏第二勾选框：注释区显示开关键位参与连发说明。</summary>
+    private void OnMultiFirstKeyCommentEnter(object sender, System.Windows.Input.MouseEventArgs e)
+        => ShowComment(MultiFirstKeyComment);
 
     // ---------- 方案行时序编辑框 → 注释区联动（悬停说明替代 Tooltip，在左下注释区展示） ----------
     /// <summary>按压时长框悬停说明（范围 5~100）。</summary>
@@ -417,12 +381,12 @@ public partial class MainWindow : Window
 
     // ---------- 注释区域（原日志区）：悬停标签显示说明，默认显示链接 ----------
 
-    /// <summary>标签悬停 → 注释文本映射（常规 / 轮转 / 双宏 / 开关模式 / 按压模式）。</summary>
+    /// <summary>标签悬停 → 注释文本映射（常规 / 轮转 / 多宏 / 开关模式 / 按压模式）。</summary>
     private static readonly Dictionary<string, string> SectionComments = new()
     {
         ["常规开关"] = "按一下开启该键位的自动连发，再按一下则停止。",
         ["轮转开关"] = "支持两个或多个轮转开关模式键位之间一键切换。",
-        ["双宏开关"] = "首键位①一键启停两个开关模式键位的轮流连发。\n取消勾选第二个勾选框，则首键位①一键启停第二个开关模式键位②的连发，不再轮转。\n注意：第一行连发间隔是①-②的间隔，第二行连发间隔是①②-①②的间隔",
+        ["多宏开关"] = "开关键位①一键启停 2~6 个开关模式键位的轮流连发（按录入顺序 1-2-…-n-1 循环）。\n取消勾选第二个勾选框，则开关键位①一键启停触发键位序列的连发，不再轮转。\n注意：每个键位行的连发间隔是「该键位按下 → 下一键位按下」的间隔。\n触发键位只作标记、不占用键位资源：同一键位可再注册自己的方案，也可重复录入（消耗额度）。",
         ["开关模式"] = "按一下开启该键位的自动连发，再按一下则停止。",
         ["按压模式"] = "按住该键位则自动连发，松开自动停止。",
         ["常规档 26ms"] = "40~100 帧全区间零丢失，约 19 发/秒（推荐默认）。",
@@ -548,7 +512,7 @@ public partial class MainWindow : Window
     /// <summary>菜单分组悬停说明（键 = 分组标题；替代悬浮 Tooltip，与分区标签注释共用展示位）。</summary>
     private static readonly Dictionary<string, string> MenuComments = new()
     {
-        ["方案定制"] = "方案定制：给四个方案档位命名，并为每个档位绑定主题（默认主题 / 衍天高手 / 莫问高手）；绑定「默认主题」时还可定制应用图标、应用名（窗口名，版本号不变）、键帽配色与开关 / 按压 / 双宏三种配色。切换档位即整套换肤。",
+        ["方案定制"] = "方案定制：给四个方案档位命名，并为每个档位绑定主题（默认主题 / 衍天高手 / 莫问高手）；绑定「默认主题」时还可定制应用图标、应用名（窗口名，版本号不变）、键帽配色与开关 / 按压 / 多宏三种配色。切换档位即整套换肤。",
         ["键盘注入"] = "剑网三只认物理级注入，普通 / 扫描码 / 消息模式在剑网三里不会出键 —— 所以这里实际只有两条路线可选：DD 驱动（闭源，需 dd63330.dll + 管理员权限，免重启）与 Interception（开源驱动，装完需重启）。两者在系统键盘栈上互斥，要换必须先卸载另一个并重启。对应驱动不可用时该项灰显，用下方安装 / 获取入口处理。",
         ["获取 DD 驱动…"] = "从 DD 官方发布渠道下载并安装 dd63330.dll（约 3.7MB，仅首次）：确认后全程自动（下载 → 解包 → 安装），官方渠道网络不稳定时会自动重试直至成功；装好后自动启用 DD 驱动模式。程序只做下载器，不二次分发闭源驱动。",
         ["Interception 驱动（物理级 / 开源）"] = "第二条物理级注入路线：Interception（oblitum/Interception，LGPL 3.0）。驱动为系统键盘类过滤驱动，注入事件无“模拟按键”标记；代价是安装后必须重启，且开启内存完整性（HVCI）时可能被拒绝加载。注意：它装上后会挡住 DD 的虚拟设备注入（实测 DD 按键进不了系统），因此要回 DD 必须先卸载它并重启——这不是“同时只用一条”的问题，而是两者在系统键盘栈上互斥。",
@@ -886,9 +850,10 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 管理模式中的鼠标按下（钩子路径）：光标落在键鼠图块上 → 右键取消该键方案（双宏整对取消）/
-    /// 其余鼠标键录入该键（双宏按成对录入处理）；落在键鼠区外（含本窗口其余区域与其他窗口）→
-    /// 请求退出（双宏成对录入中先放弃第 1 键，偶数态才真正退出）。
+    /// 管理模式中的鼠标按下（钩子路径）：光标落在键鼠图块上 → 右键取消该键方案
+    ///（多宏：右键触发键位仅移除该键 / 右键开关键位整案删除）/ 其余鼠标键录入该键
+    ///（多宏按暂存追加流程处理）；落在键鼠区外（含本窗口其余区域与其他窗口）→
+    /// 请求退出（多宏仅暂存开关键位、方案未成立时先放弃暂存，再次退出才生效）。
     /// </summary>
     private void OnPickingMouseReceived(InputSource pressed)
     {

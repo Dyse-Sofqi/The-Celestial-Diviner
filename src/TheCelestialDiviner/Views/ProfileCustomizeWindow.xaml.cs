@@ -52,7 +52,7 @@ public partial class ProfileCustomizeWindow : Window
         SchemeBox.ItemsSource = KeycapSchemes.Names;
         AddColorRow("开关模式配色", out _primaryField);
         AddColorRow("按压模式配色", out _goldField);
-        AddColorRow("双宏第二配色", out _dualField);
+        AddColorRow("多宏触发键位配色", out _dualField);
 
         PreviewKeyDown += (_, e) =>
         {

@@ -154,6 +154,8 @@ public sealed class ConfigService
         // 无需迁移动作；已设置过的值随 JSON 反序列化还原。
         // v21：Interception 驱动安装记账（是否本程序装的 / 版本 / 时间）——字段有默认值（未装过），
         // 无需迁移动作。老用户升级时 driver-state.json 也不存在，孤儿判定只提示不断言。
+        // （v1.9.6 多宏开关未推进版本号：对外格式不变，"Dual" 历史名的读写兼容由
+        // ToggleSectionJsonConverter 处理——旧版程序读新配置不再整份判损。）
 
         config.Version = AppConfig.CurrentVersion;
         Logger.Info($"配置 v{fromVersion} 已迁移到 v{AppConfig.CurrentVersion}（总开关默认关闭、默认键 F9、开关模式分区、方案四档位、键位可视化）。" );

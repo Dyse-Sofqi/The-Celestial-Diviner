@@ -293,7 +293,7 @@ public sealed class KeyVisualizerService
         lock (_gate)
         {
             if (!_globalEnabled) return;
-            // 双宏两键各有开关：首键 = 方案级注册项（VisualKeys），辅键 = 目标级注册项。
+            // 多宏各键位各有开关：开关键位 = 方案级注册项（VisualKeys），触发键位 = 目标级注册项。
             // 常规方案目标 = 触发键自身，其开关即该方案的 eye。
             if (TargetToSource(target) is { } source &&
                 _registry.TryGetValue(source, out var state) && !state.Visible) return;
