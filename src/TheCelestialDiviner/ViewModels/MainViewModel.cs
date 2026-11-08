@@ -264,14 +264,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         // 调度器字段默认为启用，须与配置中的总开关状态同步，
         // 否则冷启动时横幅显示"已关闭"而方案实际处于待触发状态。
         _scheduler.SetMasterEnabled(_globallyEnabled);
-        _masterKeyText = _config.GlobalSwitch.HasKey
-            ? InputNameMapper.GetKeyName(_config.GlobalSwitch.VirtualKey, _config.GlobalSwitch.Extended)
+        _masterKeyText = GlobalSwitchSource is { } masterSrc
+            ? InputNameMapper.GetSourceName(masterSrc)
             : "未设置";
-        _cycleKeyText = _config.ProfileCycle.HasKey
-            ? InputNameMapper.GetKeyName(_config.ProfileCycle.VirtualKey, _config.ProfileCycle.Extended)
+        _cycleKeyText = ProfileCycleSource is { } cycleSrc
+            ? InputNameMapper.GetSourceName(cycleSrc)
             : "未设置";
-        _closeKeyText = _config.IndependentClose.HasKey
-            ? InputNameMapper.GetKeyName(_config.IndependentClose.VirtualKey, _config.IndependentClose.Extended)
+        _closeKeyText = IndependentCloseSource is { } closeSrc
+            ? InputNameMapper.GetSourceName(closeSrc)
             : "未设置";
         _soundVolume = Compat.Clamp(_config.SoundVolume, 0, 100);
         _soundCue.Volume = _soundVolume / 100.0;
@@ -1160,33 +1160,36 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     /// <summary>当前模式 / 分区下是否有可见的连发键（控制空态提示显隐）。</summary>
     public bool HasSchemeRows => SchemeRows.Any(r => r.IsVisible);
 
-    /// <summary>当前全局开关键对应的输入源（未设置返回 null）。</summary>
+    /// <summary>当前全局开关键对应的输入源（未设置返回 null；键盘键或鼠标侧键）。</summary>
     public InputSource? GlobalSwitchSource => _config.GlobalSwitch.HasKey
         ? new InputSource
         {
-            Kind = InputKind.Keyboard,
+            Kind = _config.GlobalSwitch.Kind,
             VirtualKey = _config.GlobalSwitch.VirtualKey,
-            Extended = _config.GlobalSwitch.Extended
+            Extended = _config.GlobalSwitch.Extended,
+            Mouse = _config.GlobalSwitch.Mouse
         }
         : null;
 
-    /// <summary>当前切换方案热键对应的输入源（未设置返回 null）。</summary>
+    /// <summary>当前切换方案热键对应的输入源（未设置返回 null；键盘键或鼠标侧键）。</summary>
     public InputSource? ProfileCycleSource => _config.ProfileCycle.HasKey
         ? new InputSource
         {
-            Kind = InputKind.Keyboard,
+            Kind = _config.ProfileCycle.Kind,
             VirtualKey = _config.ProfileCycle.VirtualKey,
-            Extended = _config.ProfileCycle.Extended
+            Extended = _config.ProfileCycle.Extended,
+            Mouse = _config.ProfileCycle.Mouse
         }
         : null;
 
-    /// <summary>当前独立关闭热键对应的输入源（未设置返回 null）。</summary>
+    /// <summary>当前独立关闭热键对应的输入源（未设置返回 null；键盘键或鼠标侧键）。</summary>
     public InputSource? IndependentCloseSource => _config.IndependentClose.HasKey
         ? new InputSource
         {
-            Kind = InputKind.Keyboard,
+            Kind = _config.IndependentClose.Kind,
             VirtualKey = _config.IndependentClose.VirtualKey,
-            Extended = _config.IndependentClose.Extended
+            Extended = _config.IndependentClose.Extended,
+            Mouse = _config.IndependentClose.Mouse
         }
         : null;
 
@@ -1346,9 +1349,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
                 // 每次按下只出现一条（按下沿标记已过滤自动重复）。
                 if (_scheduler.MasterEnabled)
                 {
-                    var closeName = _config.IndependentClose.HasKey
-                        ? InputNameMapper.GetKeyName(_config.IndependentClose.VirtualKey,
-                            _config.IndependentClose.Extended)
+                    var closeName = IndependentCloseSource is { } closeSrc
+                        ? InputNameMapper.GetSourceName(closeSrc)
                         : "独立关闭热键";
                     RunOnUi(() => AddLog($"总开关已开启：全局开关热键只负责开启，关闭请按 [{closeName}]。"));
                     return;
@@ -1483,6 +1485,24 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         else dispatcher.BeginInvoke(ApplyUi);
     }
 
+    /// <summary>
+    /// 热键键类型校验（总开关 / 切换方案 / 独立关闭三个热键共用）：键盘键或鼠标**侧键 1 / 侧键 2** 可用。
+    /// 滚轮不收（无抬起事件，按下沿标记永不复位）；左 / 右 / 中键不收（每次点击都会触发开关，
+    /// 在游戏 / 桌面点任何东西都会启停）。通过返回 true；失败时记录可读日志。
+    /// </summary>
+    private bool ValidateHotkeySourceKind(InputSource key, string roleName)
+    {
+        if (key.Kind == InputKind.Keyboard) return true;
+        if (key.Mouse is MouseInput.WheelUp or MouseInput.WheelDown)
+        {
+            AddLog($"滚轮不能作为{roleName}（无抬起语义，按下沿标记永不复位），请重选。");
+            return false;
+        }
+        if (key.Mouse is MouseInput.XButton1 or MouseInput.XButton2) return true;
+        AddLog($"{roleName}仅支持键盘键或鼠标侧键 1 / 侧键 2（左 / 右 / 中键每次点击都会触发，不收），请重选。");
+        return false;
+    }
+
     /// <summary>设置全局开关键（null 表示清除）。冲突时返回 false 且不修改。</summary>
     public bool SetGlobalSwitchKey(InputSource? key)
     {
@@ -1496,6 +1516,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             AddLog("全局开关键已清除（总开关只能通过界面托盘菜单切换）。");
             return true;
         }
+
+        // 键类型校验：键盘键或鼠标侧键 1 / 侧键 2（滚轮 / 左右中键不收）。
+        if (!ValidateHotkeySourceKind(key, "总开关键")) return false;
 
         // 冲突验证：不能与任何已注册方案的注册源相同（复用调度器的键格式）。
         var candidateKey = TaskSchedulerService.BuildSourceKey(key);
@@ -1522,8 +1545,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             RelocateSchemeFromMasterKey(oldKey, key);
 
         _config.GlobalSwitch.HasKey = true;
+        _config.GlobalSwitch.Kind = key.Kind;
         _config.GlobalSwitch.VirtualKey = key.VirtualKey;
         _config.GlobalSwitch.Extended = key.Extended;
+        _config.GlobalSwitch.Mouse = key.Mouse;
         MasterKeyText = InputNameMapper.GetSourceName(key);
         OnPropertyChanged(nameof(GlobalSwitchSource));
         SaveConfig();
@@ -1549,12 +1574,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             return true;
         }
 
-        // 冲突验证：仅支持键盘键；不能与总开关键相同。
-        if (key.Kind != InputKind.Keyboard)
-        {
-            AddLog("切换方案热键仅支持键盘键（鼠标 / 滚轮不可用）。");
-            return false;
-        }
+        // 键类型校验：键盘键或鼠标侧键 1 / 侧键 2（滚轮 / 左右中键不收）。
+        if (!ValidateHotkeySourceKind(key, "切换方案热键")) return false;
         if (GlobalSwitchSource is { } gk && gk.Equals(key))
         {
             AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被总开关占用。");
@@ -1577,8 +1598,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         }
 
         _config.ProfileCycle.HasKey = true;
+        _config.ProfileCycle.Kind = key.Kind;
         _config.ProfileCycle.VirtualKey = key.VirtualKey;
         _config.ProfileCycle.Extended = key.Extended;
+        _config.ProfileCycle.Mouse = key.Mouse;
         CycleKeyText = InputNameMapper.GetSourceName(key);
         OnPropertyChanged(nameof(ProfileCycleSource));
         SaveConfig();
@@ -1605,11 +1628,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             return true;
         }
 
-        if (key.Kind != InputKind.Keyboard)
-        {
-            AddLog("独立关闭热键仅支持键盘键（鼠标 / 滚轮不可用）。");
-            return false;
-        }
+        // 键类型校验：键盘键或鼠标侧键 1 / 侧键 2（滚轮 / 左右中键不收）。
+        if (!ValidateHotkeySourceKind(key, "独立关闭热键")) return false;
         if (GlobalSwitchSource is { } gk && gk.Equals(key))
         {
             AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被全局开关热键占用。");
@@ -1632,15 +1652,17 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         }
 
         _config.IndependentClose.HasKey = true;
+        _config.IndependentClose.Kind = key.Kind;
         _config.IndependentClose.VirtualKey = key.VirtualKey;
         _config.IndependentClose.Extended = key.Extended;
+        _config.IndependentClose.Mouse = key.Mouse;
         CloseKeyText = InputNameMapper.GetSourceName(key);
         OnPropertyChanged(nameof(IndependentCloseSource));
         OnPropertyChanged(nameof(HasIndependentCloseKey));
         SaveConfig();
         UpdateHotkeyHighlight();
-        var masterName = _config.GlobalSwitch.HasKey
-            ? InputNameMapper.GetKeyName(_config.GlobalSwitch.VirtualKey, _config.GlobalSwitch.Extended)
+        var masterName = GlobalSwitchSource is { } mk
+            ? InputNameMapper.GetSourceName(mk)
             : "未设置";
         AddLog($"独立关闭热键已设置为 [{InputNameMapper.GetSourceName(key)}]："
                + $"全局开关热键 [{masterName}] 此后只负责开启，关闭统一由本键负责。");

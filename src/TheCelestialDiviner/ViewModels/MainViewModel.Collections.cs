@@ -479,7 +479,7 @@ public sealed partial class MainViewModel
                + "左键键位添加连发、再点一次取消（右键同样可取消），Esc 或点击空白处退出。");
     }
 
-    /// <summary>进入键位录入选择态（设置全局开关热键；单次录入即完成并退出）。</summary>
+    /// <summary>进入键位录入选择态（设置全局开关热键；单次录入即完成并退出，右键原键位取消）。</summary>
     public void StartMasterKeyPicking()
     {
         // 冷却判定见 InPickingExitCooldown；已在其它录入态则先退出再进入——原先这里
@@ -489,9 +489,12 @@ public sealed partial class MainViewModel
         PickingActive = true;
         PickingKind = PickKind.SetMasterKey;
         _multiPickKeys.Clear();
-        PickingPromptText = "请选择全局开关热键（Esc 取消）";
-        HintText = "正在录入总开关键：点击左侧键鼠视图，或直接按下键盘按键（Esc 取消）";
-        AddLog("开始设置全局开关热键：点击左侧键鼠或直接按键（Esc 取消）。");
+        PickingPromptText = GlobalSwitchSource is not null
+            ? "请选择全局开关热键（左键键位 / 直接按键设置 · 右键原键位取消 · Esc 取消）"
+            : "请选择全局开关热键（左键键位 / 直接按键设置 · Esc 取消）";
+        HintText = "正在录入总开关键：点击左侧键鼠（含鼠标侧键图块），或直接按下键盘按键（Esc 取消）";
+        AddLog("开始设置全局开关热键：左键点击左侧键鼠（含鼠标侧键 1 / 侧键 2）或直接按键完成设置，"
+               + "右键已设置的键位取消（Esc 取消）。");
     }
 
     /// <summary>
@@ -508,8 +511,9 @@ public sealed partial class MainViewModel
         PickingPromptText = _config.ProfileCycle.HasKey
             ? "请选择切换方案热键（左键键位 / 直接按键设置 · 右键原键位取消 · Esc 取消）"
             : "请选择切换方案热键（左键键位 / 直接按键设置 · Esc 取消）";
-        HintText = "正在录入切换方案热键：左键点击左侧键位，或直接按下键盘按键（Esc 取消）";
-        AddLog("开始设置切换方案热键：左键点击左侧键位或直接按键完成设置，右键已设置的键位取消（Esc 取消）。");
+        HintText = "正在录入切换方案热键：左键点击左侧键鼠（含鼠标侧键图块），或直接按下键盘按键（Esc 取消）";
+        AddLog("开始设置切换方案热键：左键点击左侧键鼠（含鼠标侧键 1 / 侧键 2）或直接按键完成设置，"
+               + "右键已设置的键位取消（Esc 取消）。");
     }
 
     /// <summary>
@@ -526,8 +530,9 @@ public sealed partial class MainViewModel
         PickingPromptText = _config.IndependentClose.HasKey
             ? "请选择独立关闭热键（左键键位 / 直接按键设置 · 右键原键位取消 · Esc 取消）"
             : "请选择独立关闭热键（左键键位 / 直接按键设置 · Esc 取消）";
-        HintText = "正在录入独立关闭热键：左键点击左侧键位，或直接按下键盘按键（Esc 取消）";
-        AddLog("开始设置独立关闭热键：左键点击左侧键位或直接按键完成设置，右键已设置的键位取消（Esc 取消）。");
+        HintText = "正在录入独立关闭热键：左键点击左侧键鼠（含鼠标侧键图块），或直接按下键盘按键（Esc 取消）";
+        AddLog("开始设置独立关闭热键：左键点击左侧键鼠（含鼠标侧键 1 / 侧键 2）或直接按键完成设置，"
+               + "右键已设置的键位取消（Esc 取消）。");
     }
 
     /// <summary>退出选择态（方案管理模式 / 总开关键录入：完成录入，或偶数态下 Esc / 空白处 / 退出按钮）。</summary>
@@ -755,30 +760,28 @@ public sealed partial class MainViewModel
         if (!PickingActive) return;
         var kind = PickingKind;
 
-        // 总开关键录入：仅支持键盘键；冲突检测与方案迁移由 SetGlobalSwitchKey 负责。
+        // 总开关键录入：键盘键或鼠标侧键 1 / 侧键 2；键类型 / 冲突检测与方案迁移由
+        // SetGlobalSwitchKey 负责（滚轮 / 左右中键在 Set 方法内拒绝并提示）。
         if (kind == PickKind.SetMasterKey)
         {
             CancelPicking();
-            if (source.Kind == InputKind.Keyboard) SetGlobalSwitchKey(source);
-            else AddLog("总开关键仅支持键盘键（鼠标 / 滚轮不可用）。");
+            SetGlobalSwitchKey(source);
             return;
         }
 
-        // 切换方案热键录入：仅支持键盘键；冲突检测与占用校验由 SetProfileCycleKey 负责。
+        // 切换方案热键录入：键盘键或鼠标侧键 1 / 侧键 2；校验由 SetProfileCycleKey 负责。
         if (kind == PickKind.SetCycleKey)
         {
             CancelPicking();
-            if (source.Kind == InputKind.Keyboard) SetProfileCycleKey(source);
-            else AddLog("切换方案热键仅支持键盘键（鼠标 / 滚轮不可用）。");
+            SetProfileCycleKey(source);
             return;
         }
 
-        // 独立关闭热键录入：仅支持键盘键；冲突检测与占用校验由 SetIndependentCloseKey 负责。
+        // 独立关闭热键录入：键盘键或鼠标侧键 1 / 侧键 2；校验由 SetIndependentCloseKey 负责。
         if (kind == PickKind.SetCloseKey)
         {
             CancelPicking();
-            if (source.Kind == InputKind.Keyboard) SetIndependentCloseKey(source);
-            else AddLog("独立关闭热键仅支持键盘键（鼠标 / 滚轮不可用）。");
+            SetIndependentCloseKey(source);
             return;
         }
 
@@ -869,10 +872,26 @@ public sealed partial class MainViewModel
     /// 右键已成立多宏方案的开关键位 = 整案删除；右键其触发键位 = 仅从序列移除首个该键
     ///（剩余不足 2 键整案自动删除——对旧 2 键多宏即整案消失）。录入态优先作用于当前录入方案；
     /// 其余键位按"自有方案删除 → 他案触发键位移除"。
-    /// 切换方案热键录入中右键已设置的键位 = 取消恢复缺省（右键其他键位仅提示）。
+    /// 总开关键 / 切换方案热键 / 独立关闭热键录入中右键已设置的键位 = 取消恢复（右键其他键位仅提示）。
     /// </summary>
     public void RemovePickAt(InputSource source)
     {
+        // 总开关键录入：右键原键位取消恢复空键位（与切换方案 / 独立关闭热键对等；
+        // 清除后总开关只能通过界面托盘菜单切换，由 SetGlobalSwitchKey(null) 记日志）。
+        if (PickingKind == PickKind.SetMasterKey)
+        {
+            if (GlobalSwitchSource is { } master && master.Equals(source))
+            {
+                CancelPicking();
+                SetGlobalSwitchKey(null);
+            }
+            else
+            {
+                AddLog($"[{InputNameMapper.GetSourceName(source)}] 不是当前设置的全局开关热键，右键原键位才可取消。");
+            }
+            return;
+        }
+
         // 独立关闭热键录入：右键原键位取消恢复空键位（单次操作完成即退出）。
         if (PickingKind == PickKind.SetCloseKey)
         {
@@ -1181,17 +1200,17 @@ public sealed partial class MainViewModel
             _config.NormalizeProfileAppearances();
             OnPropertyChanged(nameof(ProfileNames));
             ApplyAppearance();
-            MasterKeyText = imported.GlobalSwitch.HasKey
-                ? InputNameMapper.GetKeyName(imported.GlobalSwitch.VirtualKey, imported.GlobalSwitch.Extended)
+            MasterKeyText = GlobalSwitchSource is { } masterSrc
+                ? InputNameMapper.GetSourceName(masterSrc)
                 : "未设置";
             // 切换方案热键随导入配置还原（按钮显示名 + 运行期热键源同步）。
-            CycleKeyText = imported.ProfileCycle.HasKey
-                ? InputNameMapper.GetKeyName(imported.ProfileCycle.VirtualKey, imported.ProfileCycle.Extended)
+            CycleKeyText = ProfileCycleSource is { } cycleSrc
+                ? InputNameMapper.GetSourceName(cycleSrc)
                 : "未设置";
             OnPropertyChanged(nameof(ProfileCycleSource));
             // 独立关闭热键随导入配置还原（按钮显示名 + 运行期热键源同步）。
-            CloseKeyText = imported.IndependentClose.HasKey
-                ? InputNameMapper.GetKeyName(imported.IndependentClose.VirtualKey, imported.IndependentClose.Extended)
+            CloseKeyText = IndependentCloseSource is { } closeSrc
+                ? InputNameMapper.GetSourceName(closeSrc)
                 : "未设置";
             OnPropertyChanged(nameof(IndependentCloseSource));
             OnPropertyChanged(nameof(HasIndependentCloseKey));

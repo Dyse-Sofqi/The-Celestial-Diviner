@@ -264,11 +264,18 @@ public sealed class GlobalSwitchConfig
     /// <summary>是否已设置全局开关键（默认 F9，可在“设置全局开关”中自定义 / 清除）。</summary>
     public bool HasKey { get; set; } = true;
 
-    /// <summary>全局开关键虚拟键码（HasKey = true 时有效，默认 F9 = 0x78）。</summary>
+    /// <summary>热键类型（键盘 / 鼠标；默认键盘 = 历史语义，旧配置缺省自动补齐）。</summary>
+    public InputKind Kind { get; set; } = InputKind.Keyboard;
+
+    /// <summary>全局开关键虚拟键码（Kind = Keyboard 时有效，默认 F9 = 0x78）。</summary>
     public int VirtualKey { get; set; } = Constants.DefaultMasterKeyVk;
 
     /// <summary>全局开关键扩展键标志。</summary>
     public bool Extended { get; set; }
+
+    /// <summary>鼠标热键（Kind = Mouse 时有效：仅侧键 1 / 侧键 2；左 / 右 / 中键不收——
+    /// 每次点击都会触发开关，滚轮无抬起语义）。</summary>
+    public MouseInput Mouse { get; set; }
 
     /// <summary>总开关当前是否启用（默认关闭；开启后方案才响应输入，停用即停所有连发）。</summary>
     public bool Enabled { get; set; }
@@ -277,8 +284,10 @@ public sealed class GlobalSwitchConfig
     public GlobalSwitchConfig Clone() => new()
     {
         HasKey = HasKey,
+        Kind = Kind,
         VirtualKey = VirtualKey,
         Extended = Extended,
+        Mouse = Mouse,
         Enabled = Enabled
     };
 }
@@ -289,11 +298,17 @@ public sealed class ProfileCycleConfig
     /// <summary>是否已设置切换方案热键（默认 true = 已设 F10）。</summary>
     public bool HasKey { get; set; } = true;
 
-    /// <summary>切换方案热键虚拟键码（HasKey = true 时有效，默认 F10 = 0x79）。</summary>
+    /// <summary>热键类型（键盘 / 鼠标；默认键盘 = 历史语义，旧配置缺省自动补齐）。</summary>
+    public InputKind Kind { get; set; } = InputKind.Keyboard;
+
+    /// <summary>切换方案热键虚拟键码（Kind = Keyboard 时有效，默认 F10 = 0x79）。</summary>
     public int VirtualKey { get; set; } = Constants.DefaultCycleKeyVk;
 
     /// <summary>切换方案热键扩展键标志。</summary>
     public bool Extended { get; set; }
+
+    /// <summary>鼠标热键（Kind = Mouse 时有效：仅侧键 1 / 侧键 2）。</summary>
+    public MouseInput Mouse { get; set; }
 
     /// <summary>
     /// 默认值迁移标记（v1.8.2 起默认 F10）：首次载入旧配置时，若用户**从未设置**过
@@ -306,8 +321,10 @@ public sealed class ProfileCycleConfig
     public ProfileCycleConfig Clone() => new()
     {
         HasKey = HasKey,
+        Kind = Kind,
         VirtualKey = VirtualKey,
         Extended = Extended,
+        Mouse = Mouse,
         DefaultApplied = DefaultApplied
     };
 }
@@ -322,18 +339,26 @@ public sealed class IndependentCloseConfig
     /// <summary>是否已设置独立关闭热键（默认 false = 空键位，全局开关热键仍为统一启停）。</summary>
     public bool HasKey { get; set; }
 
-    /// <summary>独立关闭热键虚拟键码（HasKey = true 时有效）。</summary>
+    /// <summary>热键类型（键盘 / 鼠标；默认键盘 = 历史语义，旧配置缺省自动补齐）。</summary>
+    public InputKind Kind { get; set; } = InputKind.Keyboard;
+
+    /// <summary>独立关闭热键虚拟键码（Kind = Keyboard 时有效）。</summary>
     public int VirtualKey { get; set; }
 
     /// <summary>独立关闭热键扩展键标志。</summary>
     public bool Extended { get; set; }
 
+    /// <summary>鼠标热键（Kind = Mouse 时有效：仅侧键 1 / 侧键 2）。</summary>
+    public MouseInput Mouse { get; set; }
+
     /// <summary>创建当前实例的副本。</summary>
     public IndependentCloseConfig Clone() => new()
     {
         HasKey = HasKey,
+        Kind = Kind,
         VirtualKey = VirtualKey,
-        Extended = Extended
+        Extended = Extended,
+        Mouse = Mouse
     };
 }
 
@@ -380,9 +405,11 @@ public sealed class AppConfig
     /// v18：键帽 Web 叠加源（OBS 浏览器源透明键帽）；
     /// v19：桌面悬浮层静音开关强制回默认关闭（历史值只由开发构建自动写入）；
     /// v20：独立关闭热键（默认未设置）；
-    /// v21：Interception 驱动安装记账（是否本程序装的 / 版本 / 时间）。
+    /// v21：Interception 驱动安装记账（是否本程序装的 / 版本 / 时间）；
+    /// v22：热键配置支持鼠标侧键（总开关 / 切换方案 / 独立关闭热键可选侧键 1 / 侧键 2）——
+    /// 三个热键配置新增 Kind / Mouse 字段，默认键盘 = 历史语义，反序列化自动补齐，无需迁移动作。
     /// （多宏开关 v1.9.6 未推进版本号：格式对外不变，序列化名兼容由 ToggleSectionJsonConverter 处理。）</summary>
-    public const int CurrentVersion = 21;
+    public const int CurrentVersion = 22;
 
     /// <summary>配置文件版本号（预留迁移能力）。</summary>
     public int Version { get; set; } = CurrentVersion;
