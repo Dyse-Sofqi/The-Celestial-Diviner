@@ -1495,11 +1495,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         if (key.Kind == InputKind.Keyboard) return true;
         if (key.Mouse is MouseInput.WheelUp or MouseInput.WheelDown)
         {
-            AddLog($"滚轮不能作为{roleName}（无抬起语义，按下沿标记永不复位），请重选。");
+            RejectPick($"滚轮不能作为{roleName}（无抬起语义，按下沿标记永不复位），请重选。");
             return false;
         }
         if (key.Mouse is MouseInput.XButton1 or MouseInput.XButton2) return true;
-        AddLog($"{roleName}仅支持键盘键或鼠标侧键 1 / 侧键 2（左 / 右 / 中键每次点击都会触发，不收），请重选。");
+        RejectPick($"{roleName}仅支持键盘键或鼠标侧键 1 / 侧键 2（左 / 右 / 中键每次点击都会触发，不收），请重选。");
         return false;
     }
 
@@ -1527,7 +1527,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         for (var i = 0; i < ProfileCount; i++)
         {
             if (!_config.Profiles[i].ContainsKey(candidateKey)) continue;
-            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被方案{ProfileDisplayName(i)}的连发键占用"
+            RejectPick($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被方案{ProfileDisplayName(i)}的连发键占用"
                    + "——请切到该档位在方案列表删除该键的方案后重试，或换用其他键位。");
             return false;
         }
@@ -1535,12 +1535,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         // 冲突验证：不能与切换方案热键 / 独立关闭热键相同（同一键位两个语义会互相抢占）。
         if (ProfileCycleSource is { } ck && ck.Equals(key))
         {
-            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被切换方案热键占用。");
+            RejectPick($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被切换方案热键占用。");
             return false;
         }
         if (IndependentCloseSource is { } xk && xk.Equals(key))
         {
-            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被独立关闭热键占用。");
+            RejectPick($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被独立关闭热键占用。");
             return false;
         }
 
@@ -1582,12 +1582,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         if (!ValidateHotkeySourceKind(key, "切换方案热键")) return false;
         if (GlobalSwitchSource is { } gk && gk.Equals(key))
         {
-            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被总开关占用。");
+            RejectPick($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被总开关占用。");
             return false;
         }
         if (IndependentCloseSource is { } xk && xk.Equals(key))
         {
-            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被独立关闭热键占用。");
+            RejectPick($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被独立关闭热键占用。");
             return false;
         }
 
@@ -1597,7 +1597,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         for (var i = 0; i < ProfileCount; i++)
         {
             if (!_config.Profiles[i].ContainsKey(keyStr)) continue;
-            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被方案{ProfileDisplayName(i)}的连发键占用"
+            RejectPick($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被方案{ProfileDisplayName(i)}的连发键占用"
                    + "——请切到该档位在方案列表删除该键的方案后重试，或换用其他键位。");
             return false;
         }
@@ -1637,12 +1637,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         if (!ValidateHotkeySourceKind(key, "独立关闭热键")) return false;
         if (GlobalSwitchSource is { } gk && gk.Equals(key))
         {
-            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被全局开关热键占用。");
+            RejectPick($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被全局开关热键占用。");
             return false;
         }
         if (ProfileCycleSource is { } ck && ck.Equals(key))
         {
-            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被切换方案热键占用。");
+            RejectPick($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被切换方案热键占用。");
             return false;
         }
 
@@ -1652,7 +1652,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         for (var i = 0; i < ProfileCount; i++)
         {
             if (!_config.Profiles[i].ContainsKey(keyStr)) continue;
-            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被方案{ProfileDisplayName(i)}的连发键占用"
+            RejectPick($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被方案{ProfileDisplayName(i)}的连发键占用"
                    + "——请切到该档位在方案列表删除该键的方案后重试，或换用其他键位。");
             return false;
         }
@@ -1945,6 +1945,18 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     {
         Logs.Insert(0, $"[{DateTime.Now:HH:mm:ss}] {message}");
         while (Logs.Count > 200) Logs.RemoveAt(Logs.Count - 1);
+    }
+
+    /// <summary>
+    /// 录入拒绝反馈：写日志留痕 + **同步更新录入提示条**。
+    /// <see cref="Logs"/> 集合当前无任何 UI 绑定（日志面板已被注释区取代）——拒绝原因只写日志
+    /// 等于不可见，用户观感是"无提示直接失败"（2026-11-09 用户反馈：热键撞占用设置静默失败）。
+    /// 录入态内的校验拒绝（热键设置 / 方案录入 / 右键取消）一律走本方法。
+    /// </summary>
+    private void RejectPick(string message)
+    {
+        AddLog(message);
+        PickingPromptText = message;
     }
 
     /// <summary>保存配置到 %APPDATA%（任何变更触发）。</summary>

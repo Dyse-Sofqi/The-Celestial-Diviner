@@ -648,7 +648,7 @@ public sealed partial class MainViewModel
             {
                 if (_config.Schemes.ContainsKey(multiKey))
                 {
-                    AddLog($"[{InputNameMapper.GetSourceName(source)}] 已有连发方案（如需改为多宏请先删除原方案），请重选。");
+                    RejectPick($"[{InputNameMapper.GetSourceName(source)}] 已有连发方案（如需改为多宏请先删除原方案），请重选。");
                 }
                 else
                 {
@@ -659,7 +659,7 @@ public sealed partial class MainViewModel
             }
             else
             {
-                AddLog(reason);
+                RejectPick(reason);
             }
             return;
         }
@@ -668,11 +668,11 @@ public sealed partial class MainViewModel
         var first = _multiPickKeys[0];
         if (_multiPickKeys.Count >= Constants.MultiMaxTargets)
         {
-            AddLog($"多宏 [{InputNameMapper.GetSourceName(first)}] 已达 {Constants.MultiMaxTargets} 键上限，"
+            RejectPick($"多宏 [{InputNameMapper.GetSourceName(first)}] 已达 {Constants.MultiMaxTargets} 键上限，"
                    + "如需调整请右键移除触发键位后重试。");
             return;
         }
-        if (!ValidateMultiPickCommon(source, "触发键位", out var reason2)) { AddLog(reason2); return; }
+        if (!ValidateMultiPickCommon(source, "触发键位", out var reason2)) { RejectPick(reason2); return; }
 
         _multiPickKeys.Add(source);
         var keyStr = TaskSchedulerService.BuildSourceKey(first);
@@ -724,7 +724,7 @@ public sealed partial class MainViewModel
         else if (established)
         {
             // 理论不可达（暂存时已校验开关键位无方案）：防御性兜底，不落盘避免污染异构方案。
-            AddLog($"多宏 [{InputNameMapper.GetSourceName(first)}] 方案状态异常（开关键位方案缺失 / 类型不符），本次追加未生效。");
+            RejectPick($"多宏 [{InputNameMapper.GetSourceName(first)}] 方案状态异常（开关键位方案缺失 / 类型不符），本次追加未生效。");
             _multiPickKeys.RemoveAt(_multiPickKeys.Count - 1);
             return;
         }
@@ -762,26 +762,24 @@ public sealed partial class MainViewModel
 
         // 总开关键录入：键盘键或鼠标侧键 1 / 侧键 2；键类型 / 冲突检测与方案迁移由
         // SetGlobalSwitchKey 负责（滚轮 / 左右中键在 Set 方法内拒绝并提示）。
+        // 设置成功才退出录入态；失败保持选择态，原因在提示条显示（可直接换键重试）。
         if (kind == PickKind.SetMasterKey)
         {
-            CancelPicking();
-            SetGlobalSwitchKey(source);
+            if (SetGlobalSwitchKey(source)) CancelPicking();
             return;
         }
 
         // 切换方案热键录入：键盘键或鼠标侧键 1 / 侧键 2；校验由 SetProfileCycleKey 负责。
         if (kind == PickKind.SetCycleKey)
         {
-            CancelPicking();
-            SetProfileCycleKey(source);
+            if (SetProfileCycleKey(source)) CancelPicking();
             return;
         }
 
         // 独立关闭热键录入：键盘键或鼠标侧键 1 / 侧键 2；校验由 SetIndependentCloseKey 负责。
         if (kind == PickKind.SetCloseKey)
         {
-            CancelPicking();
-            SetIndependentCloseKey(source);
+            if (SetIndependentCloseKey(source)) CancelPicking();
             return;
         }
 
@@ -798,22 +796,22 @@ public sealed partial class MainViewModel
 
         if (source.Kind == InputKind.Mouse && source.Mouse is MouseInput.WheelUp or MouseInput.WheelDown)
         {
-            AddLog("滚轮不能作为连发键（无按住语义），已忽略。");
+            RejectPick("滚轮不能作为连发键（无按住语义），已忽略。");
             return;
         }
         if (GlobalSwitchSource is { } gk && gk.Equals(source))
         {
-            AddLog($"[{InputNameMapper.GetSourceName(source)}] 已被总开关占用，不能录入为连发键。");
+            RejectPick($"[{InputNameMapper.GetSourceName(source)}] 已被总开关占用，不能录入为连发键。");
             return;
         }
         if (ProfileCycleSource is { } ck && ck.Equals(source))
         {
-            AddLog($"[{InputNameMapper.GetSourceName(source)}] 已被切换方案热键占用，不能录入为连发键。");
+            RejectPick($"[{InputNameMapper.GetSourceName(source)}] 已被切换方案热键占用，不能录入为连发键。");
             return;
         }
         if (IndependentCloseSource is { } xk && xk.Equals(source))
         {
-            AddLog($"[{InputNameMapper.GetSourceName(source)}] 已被独立关闭热键占用，不能录入为连发键。");
+            RejectPick($"[{InputNameMapper.GetSourceName(source)}] 已被独立关闭热键占用，不能录入为连发键。");
             return;
         }
 
@@ -887,7 +885,7 @@ public sealed partial class MainViewModel
             }
             else
             {
-                AddLog($"[{InputNameMapper.GetSourceName(source)}] 不是当前设置的全局开关热键，右键原键位才可取消。");
+                RejectPick($"[{InputNameMapper.GetSourceName(source)}] 不是当前设置的全局开关热键，右键原键位才可取消。");
             }
             return;
         }
@@ -902,7 +900,7 @@ public sealed partial class MainViewModel
             }
             else
             {
-                AddLog($"[{InputNameMapper.GetSourceName(source)}] 不是当前设置的独立关闭热键，右键原键位才可取消。");
+                RejectPick($"[{InputNameMapper.GetSourceName(source)}] 不是当前设置的独立关闭热键，右键原键位才可取消。");
             }
             return;
         }
@@ -917,7 +915,7 @@ public sealed partial class MainViewModel
             }
             else
             {
-                AddLog($"[{InputNameMapper.GetSourceName(source)}] 不是当前设置的切换方案热键，右键原键位才可取消。");
+                RejectPick($"[{InputNameMapper.GetSourceName(source)}] 不是当前设置的切换方案热键，右键原键位才可取消。");
             }
             return;
         }
@@ -981,7 +979,7 @@ public sealed partial class MainViewModel
             return;
         }
 
-        AddLog($"[{InputNameMapper.GetSourceName(source)}] 没有已注册的方案可取消。");
+        RejectPick($"[{InputNameMapper.GetSourceName(source)}] 没有已注册的方案可取消。");
     }
 
     /// <summary>在多宏方案中查找触发键位（Targets[1..]）首个与 source 匹配的下标（无则 -1）。</summary>
