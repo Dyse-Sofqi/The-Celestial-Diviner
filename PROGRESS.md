@@ -270,6 +270,34 @@
 - ⚠️ 边界：dll 物理缺失 / 目录只读救不了（照旧完整提示）；即使外部工具每次开机重铺缓存，
   自愈每轮自动跑，用户无感；Toggle 自环"按下被吞"是同源疾病未修（见坑 1 不变量 7）
 
+## 发版 v1.9.6（2026-11-08）
+
+- 🚀 多宏开关（设计见上面待发节）：双宏开关升级 2~6 键、触发键位只标记不占用、允许重复、
+  右键拆解；配置兼容修复见坑 7（`ToggleSectionJsonConverter` 恒写历史名，撤销 v22 版本推进）
+- ✅ `dotnet publish -c Release` 成功；`FileVersion=1.9.6.0`；内嵌 CHANGELOG 含 v1.9.6 节、
+  无「## 未发布」标题残留（exe 字节扫描；CHANGELOG v1.7.x 历史说明文字里的「未发布」三字
+  属正常内容，扫描口径按标题）
+- 📦 csproj `Version` / `FileVersion` → **1.9.6 / 1.9.6.0**
+- 📄 `docs/release-notes/v1.9.6-release-notes.md`（使用范围声明 / 多宏玩法与录入手势 /
+  原双宏方案不动 / 兼容修复与降级备份提示 / 已知问题——滚轮不可用、降级清 >2 键多宏、
+  Toggle 自环按下被吞沿袭、25H2 DD 自动停止沿自 1.9.4）
+- 📦 `dist/TheCelestialDiviner-1.9.6-win64/` 21 项（含 `interception\` 三文件，**不含**闭源
+  DD 驱动；非 exe 项与 1.9.5 逐字节一致，仅 exe 不同）
+- 📦 `dist/TheCelestialDiviner-1.9.6-win64.zip`：23 个文件 / 2,014,265 B，
+  sha256 `84f8eff6def204738a6f47251a426078c5c7f721bf313554b6611064ed56c08e`
+- ✅ commit `3615786`（多宏特性 + 兼容修复）→ `e940b43`（v1.9.6 发版），标签 `v1.9.6`
+  （注释对象 7573e7e → 剥离 e940b43）
+- ✅ Gitee Release <https://gitee.com/sofqi/The-Celestial-Diviner/releases/tag/v1.9.6>
+  （release id **1287300** / 附件 id **3633462**，2,014,265 B）；GitHub Release
+  <https://github.com/Dyse-Sofqi/The-Celestial-Diviner/releases/tag/v1.9.6>（asset state=uploaded，
+  API digest sha256 与本地一致）
+- ✅ 通道验证：Gitee API `releases/latest` → `v1.9.6`；Gitee 直链 302→200 / Content-Length
+  2,014,265；raw CHANGELOG（备用通道）首个版本标题已显示 `## v1.9.6 — 2026-11-08`
+- ✅ 坑 5 顺序执行：先打包 → push gitee（main + 标签）→ 立刻建 Gitee Release → push origin
+  → gh release create；Gitee 标签重写坑未复发（Release 创建后 ls-remote 复核注释对象完好）
+- ⏳ 未做：多宏录入 / 追加 / 拆解的全清单实机协议验证（开发机已实测多宏录入与连发、
+  61 方案升级恢复，见坑 7 事故记录；完整清单交用户日常使用覆盖）
+
 ## 发版 v1.9.5（2026-11-07）
 
 - 🐞 两项修复，根因分别见上面两节待发记录（Hold 自环释放探测 / 依赖自愈）；
