@@ -1520,11 +1520,15 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         // 键类型校验：键盘键或鼠标侧键 1 / 侧键 2（滚轮 / 左右中键不收）。
         if (!ValidateHotkeySourceKind(key, "总开关键")) return false;
 
-        // 冲突验证：不能与任何已注册方案的注册源相同（复用调度器的键格式）。
+        // 冲突验证：不能与任何已注册方案的注册源相同。**四个档位全查**（与切换方案 /
+        // 独立关闭热键一致）：总开关是全局的，其他档位里同键的方案在总开关存在期间
+        // 会被 HandleHookDown 的热键分支静默压制（物理按键到不了调度器 = 死键）。
         var candidateKey = TaskSchedulerService.BuildSourceKey(key);
-        if (_config.Schemes.ContainsKey(candidateKey))
+        for (var i = 0; i < ProfileCount; i++)
         {
-            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被方案占用。");
+            if (!_config.Profiles[i].ContainsKey(candidateKey)) continue;
+            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被方案{ProfileDisplayName(i)}的连发键占用"
+                   + "——请切到该档位在方案列表删除该键的方案后重试，或换用其他键位。");
             return false;
         }
 
@@ -1588,12 +1592,13 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         }
 
         // 冲突验证：不能与任一方案档位的连发键相同（四个档位全查，
-        // 否则切换到该档位后按下此键时切换与连发互相抢占）。
+        // 否则切换到该档位后按下此键时切换与连发互相抢占——热键分支先拦截，方案成死键）。
         var keyStr = TaskSchedulerService.BuildSourceKey(key);
         for (var i = 0; i < ProfileCount; i++)
         {
             if (!_config.Profiles[i].ContainsKey(keyStr)) continue;
-            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被方案{ProfileDisplayName(i)}的连发键占用。");
+            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被方案{ProfileDisplayName(i)}的连发键占用"
+                   + "——请切到该档位在方案列表删除该键的方案后重试，或换用其他键位。");
             return false;
         }
 
@@ -1642,12 +1647,13 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         }
 
         // 与切换方案热键同一套占用校验：四个方案档位的连发键全查，
-        // 否则切到该档位后按下此键时「关闭」与「连发」互相抢占。
+        // 否则切到该档位后按下此键时「关闭」与「连发」互相抢占（热键分支先拦截，方案成死键）。
         var keyStr = TaskSchedulerService.BuildSourceKey(key);
         for (var i = 0; i < ProfileCount; i++)
         {
             if (!_config.Profiles[i].ContainsKey(keyStr)) continue;
-            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被方案{ProfileDisplayName(i)}的连发键占用。");
+            AddLog($"设置失败：[{InputNameMapper.GetSourceName(key)}] 已被方案{ProfileDisplayName(i)}的连发键占用"
+                   + "——请切到该档位在方案列表删除该键的方案后重试，或换用其他键位。");
             return false;
         }
 
