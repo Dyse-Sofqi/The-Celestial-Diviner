@@ -53,15 +53,24 @@
                          非选择态 → 无操作 -->
                     <MouseBinding Gesture="LeftClick" Command="{Binding DataContext.SourceClickedCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}"/>
                 </Border.InputBindings>
-                <!-- 键位字符统一字号并居中（不做逐键缩放，保证整版观感一致） -->
-                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                    <TextBlock x:Name="IconLabel" Text="{Binding Icon}" FontSize="9" HorizontalAlignment="Center"
-                               Foreground="{Binding Foreground}"
-                               Visibility="{Binding Icon, Converter={StaticResource EmptyToCollapsed}}"/>
-                    <TextBlock x:Name="NameLabel" Text="{Binding Name}" FontSize="11" FontWeight="SemiBold"
-                               HorizontalAlignment="Center"
-                               Foreground="{Binding Foreground}"/>
-                </StackPanel>
+                <!-- 停用方案虚线轮廓：键位注册过但方案未勾选启用（ShowDisabledOutline，ApplyScheme 驱动）。
+                     轮廓色绑 Foreground = RefreshTheme 停用分支的模式色（开关紫 / 按压金），键名同色；
+                     不用半透明实心底色——那与录入态的全图块压暗（Opacity 0.45）撞车。默认 Collapsed。 -->
+                <Grid>
+                    <Rectangle x:Name="DisabledOutline" Visibility="Collapsed" Fill="Transparent"
+                               IsHitTestVisible="False"
+                               Stroke="{Binding Foreground, Mode=OneWay}" StrokeThickness="1.3"
+                               StrokeDashArray="2 2" StrokeDashCap="Round" RadiusX="3" RadiusY="3" Margin="1"/>
+                    <!-- 键位字符统一字号并居中（不做逐键缩放，保证整版观感一致） -->
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                        <TextBlock x:Name="IconLabel" Text="{Binding Icon}" FontSize="9" HorizontalAlignment="Center"
+                                   Foreground="{Binding Foreground}"
+                                   Visibility="{Binding Icon, Converter={StaticResource EmptyToCollapsed}}"/>
+                        <TextBlock x:Name="NameLabel" Text="{Binding Name}" FontSize="11" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center"
+                                   Foreground="{Binding Foreground}"/>
+                    </StackPanel>
+                </Grid>
             </Border>
             <DataTemplate.Triggers>
                 <DataTrigger Binding="{Binding IsSpacer}" Value="True">
@@ -87,6 +96,11 @@
                     <Setter TargetName="Root" Property="Background" Value="{DynamicResource HotkeyAuxBg}"/>
                     <Setter TargetName="IconLabel" Property="Foreground" Value="White"/>
                     <Setter TargetName="NameLabel" Property="Foreground" Value="White"/>
+                </DataTrigger>
+                <!-- 停用方案：虚线轮廓提醒"设置过但未启用"（键名 / 轮廓为模式色，配色见
+                     KeySourceViewModel.RefreshTheme 停用分支） -->
+                <DataTrigger Binding="{Binding ShowDisabledOutline}" Value="True">
+                    <Setter TargetName="DisabledOutline" Property="Visibility" Value="Visible"/>
                 </DataTrigger>
                 <!-- 键位录入选择态：全部图块半透明 + 手型光标 -->
                 <DataTrigger Binding="{Binding DataContext.PickingActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">

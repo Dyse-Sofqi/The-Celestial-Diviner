@@ -30,6 +30,7 @@ public sealed class KeySourceViewModel : INotifyPropertyChanged
     private string _targetsSummary = "";
     private string _multiMarkSummary = "";   // 多宏触发键位标记（"⇄ 开关键位…"，非空 = 该键是某启用多宏方案的触发键位）
     private SourceRegistration _registration = SourceRegistration.Empty;
+    private bool _schemeDisabled;            // 注册的方案已停用（Enabled=false）：键位显示虚线轮廓提醒，不隐身
     private bool _globallyDimmed;
     private bool _isMasterKey;
     private bool _isCycleKey;
@@ -72,6 +73,22 @@ public sealed class KeySourceViewModel : INotifyPropertyChanged
             Foreground = s_registeredForeground;
             return;
         }
+
+        // 停用方案：背景回空置色、键名用模式色（开关紫 / 按压金）——配合 XAML 的虚线轮廓
+        //（ShowDisabledOutline）表达"这里注册过方案，当前停用"；不用半透明实心底色，
+        // 那会与录入态的全图块压暗（Opacity 0.45）撞车。
+        if (_schemeDisabled && Registration != SourceRegistration.Empty)
+        {
+            Background = s_emptyBrush;
+            Foreground = Registration switch
+            {
+                SourceRegistration.RegisteredToggle => s_toggleBrush,
+                SourceRegistration.RegisteredHold => s_holdBrush,
+                _ => s_emptyForeground
+            };
+            return;
+        }
+
         Background = Registration switch
         {
             SourceRegistration.RegisteredToggle => s_toggleBrush,
@@ -180,6 +197,22 @@ public sealed class KeySourceViewModel : INotifyPropertyChanged
         }
     }
 
+    /// <summary>
+    /// 是否显示"停用方案"虚线轮廓：键位注册了方案但 Enabled=false。
+    /// XAML 据此显示模式色虚线轮廓（配色见 RefreshTheme 停用分支）——
+    /// 停用方案不再从键盘区隐身，避免用户忘记设置过。
+    /// </summary>
+    public bool ShowDisabledOutline => _schemeDisabled && _registration != SourceRegistration.Empty;
+
+    /// <summary>更新停用标记并联动配色与轮廓可见性。</summary>
+    private void SetSchemeDisabled(bool value)
+    {
+        if (_schemeDisabled == value) return;
+        _schemeDisabled = value;
+        RefreshTheme();
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ShowDisabledOutline)));
+    }
+
     /// <summary>总开关开启时控件暗淡（提示面板非设置时机；关闭时清晰便于编辑方案）。</summary>
     public bool GloballyDimmed
     {
@@ -225,15 +258,18 @@ public sealed class KeySourceViewModel : INotifyPropertyChanged
     /// <summary>
     /// 应用方案（编辑确认 / 删除 / 清空后调用）。
     /// 显示模式取第一个目标键的模式；空方案回到未注册状态。
+    /// **停用方案（Enabled=false）不再隐身**：键位保持注册态可见性——虚线轮廓 + 模式色键名
+    /// （见 <see cref="ShowDisabledOutline"/>），避免用户忘记设置过。
     /// 多宏触发键位标记（MarkMultiMember）独立于注册态、只追加小字；
     /// 配色上自有方案注册色优先，标记色仅用于无自有方案的图块。
     /// </summary>
     public void ApplyScheme(KeyScheme? scheme)
     {
-        if (scheme is null || !scheme.Enabled || scheme.Targets.Count == 0)
+        if (scheme is null || scheme.Targets.Count == 0)
         {
             Registration = SourceRegistration.Empty;
             TargetsSummary = "";
+            SetSchemeDisabled(false);
             return;
         }
 
@@ -245,6 +281,9 @@ public sealed class KeySourceViewModel : INotifyPropertyChanged
         var names = scheme.Targets.Select(InputNameMapper.GetTargetName).Take(6);
         var suffix = scheme.Targets.Count > 6 ? " …" : "";
         TargetsSummary = "→ " + string.Join(" · ", names) + suffix;
+
+        // 停用方案：键位仍显示注册过（虚线轮廓 + 模式色文字），不回退到空置态。
+        SetSchemeDisabled(!scheme.Enabled);
     }
 
     /// <summary>冻结刷子工厂（避免重复创建）。?。</summary>
