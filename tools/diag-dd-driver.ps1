@@ -203,32 +203,44 @@ Try-Get {
     W ("  CPU ：" + $cpu.Name)
 } '硬件信息读取失败'
 
-# --------------------------------------------------- 5 dd63330 服务与注册表
-Sec '5. dd63330 内核服务（关键）'
-$svcKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\dd63330'
-$imagePath = $null
-$svcExists = Test-Path -LiteralPath $svcKey
-W ("  服务项存在：" + $svcExists)
-if ($svcExists) {
+# --------------------------------------------------- 5 DD 内核服务与注册表
+Sec '5. DD 内核服务（关键）'
+# 两代并存：老代次 dd63330、2026-11 起的新代次 dd71000（未来可能再变，故按 dd* 前缀枚举）。
+$svcNames = @()
+try {
+    $svcNames = @(Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Services' -ErrorAction Stop |
+                  Where-Object { $_.PSChildName -match '^dd' } |
+                  ForEach-Object { $_.PSChildName })
+} catch { }
+if ($svcNames.Count -eq 0) { $svcNames = @('dd63330') }
+
+$script:serviceImagePaths = @()
+foreach ($svcName in $svcNames) {
+    $svcKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\' + $svcName
+    $svcExists = Test-Path -LiteralPath $svcKey
+    W ''
+    W ('  [' + $svcName + '] 服务项存在：' + $svcExists)
+    if (-not $svcExists) { continue }
     $svc = Get-ItemProperty -LiteralPath $svcKey
     $imagePath = Normalize-Path ([string]$svc.ImagePath)
-    W ("  ImagePath（原始）：" + $svc.ImagePath)
-    W ("  ImagePath（解析）：" + $imagePath)
+    if ($imagePath) { $script:serviceImagePaths += $imagePath }
+    W ('    ImagePath（原始）：' + $svc.ImagePath)
+    W ('    ImagePath（解析）：' + $imagePath)
     $startMap = @{ 0 = 'Boot 引导'; 1 = 'System 系统'; 2 = 'Auto 自动'; 3 = 'Manual 手动'; 4 = 'Disabled 已禁用' }
     $startText = $startMap[[int]$svc.Start]
     if (-not $startText) { $startText = [string]$svc.Start }
-    W ("  Type=" + $svc.Type + " (1=内核驱动)    Start=" + $svc.Start + " (" + $startText + ")    ErrorControl=" + $svc.ErrorControl)
+    W ('    Type=' + $svc.Type + ' (1=内核驱动)    Start=' + $svc.Start + ' (' + $startText + ')    ErrorControl=' + $svc.ErrorControl)
     $imageExists = ($imagePath -and (Test-Path -LiteralPath $imagePath))
-    W ("  映像文件存在：" + $imageExists)
+    W ('    映像文件存在：' + $imageExists)
     if ($imagePath -match '\\Temp\\') {
-        W '  <== 指向 %TEMP%：极易被清理软件/杀软删除，或被换成旧版本。'
-        $script:Flags.Add('dd63330 服务的 ImagePath 指向 %TEMP%：这是"两份驱动打架"最典型的来源，应删服务重建到固定目录。')
+        W '    <== 指向 %TEMP%：极易被清理软件/杀软删除，或被换成旧版本。'
+        $script:Flags.Add($svcName + ' 服务的 ImagePath 指向 %TEMP%：这是"两份驱动打架"最典型的来源，应删服务重建到固定目录。')
     }
     if (-not $imageExists) {
-        $script:Flags.Add('dd63330 服务的 ImagePath 指向的文件已不存在：服务项是残留，必须删除后重建，否则加载的驱动身份不明。')
+        $script:Flags.Add($svcName + ' 服务的 ImagePath 指向的文件已不存在：服务项是残留，必须删除后重建，否则加载的驱动身份不明。')
     }
     if ([int]$svc.Start -eq 4) {
-        $script:Flags.Add('dd63330 服务被设为"已禁用"：多为安全软件所为，DD 初始化失败与此直接相关。')
+        $script:Flags.Add($svcName + ' 服务被设为"已禁用"：多为安全软件所为，DD 初始化失败与此直接相关。')
     }
 }
 Try-Get {
@@ -290,7 +302,7 @@ Try-Get {
 } '应用日志读取失败'
 
 # ------------------------------------------------- 7 驱动文件分布与指纹
-Sec '7. dd63330.dll / .sys 文件分布与指纹'
+Sec '7. DD 驱动文件（dd63330.dll/.sys 或 dd.<版本号>.dll/dd<版本号>.sys）分布与指纹'
 
 $searchDirs = New-Object System.Collections.Generic.List[string]
 if ($AppDir) { $searchDirs.Add($AppDir) }
@@ -306,23 +318,29 @@ $found = New-Object System.Collections.Generic.List[string]
 foreach ($d in $searchDirs) {
     if (-not $d) { continue }
     if (-not (Test-Path -LiteralPath $d)) { continue }
-    foreach ($n in @('dd63330.dll', 'dd63330.sys')) {
-        $p = Join-Path $d $n
-        if ((Test-Path -LiteralPath $p) -and -not $found.Contains($p)) { $found.Add($p) }
+    $hits = @(Get-ChildItem -LiteralPath $d -File -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -ieq 'dd63330.dll' -or $_.Name -ieq 'dd63330.sys' -or
+        $_.Name -match '^dd\.\d+\.dll$' -or $_.Name -match '^dd\d+\.sys$' })
+    foreach ($h in $hits) {
+        if (-not $found.Contains($h.FullName)) { $found.Add($h.FullName) }
     }
 }
 foreach ($root in @(($env:USERPROFILE + '\Desktop'), ($env:USERPROFILE + '\Downloads'), 'C:\', 'D:\', 'E:\', 'F:\')) {
     if (-not (Test-Path -LiteralPath $root)) { continue }
     try {
         $hits = Get-ChildItem -LiteralPath $root -Recurse -Depth 2 -File -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -eq 'dd63330.dll' -or $_.Name -eq 'dd63330.sys' }
+                Where-Object {
+                    $_.Name -ieq 'dd63330.dll' -or $_.Name -ieq 'dd63330.sys' -or
+                    $_.Name -match '^dd\.\d+\.dll$' -or $_.Name -match '^dd\d+\.sys$' }
         foreach ($h in $hits) { if (-not $found.Contains($h.FullName)) { $found.Add($h.FullName) } }
     } catch { }
 }
-if ($imagePath -and (Test-Path -LiteralPath $imagePath) -and -not $found.Contains($imagePath)) { $found.Add($imagePath) }
+foreach ($ip in $script:serviceImagePaths) {
+    if ($ip -and (Test-Path -LiteralPath $ip) -and -not $found.Contains($ip)) { $found.Add($ip) }
+}
 
 if ($found.Count -eq 0) {
-    W '  常见位置未找到 dd63330.dll / .sys（可能已删除，或装在自定义目录）。'
+    W '  常见位置未找到 DD 驱动文件（dd63330.dll/.sys 或 dd.<版本号>.dll；可能已删除，或装在自定义目录）。'
     W '  若客户的程序装在别的盘，请用 -AppDir "程序目录" 重跑一次。'
 } else {
     $idx = 1
@@ -338,7 +356,7 @@ if ($found.Count -eq 0) {
             if ($sig.SignerCertificate) { $signer = $sig.SignerCertificate.Subject }
             $tag = ''
             if ($script:loggedDll -and $f -ieq $script:loggedDll) { $tag = '    <== 程序当前加载的 DLL' }
-            elseif ($imagePath -and $f -ieq $imagePath) { $tag = '    <== 服务 ImagePath 指向的驱动' }
+            elseif ($script:serviceImagePaths -contains $f) { $tag = '    <== 服务 ImagePath 指向的驱动' }
             W ''
             W ("  [" + $idx + "] " + $f + $tag)
             W ("      大小 {0} 字节    修改 {1}" -f $i.Length, $i.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))
@@ -353,10 +371,10 @@ if ($found.Count -eq 0) {
     W ("  合计 {0} 个文件；.sys 有 {1} 种内容，.dll 有 {2} 种内容。" -f $found.Count, $sysHashes.Keys.Count, $dllHashes.Keys.Count)
     if ($sysHashes.Keys.Count -gt 1) {
         W '  <== 多个版本的 .sys 同时存在，服务加载的可能不是 DD_btn 配套的那一份。'
-        $script:Flags.Add('机器上存在多份内容不同的 dd63330.sys：驱动与用户态 DLL 版本不配套，是本次蓝屏的首要嫌疑。')
+        $script:Flags.Add('机器上存在多份内容不同的 DD 内核驱动（.sys）：驱动与用户态 DLL 版本不配套，是本次蓝屏的首要嫌疑。')
     }
     if ($dllHashes.Keys.Count -gt 1) {
-        $script:Flags.Add('机器上存在多份内容不同的 dd63330.dll：多个程序目录各放一份，容易与服务加载的驱动版本错位。')
+        $script:Flags.Add('机器上存在多份内容不同的 DD 用户态 DLL：多个程序目录各放一份，容易与服务加载的驱动版本错位。')
     }
 }
 

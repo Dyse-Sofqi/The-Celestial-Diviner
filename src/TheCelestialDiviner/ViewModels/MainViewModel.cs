@@ -552,12 +552,13 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         // 用户必须在这里看到"为什么"，否则只会觉得"放了没用"。
         var reason = DdDriverService.LastError is { Length: > 0 } err ? $"\n\n具体原因：{err}" : "";
         var confirmed = DdDriverFetchConfirmRequested?.Invoke(
-            "本软件的键盘连发功能完全依赖 DD 驱动运作，当前未找到可用的 DD 驱动（dd63330.dll），"
+            "本软件的键盘连发功能完全依赖 DD 驱动运作，当前未找到可用的 DD 驱动"
+            + "（dd63330.dll 或新版 dd.<版本号>.dll），"
             + "未安装驱动时连发可能被多数游戏过滤而无效。"
             + reason + "\n\n"
             + "DD 驱动虽由作者免费提供，但它是闭源软件，我们无权将其打包分发，"
             + "所以这一步需要由您来完成：\n\n"
-            + "是否自动从 DD 官方发布渠道下载并安装（约 3.7MB，仅首次）？\n"
+            + "是否自动从 DD 官方发布渠道下载并安装（约 3.5MB，仅首次）？\n"
             + "确认后全程自动完成并启用 DD 驱动模式。\n\n"
             + "⚠ 国内访问 GitHub 很不稳定：连续失败、卡住几分钟、连上又断，都是正常现象。\n"
             + "   程序会自动重试（间隔逐次拉长，最长 60 秒一次），请让它自己跑完，不要关程序或反复点。\n\n"
@@ -569,7 +570,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         }
         _ddAutoActivate = false;
         AddLog("已保持普通模式。DD 驱动是连发功能的核心依赖，建议尽快获取："
-               + "可从 ddxoft 官网（www.ddxoft.com）下载 64 位（x64）版 dd63330.dll 放到程序目录后重启，"
+               + "可从 ddxoft 官网（www.ddxoft.com）下载 64 位（x64）版驱动（dd63330.dll 或新版 dd.<版本号>.dll）"
+               + "放到程序目录后重启，"
                + "或稍后在「选项」→「键盘注入」→「获取 DD 驱动…」重新发起。");
         // 确认框关掉后原因仍留在注释区，便于对照着改文件。
         if (DdDriverService.LastError is { Length: > 0 } kept)

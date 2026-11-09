@@ -17,15 +17,24 @@ namespace TheCelestialDiviner.Services;
 /// 同理本程序的低级钩子也无法凭事件本身区分回环与物理输入，
 /// 由 <see cref="EchoGuard"/> 按注入时间线消除（SendInput 模式用 dwExtraInfo 魔数）。
 ///
-/// 加载策略：优先 <c>dd63330.dll</c>（官方 2026 x64 用户态版），其次兼容万象等第三方
-/// 部署的 <c>DD64.dll</c>（32 位时间锁版，x64 进程无法加载，仅探测并给出提示）。
-/// 探测顺序：exe 目录 → %APPDATA%\TheCelestialDiviner\drivers → Change box 安装目录。
-/// 依赖文件随发布包提供（原生 DLL 无法内嵌单文件）。
+/// 加载策略（**代次优先，老用户不动**）：
+/// 1. <c>dd63330.dll</c>（2026 前的老代次，配套内核驱动 dd63330 / 服务名 dd63330）；
+/// 2. <c>dd.&lt;版本号&gt;.dll</c>（2026-11 起的新代次，如 <c>dd.71000.dll</c>，
+///    配套 dd71000.sys / 服务名 dd71000）。同一目录存在多份时取版本号最大的；
+/// 3. 兼容万象等第三方部署的 <c>DD64.dll</c>（32 位时间锁版，x64 进程无法加载，仅探测并提示）。
+///
+/// 之所以"新代次排在旧代次之后"：老用户机器上的 dd63330 驱动与内核服务已经装好并稳定运行，
+/// 程序升级不该去换它的驱动（换驱动 = 换 sys = 0x50 的最高发风险）。
+/// 只要目录里还有 dd63330.dll，就继续用旧的；只有完全没有旧文件的新用户才落到新代次。
+///
+/// 探测顺序：exe 目录（旧 → 新）→ %APPDATA%\TheCelestialDiviner\drivers（旧 → 新）→ Change box 安装目录。
 ///
 /// 自动获取：驱动缺失时按需从 DD 官方发布渠道（github.com/ddxoft，作者自己的发布页）
-/// 下载官方压缩包，用随包的 7zr.exe（7-Zip 独立版，LGPL）解出 dd63330.dll 安装到
-/// %APPDATA% drivers 目录——本程序只做"下载器"，不二次分发闭源驱动；
+/// 下载官方压缩包，用随包的 7zr.exe（7-Zip 独立版，LGPL）解出**当前官方发布的那一代** DLL
+/// 安装到 %APPDATA% drivers 目录——本程序只做"下载器"，不二次分发闭源驱动；
 /// 全程后台执行，期间注入自动回退普通模式，就绪后自动升回 DD 模式（见 AutoFetchCompleted）。
+/// 注意：官方在 2026-11 删除了旧的 <c>2026.DD.EV.HVCI.63xxx</c> 发布并把资产改名为
+/// <c>hid.7xxxx.7z</c>（内含 dd.71000.dll），因此资产解析不能写死 tag / 文件名，见 FetchOnce。
 /// </summary>
 public static class DdDriverService
 {
@@ -95,6 +104,7 @@ public static class DdDriverService
 
     private const uint SC_MANAGER_ALL_ACCESS = 0xF003F;
     private const uint SERVICE_ALL_ACCESS = 0xF01FF;
+    private const uint SERVICE_QUERY_STATUS = 0x0004;
     private const uint SERVICE_KERNEL_DRIVER = 1;
     private const uint SERVICE_DEMAND_START = 3;
     private const uint SERVICE_ERROR_NORMAL = 1;
@@ -104,8 +114,21 @@ public static class DdDriverService
     private const int ERROR_SERVICE_MARKED_FOR_DELETE = 1072;
     private const uint SERVICE_NO_CHANGE = 0xFFFFFFFF;
 
-    /// <summary>内核驱动服务名（DD 官方固定，且为全局单例）。</summary>
-    private const string DriverServiceName = "dd63330";
+    /// <summary>
+    /// DD 驱动的一个"代次"：用户态 DLL、内核驱动文件名、内核服务名三者必须配套。
+    /// 拿新 DLL 去驱动旧 sys（或反之）是 0x50（PAGE_FAULT_IN_NONPAGED_AREA）最典型的成因，
+    /// 所以三件套只能整体切换，不允许混搭。
+    /// </summary>
+    /// <param name="DllName">用户态 DLL 文件名（如 dd63330.dll / dd.71000.dll）。</param>
+    /// <param name="SysName">内核驱动文件名（如 dd63330.sys / dd71000.sys）。</param>
+    /// <param name="ServiceName">内核服务名，也是驱动内部设备名（如 dd63330 / dd71000）。</param>
+    private sealed record DdFlavor(string DllName, string SysName, string ServiceName);
+
+    /// <summary>老代次（2026 前官方发布，老用户机器上已安装的那一套）。</summary>
+    private static readonly DdFlavor LegacyFlavor = new("dd63330.dll", "dd63330.sys", "dd63330");
+
+    /// <summary>本次选中的代次（ProbeDll 命中后确定；未命中为 null）。</summary>
+    private static DdFlavor? _activeFlavor;
 
     /// <summary>
     /// DD_btn(0) 单进程最大调用次数。它做的是"重建虚拟设备"的重操作，失败后反复重入
@@ -118,9 +141,12 @@ public static class DdDriverService
     /// <summary>两次 DD_btn(0) 之间的等待（覆盖虚拟设备 PnP 重建的常见耗时）。</summary>
     private const int DdInitRetryDelayMs = 900;
 
+    /// <summary>当前生效的代次（未探测时按老代次处理，仅用于文案与自愈路径）。</summary>
+    private static DdFlavor ActiveFlavor => _activeFlavor ?? LegacyFlavor;
+
     /// <summary>驱动身份不一致时的统一提示（UI 注释区 / LastError 展示）。</summary>
-    private const string IdentityRejectedMessage =
-        "系统中已加载的 dd63330 驱动与程序自带的不是同一份（常见于换过安装目录、或装过旧版本 / 其他软件）。"
+    private static string IdentityRejectedMessage(DdFlavor flavor) =>
+        $"系统中已加载的 {flavor.ServiceName} 驱动与程序自带的不是同一份（常见于换过安装目录、或装过旧版本 / 其他软件）。"
         + "为避免版本错位导致蓝屏，本次运行不启用 DD 驱动：请重启电脑后重试，"
         + "重启后残留的服务项会按当前版本重建。";
 
@@ -140,7 +166,7 @@ public static class DdDriverService
     public static bool IsReady { get { lock (Gate) return _ddKey is not null && _initialized; } }
 
     /// <summary>
-    /// 可加载的 x64 驱动文件（dd63330.dll）是否在位 —— 只读文件头、不加载 DLL、不初始化虚拟设备，
+    /// 可加载的 x64 驱动文件（dd63330.dll / dd.&lt;版本&gt;.dll）是否在位 —— 只读文件头、不加载 DLL、不初始化虚拟设备，
     /// 供 UI 判断「键盘注入 → DD 驱动」是否可选（下载没成功 / 位数不对 = 灰显不可选）。
     /// 驱动在位但初始化失败（如免费版在线认证未过）仍算可用：点选时由 <see cref="EnsureReady"/>
     /// 给出具体原因并回退普通模式，是用户可感知、可重试的路径。
@@ -148,15 +174,94 @@ public static class DdDriverService
     /// </summary>
     public static bool IsAvailable => ProbeDll(out _) is not null;
 
-    /// <summary>候选 x64 驱动文件路径：exe 目录 → %APPDATA% drivers → Change box 安装目录。</summary>
+    /// <summary>
+    /// 候选 x64 驱动文件路径（**顺序即优先级**）：
+    /// 老代次 dd63330.dll（exe → APPDATA）→ 新代次 dd.&lt;版本&gt;.dll（exe → APPDATA，版本大的优先）
+    /// → Change box 安装目录。
+    /// 老代次排在前面是刻意的：老用户已有 dd63330 驱动与服务在跑，升级程序不该去动它。
+    /// </summary>
     private static IEnumerable<string> X64DllCandidates
     {
         get
         {
-            yield return Path.Combine(AppContext.BaseDirectory, "dd63330.dll");
-            yield return Path.Combine(AppDataDriversDir, "dd63330.dll");
-            yield return Path.Combine(ChangeBoxDllDir, "dd63330.dll");
+            // 老代次三处全查完，才轮到新代次：任何一处还留着 dd63330.dll 就走老代次。
+            yield return Path.Combine(AppContext.BaseDirectory, LegacyFlavor.DllName);
+            yield return Path.Combine(AppDataDriversDir, LegacyFlavor.DllName);
+            yield return Path.Combine(ChangeBoxDllDir, LegacyFlavor.DllName);
+            // 新代次：dd.<版本号>.dll，版本号大的优先（官方后续换代无需再发版）。
+            foreach (var path in EnumerateNewStyleDlls(AppContext.BaseDirectory)) yield return path;
+            foreach (var path in EnumerateNewStyleDlls(AppDataDriversDir)) yield return path;
         }
+    }
+
+    /// <summary>
+    /// 枚举目录里的新代次 DLL（<c>dd.&lt;纯数字&gt;.dll</c>），按版本号降序。
+    /// 通配而不是写死 dd.71000.dll：官方换代时（71000 → 8xxxx）不需要再发版跟进。
+    /// <c>hid.72000.dll</c> 是 HID 路线（需 INF 安装 ddhid72000 驱动），不匹配本模式，自然排除。
+    /// </summary>
+    private static IEnumerable<string> EnumerateNewStyleDlls(string dir)
+    {
+        string[] files;
+        try
+        {
+            if (!Directory.Exists(dir)) return Array.Empty<string>();
+            files = Directory.GetFiles(dir);
+        }
+        catch
+        {
+            return Array.Empty<string>();   // 无权限 / 路径异常：当作没有
+        }
+        return files
+            .Select(path => (path, version: ParseNewStyleDllVersion(Path.GetFileName(path))))
+            .Where(x => x.version >= 0)
+            .OrderByDescending(x => x.version)
+            .Select(x => x.path)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// 解析新代次 DLL 文件名里的版本号（<c>dd.71000.dll</c> → 71000）；不是新代次命名返回 -1。
+    /// 命名规则由官方定义：<c>dd.</c> + 纯数字 + <c>.dll</c>。
+    /// </summary>
+    private static long ParseNewStyleDllVersion(string fileName)
+    {
+        const string prefix = "dd.";
+        const string suffix = ".dll";
+        if (!fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return -1;
+        if (!fileName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) return -1;
+        var digits = fileName.Substring(prefix.Length, fileName.Length - prefix.Length - suffix.Length);
+        if (digits.Length == 0) return -1;
+        foreach (var c in digits) if (c < '0' || c > '9') return -1;
+        return long.TryParse(digits, out var v) ? v : -1;
+    }
+
+    /// <summary>该 DLL 文件名是否属于本模式支持的代次（老代次 dd63330.dll，或新代次 dd.&lt;版本&gt;.dll）。</summary>
+    private static bool IsUsableDllName(string fileName) =>
+        string.Equals(fileName, LegacyFlavor.DllName, StringComparison.OrdinalIgnoreCase)
+        || ParseNewStyleDllVersion(fileName) >= 0;
+
+    /// <summary>
+    /// 代次排序权重：新代次取文件名里的版本号，老代次固定 63330——
+    /// 这样官方包内若同时存在两代文件，选中的是更新的那一代。
+    /// </summary>
+    private static long DllGenerationRank(string fileName)
+    {
+        var v = ParseNewStyleDllVersion(fileName);
+        return v >= 0 ? v : 63330;
+    }
+
+    /// <summary>
+    /// 由 DLL 文件名推导它所属的代次（三件套必须配套，见 <see cref="DdFlavor"/>）。
+    /// 不认识的文件名（Change box 的 DD64.dll 等）返回 null：不预置服务，交由 DD 自行安装。
+    /// </summary>
+    private static DdFlavor? ResolveFlavor(string dllPath)
+    {
+        var name = Path.GetFileName(dllPath);
+        if (string.Equals(name, LegacyFlavor.DllName, StringComparison.OrdinalIgnoreCase)) return LegacyFlavor;
+        var version = ParseNewStyleDllVersion(name);
+        if (version < 0) return null;
+        var ver = Path.GetFileNameWithoutExtension(name).Substring("dd.".Length);
+        return new DdFlavor(name, $"dd{ver}.sys", $"dd{ver}");
     }
 
     /// <summary>Change box（第三方 DD 部署）的 DLL 目录；32 位系统上为空目录，探测自然落空。</summary>
@@ -207,7 +312,7 @@ public static class DdDriverService
 
             if (_driverIdentityRejected)
             {
-                LastError = IdentityRejectedMessage;
+                LastError = IdentityRejectedMessage(ActiveFlavor);
                 return false;
             }
 
@@ -217,9 +322,10 @@ public static class DdDriverService
             if (path is null)
             {
                 LastError = wrongArch is null
-                    ? "未找到 dd63330.dll（已查找：程序目录、%APPDATA%\\TheCelestialDiviner\\drivers、Change Box\\DLL）"
+                    ? "未找到 DD 驱动（dd63330.dll 或 dd.<版本号>.dll；已查找：程序目录、"
+                      + "%APPDATA%\\TheCelestialDiviner\\drivers、Change Box\\DLL）"
                     : $"{Path.GetFileName(wrongArch)} 是 32 位（x86）DLL，本程序是 64 位进程，无法加载。"
-                      + "请换用 64 位（x64）版本的 dd63330.dll（官方 2026 版约 3.7 MB）";
+                      + "请换用 64 位（x64）版本（官方新版文件名形如 dd.71000.dll，约 3.8 MB）";
                 return false;
             }
 
@@ -237,7 +343,8 @@ public static class DdDriverService
                     return false;
                 }
                 _loadedPath = path;
-                Logger.Info($"已加载 DD 驱动库：{path}");
+                _activeFlavor = ResolveFlavor(path);
+                Logger.Info($"已加载 DD 驱动库：{path}（代次 {_activeFlavor?.ServiceName ?? "未知，跳过服务预置"}）");
             }
 
             _ddBtn = GetProc<DdBtnFunc>("DD_btn");
@@ -289,7 +396,7 @@ public static class DdDriverService
             VkCodeCache.Clear();
             EchoGuard.Reset();
             Logger.Info($"DD 虚拟驱动初始化成功（{Path.GetFileName(_loadedPath)}）。");
-            KeepKernelDriverSys();
+            KeepKernelDriverSys(ActiveFlavor);
             return true;
         }
     }
@@ -311,7 +418,9 @@ public static class DdDriverService
     {
         try
         {
-            var sys = ResolveDriverSys(out var conflict);
+            // 代次决定"预置哪个服务"：老用户是 dd63330，新用户是 dd71000（或未来版本）。
+            var flavor = ActiveFlavor;
+            var sys = ResolveDriverSys(flavor, out var conflict);
             if (conflict is not null) Logger.Warn(conflict);
 
             var scm = OpenSCManagerW(null, null, SC_MANAGER_ALL_ACCESS);
@@ -322,12 +431,26 @@ public static class DdDriverService
             }
             try
             {
-                var service = OpenServiceW(scm, DriverServiceName, SERVICE_ALL_ACCESS);
+                // ---- 跨代次保护：两代 DD 内核驱动不能同时驻留 ----
+                // 场景：老用户只把 dd63330.dll 删了、留下新代次文件（或反之），而老驱动还在内核里跑。
+                // 两套 legacy 虚拟设备同时注入会互相踩，属 0x50 的典型成因，宁可本次不启用。
+                // 重启后旧服务是"按需启动"，不会被自动拉起，新代次即可正常使用。
+                if (!string.Equals(flavor.ServiceName, LegacyFlavor.ServiceName, StringComparison.Ordinal)
+                    && IsServiceRunning(scm, LegacyFlavor.ServiceName))
+                {
+                    LastError = $"旧版 {LegacyFlavor.ServiceName} 驱动仍在系统中运行："
+                                + "同一台机器不能同时加载两代 DD 驱动。请重启电脑后再使用"
+                                + $"（重启后旧驱动不会自动加载，程序会改用当前这一代 {flavor.ServiceName}）。";
+                    Logger.Error(LastError);
+                    return false;
+                }
+
+                var service = OpenServiceW(scm, flavor.ServiceName, SERVICE_ALL_ACCESS);
 
                 // ---- 身份校验：服务登记的映像必须就是我们要用的那一份 ----
                 if (service != IntPtr.Zero && sys is not null)
                 {
-                    var registered = ReadServiceImagePath(DriverServiceName);
+                    var registered = ReadServiceImagePath(flavor.ServiceName);
                     var running = QueryServiceStatus(service, out var st) && st.dwCurrentState == SERVICE_RUNNING;
                     if (registered is not null && !PathsEqual(registered, sys.Path))
                     {
@@ -356,7 +479,7 @@ public static class DdDriverService
                             // DeleteService 只是"标记删除"，驱动会继续运行到下次重启；
                             // 重启后服务项按当前版本重建（本进程内不再重试，见 _driverIdentityRejected）。
                             Logger.Error($"DD 驱动身份不一致：服务指向 {registered}，当前版本 {sys.Path}；已放弃本次 DD 初始化。");
-                            LastError = IdentityRejectedMessage;
+                            LastError = IdentityRejectedMessage(flavor);
                             _driverIdentityRejected = true;
                             DeleteService(service);
                             CloseServiceHandle(service);
@@ -376,14 +499,14 @@ public static class DdDriverService
                 {
                     if (sys is null)
                     {
-                        Logger.Info("预置 DD 内核服务：服务不存在且无自带 dd63330.sys，交由 DD 自行安装。");
+                        Logger.Info($"预置 DD 内核服务：服务不存在且无自带 {flavor.SysName}，交由 DD 自行安装。");
                         return true;
                     }
                     var err = 0;
                     // 旧服务可能处于"标记删除"未完成状态（1072），稍等重试。
                     for (var attempt = 1; ; attempt++)
                     {
-                        service = CreateServiceW(scm, DriverServiceName, DriverServiceName, SERVICE_ALL_ACCESS,
+                        service = CreateServiceW(scm, flavor.ServiceName, flavor.ServiceName, SERVICE_ALL_ACCESS,
                             SERVICE_KERNEL_DRIVER, SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
                             sys.Path, null, IntPtr.Zero, null, null, null);
                         if (service != IntPtr.Zero) break;
@@ -400,7 +523,7 @@ public static class DdDriverService
 
                 if (QueryServiceStatus(service, out var status) && status.dwCurrentState == SERVICE_RUNNING)
                 {
-                    Logger.Info("预置 DD 内核服务：dd63330 驱动已在运行。");
+                    Logger.Info($"预置 DD 内核服务：{flavor.ServiceName} 驱动已在运行。");
                     return true;
                 }
                 if (!StartServiceW(service, 0, IntPtr.Zero))
@@ -431,12 +554,12 @@ public static class DdDriverService
                         Logger.Warn($"预置 DD 内核服务：恢复失败（err={err}），删除并重建服务...");
                         DeleteService(service);
                         CloseServiceHandle(service);
-                        service = CreateServiceW(scm, DriverServiceName, DriverServiceName, SERVICE_ALL_ACCESS,
+                        service = CreateServiceW(scm, flavor.ServiceName, flavor.ServiceName, SERVICE_ALL_ACCESS,
                             SERVICE_KERNEL_DRIVER, SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
                             sys.Path, null, IntPtr.Zero, null, null, null);
                         if (service != IntPtr.Zero && StartServiceW(service, 0, IntPtr.Zero))
                         {
-                            Logger.Info("预置 DD 内核服务：已重建并启动 dd63330 驱动。");
+                            Logger.Info($"预置 DD 内核服务：已重建并启动 {flavor.ServiceName} 驱动。");
                             return true;
                         }
                         err = Marshal.GetLastWin32Error();
@@ -448,7 +571,7 @@ public static class DdDriverService
                     Logger.Warn($"预置 DD 内核服务：StartService 失败（err={err}），交由 DD 自行处理。");
                     return true;
                 }
-                Logger.Info("预置 DD 内核服务：dd63330 驱动已启动。");
+                Logger.Info($"预置 DD 内核服务：{flavor.ServiceName} 驱动已启动。");
                 return true;
             }
             finally
@@ -474,17 +597,17 @@ public static class DdDriverService
     /// 用它建服务等于给来路不明的驱动发身份证。
     /// </summary>
     /// <param name="conflict">多份文件内容不一致时的说明（仅记日志，不改变选择）。</param>
-    private static DriverSysFile? ResolveDriverSys(out string? conflict)
+    private static DriverSysFile? ResolveDriverSys(DdFlavor flavor, out string? conflict)
     {
         conflict = null;
         var candidates = new List<string>();
         if (_loadedPath is not null)
         {
             var dir = Path.GetDirectoryName(_loadedPath);
-            if (!string.IsNullOrEmpty(dir)) candidates.Add(Path.Combine(dir, "dd63330.sys"));
+            if (!string.IsNullOrEmpty(dir)) candidates.Add(Path.Combine(dir, flavor.SysName));
         }
-        candidates.Add(Path.Combine(AppContext.BaseDirectory, "dd63330.sys"));
-        candidates.Add(Path.Combine(AppDataDriversDir, "dd63330.sys"));
+        candidates.Add(Path.Combine(AppContext.BaseDirectory, flavor.SysName));
+        candidates.Add(Path.Combine(AppDataDriversDir, flavor.SysName));
 
         DriverSysFile? first = null;
         var hashed = new List<DriverSysFile>();
@@ -503,7 +626,7 @@ public static class DdDriverService
             var kinds = hashed.Select(x => x.Hash).Distinct(StringComparer.OrdinalIgnoreCase).Count();
             if (kinds > 1)
             {
-                conflict = "找到多份内容不同的 dd63330.sys（"
+                conflict = $"找到多份内容不同的 {flavor.SysName}（"
                     + string.Join("、", hashed.Select(x => $"{x.Path} = {x.Hash.Substring(0, 16)}…"))
                     + "），已按与 DLL 同目录的那份为准。";
             }
@@ -526,6 +649,21 @@ public static class DdDriverService
         catch
         {
             return null;
+        }
+    }
+
+    /// <summary>查询服务是否处于运行状态（服务不存在 / 无权限一律视为"没有运行"）。</summary>
+    private static bool IsServiceRunning(IntPtr scm, string serviceName)
+    {
+        var handle = OpenServiceW(scm, serviceName, SERVICE_QUERY_STATUS);
+        if (handle == IntPtr.Zero) return false;
+        try
+        {
+            return QueryServiceStatus(handle, out var status) && status.dwCurrentState == SERVICE_RUNNING;
+        }
+        finally
+        {
+            CloseServiceHandle(handle);
         }
     }
 
@@ -595,15 +733,15 @@ public static class DdDriverService
     /// 2）仅当它是"刚被释放"的、且 %APPDATA% 还没有副本时，才收编为固定副本（后续预置服务用）。
     /// 旧文件可能是别的软件很久以前留下的，收编它等于给来路不明的驱动发身份证。
     /// </summary>
-    private static void KeepKernelDriverSys()
+    private static void KeepKernelDriverSys(DdFlavor flavor)
     {
         try
         {
-            var temp = Path.Combine(Path.GetTempPath(), "dd63330.sys");
+            var temp = Path.Combine(Path.GetTempPath(), flavor.SysName);
             if (!File.Exists(temp)) return;
 
             var tempHash = TryHashFile(temp);
-            var target = Path.Combine(AppDataDriversDir, "dd63330.sys");
+            var target = Path.Combine(AppDataDriversDir, flavor.SysName);
 
             if (File.Exists(target))
             {
@@ -620,7 +758,7 @@ public static class DdDriverService
             var age = DateTime.Now - File.GetLastWriteTime(temp);
             if (age > TimeSpan.FromMinutes(15))
             {
-                Logger.Warn($"%TEMP% 的 dd63330.sys 是 {age.TotalHours:0.#} 小时前的旧文件，未收编（可能来自其他软件）。");
+                Logger.Warn($"%TEMP% 的 {flavor.SysName} 是 {age.TotalHours:0.#} 小时前的旧文件，未收编（可能来自其他软件）。");
                 return;
             }
 
@@ -655,17 +793,29 @@ public static class DdDriverService
         _ddBtn = null;
         if (_dllHandle != IntPtr.Zero) { FreeLibrary(_dllHandle); _dllHandle = IntPtr.Zero; }
         _loadedPath = null;
+        _activeFlavor = null;
         _initialized = false;
     }
 
     // ---------- 驱动自动获取（官方发布包 → 解包 → 安装到 %APPDATA% drivers） ----------
 
-    private const string DdLatestApiUrl =
-        "https://api.github.com/repos/ddxoft/master/releases/latest";
+    /// <summary>
+    /// Release **列表**接口（不是 /releases/latest）。
+    /// 官方 2026-11 的 <c>hid.7xxxx</c> 被标成了 prerelease，而 GitHub 的
+    /// <c>/releases/latest</c> 只返回非预发布版——那一个接口会直接 404，
+    /// 于是自动获取会退到写死的旧直链、再 404、然后无限重试（真实故障，不是推测）。
+    /// 列表接口不受预发布标记影响，且天然能跟上官方后续换代。
+    /// </summary>
+    private const string DdReleasesApiUrl =
+        "https://api.github.com/repos/ddxoft/master/releases";
 
-    /// <summary>API 不可达 / 配额耗尽时的兜底直链（DD 官方 2026 x64 免费版发布资产）。</summary>
+    /// <summary>
+    /// API 不可达 / 配额耗尽时的兜底直链。**只作最后手段**：官方换代时会删掉旧资产
+    /// （2026-11 就删掉了 <c>2026.DD.EV.HVCI.63xxx</c>，旧硬编码直链已成 404），
+    /// 因此这里的值随时可能失效，正常路径永远是上面的 Release 列表。
+    /// </summary>
     private const string DdFallbackAssetUrl =
-        "https://github.com/ddxoft/master/releases/download/2026.DD.EV.HVCI.63xxx/2026.DD.EV.HVCI.63xxx.7z";
+        "https://github.com/ddxoft/master/releases/download/hid.7xxxx/hid.7xxxx.7z";
 
     private static readonly HttpClient AutoFetchHttp = CreateAutoFetchClient();
 
@@ -723,9 +873,10 @@ public static class DdDriverService
     }
 
     /// <summary>
-    /// 后台单飞启动"自动获取 DD 驱动"：探测 exe / APPDATA 目录无 dd63330.dll 时，
+    /// 后台单飞启动"自动获取 DD 驱动"：探测 exe / APPDATA 目录无可用 DD 用户态 DLL
+    /// （老代次 dd63330.dll 或新代次 dd.&lt;版本&gt;.dll）时，
     /// 从 DD 官方发布渠道（github.com/ddxoft，作者自己的发布页，下载器性质不做二次分发）
-    /// 下载官方 7z 包，用随包 7zr.exe 解出 dd63330.dll 安装到 %APPDATA% drivers。
+    /// 下载官方 7z 包，用随包 7zr.exe 解出**官方当前发布的那一代** DLL 安装到 %APPDATA% drivers。
     /// 全程不抛异常，进度与结果经 Logger 留痕；完成（无论成败）触发 AutoFetchCompleted。
     /// 重复调用安全（进行中直接忽略）。
     /// </summary>
@@ -757,11 +908,12 @@ public static class DdDriverService
     /// DD 官方渠道在 GitHub，国内可达性波动大，重试是常态而非异常。</summary>
     private static void RunAutoFetch()
     {
-        // 只认可加载的 x64 版 dd63330.dll：位数不符（用户手动从官网拿到 32 位那份）时
+        // 只认可加载的 x64 版 DD DLL：位数不符（用户手动从官网拿到 32 位那份）时
         // 不算"已有驱动"——否则自动获取会直接跳过，用户永远卡在一个加载不了的文件上。
+        // 老用户（目录里已有可用的 dd63330.dll）在这里就返回，绝不会被拉去下载新代次。
         if (ProbeDll(out var wrongArch) is not null)
         {
-            Logger.Info("DD 驱动自动获取：探测到可用的 x64 dd63330.dll，跳过下载。");
+            Logger.Info("DD 驱动自动获取：探测到可用的 x64 DD 用户态 DLL（含老代次 dd63330.dll），跳过下载。");
             return;
         }
         if (wrongArch is not null)
@@ -819,7 +971,7 @@ public static class DdDriverService
         // 1. 解析官方资产直链：优先 GitHub API 拿最新 Release，失败退回硬编码直链。
         var assetUrl = ResolveLatestAssetUrl() ?? DdFallbackAssetUrl;
 
-        // 2. 下载官方 7z 包（约 3.7MB，3 分钟超时兜底）。流式读 + 分块报进度：
+        // 2. 下载官方 7z 包（约 3.5MB，3 分钟超时兜底）。流式读 + 分块报进度：
         //    一次 ReadAsByteArrayAsync 拿不到任何中间状态，用户在整个下载期看不到反馈。
         var archivePath = Path.Combine(workDir, "dd.7z");
         using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3)))
@@ -828,7 +980,7 @@ public static class DdDriverService
             response.EnsureSuccessStatusCode();
             var total = response.Content.Headers.ContentLength;   // 可能为 null（分块传输）
             ReportProgress(DdFetchStage.Downloading, attempt,
-                $"DD 驱动获取中：正在下载官方安装包（{(total is > 0 ? $"{total / 1024.0 / 1024.0:0.0} MB" : "约 3.7 MB")}）…");
+                $"DD 驱动获取中：正在下载官方安装包（{(total is > 0 ? $"{total / 1024.0 / 1024.0:0.0} MB" : "约 3.5 MB")}）…");
             // net48 的 HttpContent.ReadAsStreamAsync 没有 CancellationToken 重载：
             // 取消由下面的分块 ReadAsync(token) 生效（3 分钟总超时兜底）。
             using var stream = response.Content.ReadAsStreamAsync().ConfigureAwait(false).GetAwaiter().GetResult();
@@ -843,7 +995,7 @@ public static class DdDriverService
                 if (read <= 0) break;
                 file.Write(buffer, 0, read);
                 received += read;
-                // 限频（300ms）：3.7MB 在快网络下几百毫秒就完，逐块上报会刷屏。
+                // 限频（300ms）：3.5MB 在快网络下几百毫秒就完，逐块上报会刷屏。
                 if (Environment.TickCount - lastTick < 300) continue;
                 lastTick = Environment.TickCount;
                 ReportProgress(DdFetchStage.Downloading, attempt, total is > 0
@@ -871,21 +1023,39 @@ public static class DdDriverService
                 throw new Exception($"官方包解包失败（exit={(proc?.HasExited == true ? proc.ExitCode : -1)}，可能下载不完整）");
         }
 
-        // 4. 定位 dd63330.dll：官方包内含多个版本变体（1.simple 为免费标准版），优先取 simple。
-        var dll = Directory.EnumerateFiles(extractDir, "dd63330.dll", SearchOption.AllDirectories)
+        // 4. 定位官方包里的用户态 DLL。允许两种命名：
+        //    老代次 dd63330.dll（旧包）／ 新代次 dd.<版本号>.dll（2026-11 起的包，如 dd.71000.dll）。
+        //    hid.72000.dll 属 HID 路线（要 INF 安装 ddhid72000 驱动），与本模式的 legacy 设备路线不兼容，排除。
+        //    同一版本存在多个变体目录时（旧包的 1.simple 为免费标准版）仍优先 simple。
+        var dll = Directory.EnumerateFiles(extractDir, "*.dll", SearchOption.AllDirectories)
+            .Where(path => IsUsableDllName(Path.GetFileName(path)))
             .OrderBy(path => path.IndexOf("simple", StringComparison.OrdinalIgnoreCase) >= 0 ? 0 : 1)
+            .ThenByDescending(path => DllGenerationRank(Path.GetFileName(path)))
             .ThenBy(path => path.Length)
             .FirstOrDefault();
         if (dll is null)
-            throw new NoRetryException("官方包内未找到 dd63330.dll（上游内容可能已变化）");
+            throw new NoRetryException("官方包内未找到可用的 DD 用户态 DLL（dd63330.dll 或 dd.<版本号>.dll；上游内容可能已变化）");
 
-        // 5. 安装到 %APPDATA% drivers（探测顺序中的既有位置；包内含 sys 时一并安装）。
+        var dllName = Path.GetFileName(dll);
+        var flavor = ResolveFlavor(dll);
+        Logger.Info($"DD 驱动自动获取：选用官方包内 {dllName}（代次 {flavor?.ServiceName ?? "未知"}）。");
+
+        // 5. 安装到 %APPDATA% drivers（探测顺序中的既有位置）。
+        //    **文件名保持官方原名**：DLL / sys / 服务名的配套关系由文件名推导，改名会直接造成版本错位。
         Directory.CreateDirectory(AppDataDriversDir);
-        File.Copy(dll, Path.Combine(AppDataDriversDir, "dd63330.dll"), overwrite: true);
-        var sys = Directory.EnumerateFiles(extractDir, "dd63330.sys", SearchOption.AllDirectories)
-            .FirstOrDefault();
-        if (sys is not null)
-            File.Copy(sys, Path.Combine(AppDataDriversDir, "dd63330.sys"), overwrite: true);
+        File.Copy(dll, Path.Combine(AppDataDriversDir, dllName), overwrite: true);
+
+        //    新版官方包里不再单独提供内核驱动（dd71000.sys 内嵌在 DLL 内，由 DD_btn 自释放，
+        //    随后被 KeepKernelDriverSys 收编）；旧包里有 dd63330.sys，有就一并装上。
+        if (flavor is not null)
+        {
+            var sys = Directory.EnumerateFiles(extractDir, flavor.SysName, SearchOption.AllDirectories)
+                .FirstOrDefault();
+            if (sys is not null)
+                File.Copy(sys, Path.Combine(AppDataDriversDir, flavor.SysName), overwrite: true);
+            else
+                Logger.Info($"DD 驱动自动获取：官方包内未附带 {flavor.SysName}（新版为内嵌自释放，属正常）。");
+        }
     }
 
     /// <summary>重试无意义的硬性失败（缺随包工具 / 上游内容变化），重试循环收到后直接终止。</summary>
@@ -908,22 +1078,53 @@ public static class DdDriverService
     /// 查询 DD 官方最新 Release 的 7z 资产直链（GitHub API 匿名限流 / 网络失败返回 null，
     /// 调用方退回硬编码直链）。
     /// </summary>
+    /// <summary>
+    /// 查询 DD 官方最新 Release（含预发布）的 7z 资产直链。
+    /// GitHub API 匿名限流 / 网络失败返回 null，调用方退回硬编码直链。
+    /// 按发布时间的先后取最新，不依赖 tag 命名（官方从 <c>2026.DD.EV.HVCI.63xxx</c>
+    /// 换到 <c>hid.7xxxx</c>，以后可能还会变）。
+    /// </summary>
     private static string? ResolveLatestAssetUrl()
     {
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            using var response = AutoFetchHttp.GetAsync(DdLatestApiUrl, cts.Token).ConfigureAwait(false).GetAwaiter().GetResult();
-            if (!response.IsSuccessStatusCode) return null;
+            using var response = AutoFetchHttp.GetAsync(DdReleasesApiUrl, cts.Token).ConfigureAwait(false).GetAwaiter().GetResult();
+            if (!response.IsSuccessStatusCode)
+            {
+                Logger.Info($"DD 官方 Release 列表查询失败（HTTP {(int)response.StatusCode}，改用内置直链）。");
+                return null;
+            }
             var json = response.Content.ReadAsStringAsync().ConfigureAwait(false).GetAwaiter().GetResult();
             using var doc = System.Text.Json.JsonDocument.Parse(json);
-            foreach (var asset in doc.RootElement.GetProperty("assets").EnumerateArray())
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array) return null;
+
+            string? best = null;
+            var bestAt = DateTime.MinValue;
+            foreach (var release in doc.RootElement.EnumerateArray())
             {
-                var name = asset.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
-                var url = asset.TryGetProperty("browser_download_url", out var u) ? u.GetString() ?? "" : "";
-                if (url.Length > 0 && name.EndsWith(".7z", StringComparison.OrdinalIgnoreCase)) return url;
+                // published_at 缺失或格式异常时视为最旧：宁可让位给能解析的那一条。
+                var at = release.TryGetProperty("published_at", out var p)
+                         && DateTime.TryParse(p.GetString(), out var dt)
+                    ? dt
+                    : DateTime.MinValue;
+
+                if (!release.TryGetProperty("assets", out var assets)
+                    || assets.ValueKind != System.Text.Json.JsonValueKind.Array) continue;
+
+                foreach (var asset in assets.EnumerateArray())
+                {
+                    var name = asset.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                    var url = asset.TryGetProperty("browser_download_url", out var u) ? u.GetString() ?? "" : "";
+                    if (url.Length == 0 || !name.EndsWith(".7z", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (best is not null && at <= bestAt) continue;
+                    best = url;
+                    bestAt = at;
+                }
             }
-            return null;
+            if (best is not null)
+                Logger.Info($"DD 官方最新 Release 资产：{best}（发布于 {bestAt:yyyy-MM-dd HH:mm} UTC）");
+            return best;
         }
         catch (Exception ex)
         {
@@ -1028,8 +1229,8 @@ public static class DdDriverService
 
     /// <summary>
     /// 探测可用 DD DLL（返回绝对路径；只认 **x64** 且导出可用的候选）：
-    /// 1. exe 目录 dd63330.dll（官方 x64）
-    /// 2. %APPDATA%\TheCelestialDiviner\drivers\dd63330.dll（自动获取的安装位置）
+    /// 1. exe 目录 / %APPDATA%\TheCelestialDiviner\drivers 的老代次 dd63330.dll
+    /// 2. 同两处的新代次 dd.&lt;版本&gt;.dll（版本号大的优先）
     /// 3. Change box 目录 DD64.dll（32 位时间锁版 —— x64 进程加载必失败）
     ///
     /// <paramref name="wrongArch"/> 回传"文件在位但位数不对"的那个路径：DD 官方按位数分包，
@@ -1049,6 +1250,7 @@ public static class DdDriverService
         foreach (var path in candidates)
         {
             if (!File.Exists(path)) continue;
+            // 纯探测、无副作用：候选顺序即"老代次优先"的策略，代次由 EnsureReady 在加载时确定。
             if (ReadPeMachine(path) == MachineAmd64) return path;
             wrongArch ??= path;   // 记住第一个位数不符的，供 LastError 说明
         }
