@@ -318,6 +318,44 @@
 - ⚠️ 边界：dll 物理缺失 / 目录只读救不了（照旧完整提示）；即使外部工具每次开机重铺缓存，
   自愈每轮自动跑，用户无感；Toggle 自环"按下被吞"是同源疾病未修（见坑 1 不变量 7）
 
+## 发版 v1.9.9（2026-11-09）
+
+- 🚀 DD 官方换代适配（临时插入的补丁版，无待发设计节）：官方已删除 `2026.DD.EV.HVCI.63xxx`
+  发布、资产换成 `hid.7xxxx.7z`（内含 `dd.71000.dll`），而该发布被标为 prerelease →
+  `/releases/latest` 直接 404 → 退硬编码旧直链 → 再 404 → **无限重试零进展**，
+  新用户永远装不上驱动（用户报"官网似乎更新了驱动"后实测确认）
+- ✅ 实测核查：旧直链与 `/releases/latest` 双 404；新包 `dd.71000.dll` 3,815,272 B，
+  导出的 7 个函数与旧版完全一致；内嵌 x64 原生镜像（subsystem=1，SizeOfImage≈1.29MB）
+  + 字符串 `dd71000.sys` / `\\.\dd71000` → 与旧版同构的「自释放 sys + legacy 同名服务」，
+  不是 `hid.72000.dll` 那条 INF/PnP 路线
+- 🔧 `DdDriverService`：引入 `DdFlavor` 代次（DLL / sys / 服务名三件套整体切换，禁止混搭）；
+  候选顺序**老代次 dd63330（exe → APPDATA → Change box）全部走完才轮新代次**
+  `dd.<版本号>.dll`（版本降序通配，官方再换代不必发版）；Release 解析改**列表接口**
+  按 published_at 取最新 .7z；解包选包兼容两代、安装保持官方原名；新增跨代次驻留保护
+  （旧代次驱动仍在内核 → 拒绝新代次并要求重启）
+- ✅ 老用户口径：`ProbeDll` 命中 dd63330 即跳过下载，升级不换驱动
+  （换驱动 = 换内核 sys = 0x50 最高发风险）
+- 📦 csproj `Version` / `FileVersion` → **1.9.9 / 1.9.9.0**；`dotnet publish -c Release` 成功；
+  内嵌 CHANGELOG 首标题 `## v1.9.9 — 2026-11-09`、无 `## 未发布` 标题残留（exe 字节扫描）
+- 📄 `docs/release-notes/v1.9.9-release-notes.md`（使用范围声明 / 换驱动来龙去脉 / 老用户零变化 /
+  跨代次保护 / 手动放驱动 / 升级方式 / 已知问题含"新驱动未长期实测"）
+- 📦 `dist/TheCelestialDiviner-1.9.9-win64/` 21 项（含 `interception\` 三文件，**不含**闭源
+  DD 驱动；非 exe 项与 1.9.8 逐字节一致，仅 exe 不同）
+- 📦 `dist/TheCelestialDiviner-1.9.9-win64.zip`：23 个文件 / 1,995,854 B，
+  sha256 `2095f61079a93918b08fa327a406b01ed93229de2fc9c581e6b6f6f1a74858f5`
+- ✅ commit `c636b17`（v1.9.9 发版），标签 `v1.9.9`（注释对象 `1f6f0f2`，双端 ls-remote 一致）
+- ✅ Gitee Release <https://gitee.com/sofqi/The-Celestial-Diviner/releases/tag/v1.9.9>
+  （release id **1291282** / 附件 id **3644112**，1,995,854 B）；GitHub Release
+  <https://github.com/Dyse-Sofqi/The-Celestial-Diviner/releases/tag/v1.9.9>（asset state=uploaded，
+  API digest sha256 与本地一致）
+- ✅ 通道验证：Gitee API `releases/latest` → `v1.9.9`；Gitee 直链 HTTP 200
+  （302 → foruda 附件，下载 1,995,854 B / sha256 与本地一致）；raw CHANGELOG（备用通道）
+  首个版本标题已显示 `## v1.9.9 — 2026-11-09`
+- ✅ 坑 5 顺序执行：先打包 → push gitee（main + 标签）→ **立刻**建 Gitee Release → push origin
+  → gh release create；标签重写坑未复发
+- ⏳ 未做：新驱动（dd.71000）实机安装验证——本机装的是 dd63330 老代次，不能拿用户机器试装
+  新内核驱动；要等首个新用户实测，失败路径已兜底（明示原因 + 回退普通模式）
+
 ## 发版 v1.9.8（2026-11-09）
 
 - 🚀 录入反馈与键位提示——一轮「看得见」的改进（设计见上面待发节）：录入拒绝上提示条
