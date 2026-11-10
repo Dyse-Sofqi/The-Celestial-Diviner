@@ -318,6 +318,48 @@
 - ⚠️ 边界：dll 物理缺失 / 目录只读救不了（照旧完整提示）；即使外部工具每次开机重铺缓存，
   自愈每轮自动跑，用户无感；Toggle 自环"按下被吞"是同源疾病未修（见坑 1 不变量 7）
 
+## 发版 v1.9.10（2026-11-10）
+
+- 🚀 用户报「成为莫问高手语音不响，其他语音都正常」→ 日志实证
+  `11:06:58.981 [ERROR] 莫问糕手启动提示音加载失败。 | COMException: 0xC00D11B1`
+- 🔍 先排除面（全部实测，非推测）：音频合法（PCM 16bit/32kHz/单声道，RIFF·fmt·data 长度自洽，
+  与临时目录缓存 md5 一致）；WPF MediaPlayer 单次打开 / 空闲重载 / 播放中重载 / 完整播完 2.6s
+  全部 `MediaOpened` 成功、零 `MediaFailed`；中文目录 / 含空格路径 / 中文文件名 URI 转义正常；
+  `1.9.9` 发布包 23 项含音频 8 个 → **不是文件、不是路径、不是打包**
+- 🔍 真因：切方案档位 → `ApplyAppearance → ApplyTheme → ReloadAll` 对**正在播放**的通道做
+  `Stop/Close/Open`，且旧的 `Reload()` 复用同一 MediaPlayer 实例；WMP 播放中被关闭后内部会话
+  残留，再次 Open 即报 0xC00D11B1，该通道此后静默直到下一次 ApplyTheme。时间线上
+  `11:06:57.079` 播莫问启动音（1.66s）→ `11:06:58.623` 切档重装 → `58.981` 报错。
+  莫问启动音是唯一「播放中被重装」的通道（其余语音都在重装之后才播），故只有它中招
+- 🔧 `SoundCueService` 装载层重写：私有 `Cue` 通道类（Player / Source / Ready / Failed / 重试计数），
+  6 个通道（启动·停止·切换·衍天启动·莫问启动·试听）全部纳入：① 同源且已就绪**不重装**
+  （不再打断正在播放的声音）② 换源换**全新 MediaPlayer 实例** ③ `MediaFailed` 250ms 重试一次 +
+  播放前 `EnsureReady` 自愈 ④ `ExtractToTemp` 写不进时改用 SHA256 前 4 字节备用名
+  （此前一次写失败会让衍天 + 莫问两个启动变体**一起**静音）
+- 🔧 「没声音」全面显式化（此前只有日志、界面零反馈）：新增 `VoiceSetupWarning` + 语音设置
+  顶部警示条（音量 0 / 无输出设备 / 配套缺失 / 自定义文件丢失）；`VoiceDefaultLabel` 缺文件时
+  标出「默认音频（缺少 高松灯启动.mp3）」；`PreviewThemeVoice` / `PreviewFile` 改返回 bool，
+  试听无声弹提示；启动写「语音自检」日志（主题 / 缺失项 / 音量 / waveOut 设备数，
+  新增 `NativeMethods.waveOutGetNumDevs`）
+- 📦 csproj → **1.9.10 / 1.9.10.0**；`dotnet publish -c Release` 0 警告 0 错误；
+  exe `ProductVersion = 1.9.10+84cffe9…`（本次提交）
+- 📄 `docs/release-notes/v1.9.10-release-notes.md`（使用范围声明 / 两条修复来龙去脉 /
+  「现在遇到没声音怎么自查」三步 / 升级方式 / 沿自旧版的已知问题）
+- 📦 `dist/TheCelestialDiviner-1.9.10-win64/` 21 项（含 `interception\` 三文件，**不含**闭源
+  DD 驱动；非 exe 项与 1.9.9 逐字节一致，仅 exe 不同）
+- 📦 `dist/TheCelestialDiviner-1.9.10-win64.zip`：23 个文件 / 2,002,936 B，
+  sha256 `db98fc2e4cd75e0f29ece3dd13a3a42dfd59e0b338a6f8f329e92c1a4dbcb1e0`
+- ✅ commit `84cffe9`，标签 `v1.9.10`（**轻量标签**，双端 `ls-remote` 同为 `84cffe9e…`；
+  1.9.9 及以前是 annotated，下次发版统一回 annotated）
+- ✅ Gitee Release <https://gitee.com/sofqi/The-Celestial-Diviner/releases/tag/v1.9.10>
+  （release id **1293501** / 附件 id **3650852**，2,002,936 B）；GitHub Release
+  <https://github.com/Dyse-Sofqi/The-Celestial-Diviner/releases/tag/v1.9.10>
+  （asset `state=uploaded`，API digest sha256 与本地一致）
+- ✅ 通道验证：双端直链 HTTP 200 且 `Content-Length` 均为 2,002,936；raw CHANGELOG（备用通道）
+  双端首个版本标题已是 `## v1.9.10 — 2026-11-10`（Gitee raw 有约 20s 缓存延迟，需 `curl -L`）
+- ✅ 坑 5 顺序执行（本次比 1.9.9 更严）：打包 → **先推 tag（双端）** → 建双端 Release →
+  **最后** push main；备用通道全程不会撞上 404
+
 ## 发版 v1.9.9（2026-11-09）
 
 - 🚀 DD 官方换代适配（临时插入的补丁版，无待发设计节）：官方已删除 `2026.DD.EV.HVCI.63xxx`
