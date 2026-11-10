@@ -276,6 +276,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         _soundVolume = Compat.Clamp(_config.SoundVolume, 0, 100);
         _soundCue.Volume = _soundVolume / 100.0;
         _soundCue.ApplyTheme(CurrentLook.Theme, ThemeSoundFor(CurrentLook.Theme));   // 主题语音方案（高松灯 / 墨提斯 + 按主题自定义）
+        LogVoiceDiagnostics();   // 语音链路自检：缺文件 / 音量 0 在这里一次写清，便于排查“没声音”
 
         // 调度器日志 → UI 日志面板（钩子线程触发，封送到 UI 线程）。
         _scheduler.Log += msg =>
@@ -2519,13 +2520,88 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         GetStoredSound(ThemeSoundConfig(themeIndex), cue) ?? "";
 
     /// <summary>语音设置对话框“默认音频”项的显示名：标注该主题的配套默认来源
-    /// （默认主题 / 衍天高手 = 高松灯，莫问高手 = 墨提斯；配套文件缺失时显示纯“默认音频”）。</summary>
+    /// （默认主题 / 衍天高手 = 高松灯，莫问高手 = 墨提斯）；配套文件**缺失时写明缺哪个文件**
+    /// ——此前只显示纯“默认音频”，用户点试听没声音也看不出原因。</summary>
     public string VoiceDefaultLabel(int themeIndex, SoundCue cue)
     {
         var (start, stop, cycle) = SectThemes.CueFiles(SectThemes.ByIndex(themeIndex));
         var file = cue switch { SoundCue.Start => start, SoundCue.Stop => stop, _ => cycle };
         var path = SoundCueService.FindCandidate(file);
-        return path is null ? "默认音频" : $"默认音频（{SoundCueService.ShortDisplayName(path)}）";
+        return path is null
+            ? $"默认音频（缺少 {file}）"
+            : $"默认音频（{SoundCueService.ShortDisplayName(path)}）";
+    }
+
+    /// <summary>
+    /// 启动时语音链路自检：把“当前主题配套音频是否齐全 / 音量是否为 0”一次写清到日志。
+    /// 用户反馈“按键没声音、连试听都没有”时，看这一条即可区分是缺文件、音量归零，
+    /// 还是文件在但播放器打不开（后者会有 MediaFailed 记录）。
+    /// </summary>
+    private void LogVoiceDiagnostics()
+    {
+        var theme = CurrentLook.Theme;
+        var (start, stop, cycle) = SectThemes.CueFiles(theme);
+        var missing = new[] { start, stop, cycle }
+            .Where(f => SoundCueService.FindCandidate(f) is null)
+            .ToList();
+        if (missing.Count > 0)
+            Logger.Warn($"语音自检：{theme.DisplayName} 主题配套音频缺失 {missing.Count}/3"
+                + $"（{string.Join("、", missing)}）；程序目录 {SoundCueService.AppDir}"
+                + "——缺失的用途静音，可把音频放回程序目录，或「语音设置 → 导入…」自选");
+        else
+            Logger.Info($"语音自检：{theme.DisplayName} 主题配套音频 3/3 就绪，音量 {_soundVolume:0}%");
+
+        if (_soundVolume <= 0)
+            Logger.Warn("语音自检：提示语音音量为 0%，所有提示音（含试听）都不会发声");
+
+        if (NoAudioOutput())
+            Logger.Warn("语音自检：系统当前没有可用的音频输出设备——所有提示音都不会发声，"
+                + "请检查声音设置里的默认播放设备（蓝牙耳机断开 / 设备被禁用时常见）");
+    }
+
+    /// <summary>系统是否没有可用的音频输出设备（检测失败按“有设备”处理，避免误报）。</summary>
+    private static bool NoAudioOutput()
+    {
+        try { return NativeMethods.waveOutGetNumDevs() <= 0; }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// 语音设置对话框顶部的警示文案（null = 一切正常）。三类“点了没声音”的常见原因，
+    /// 此前只在日志里留痕、界面零反馈：音量为 0 / 主题配套音频缺失 / 已选的自定义音频文件丢失。
+    /// </summary>
+    public string? VoiceSetupWarning(int themeIndex)
+    {
+        var problems = new List<string>();
+        if (_soundVolume <= 0)
+            problems.Add("提示语音音量为 0%（底栏音量图标已显示静音态）：所有提示音与试听都不会发声。");
+        if (NoAudioOutput())
+            problems.Add("系统当前没有可用的音频输出设备：所有提示音与试听都不会发声。"
+                + "请检查 Windows 声音设置里的默认播放设备（蓝牙耳机断开 / 设备被禁用时常见）。");
+
+        var theme = SectThemes.ByIndex(themeIndex);
+        var (start, stop, cycle) = SectThemes.CueFiles(theme);
+        var missing = new[] { start, stop, cycle }
+            .Where(f => SoundCueService.FindCandidate(f) is null)
+            .ToList();
+        if (missing.Count > 0)
+            problems.Add($"程序目录里没有找到「{theme.DisplayName}」的配套音频：{string.Join("、", missing)}。"
+                + $"请把音频文件放回程序目录（{SoundCueService.AppDir}，与 exe 同级），"
+                + "或点「导入…」选择自己的音频文件。");
+
+        var lost = new List<string>();
+        foreach (var cue in new[] { SoundCue.Start, SoundCue.Stop, SoundCue.Cycle })
+        {
+            var stored = GetStoredSound(ThemeSoundConfig(themeIndex), cue);
+            if (stored is { Length: > 0 } &&
+                !File.Exists(Path.Combine(SoundCueService.SoundsDir, stored)))
+                lost.Add($"{VoiceCueName(cue)}（{stored}）");
+        }
+        if (lost.Count > 0)
+            problems.Add($"该主题选了自定义语音但文件已丢失：{string.Join("、", lost)}。"
+                + "请重新导入，或在下拉里选回「默认音频」。");
+
+        return problems.Count == 0 ? null : string.Join("\n", problems);
     }
 
     /// <summary>
@@ -2568,8 +2644,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>试听指定主题方案的某用途音频（独立试听播放器，当前主题之外也可试听）：
-    /// 自定义音频优先，否则主题配套音频；两者都不可用时静默。</summary>
-    public void PreviewThemeVoice(int themeIndex, SoundCue cue)
+    /// 自定义音频优先，否则主题配套音频。返回 false = 没找到可播文件（界面据此提示，
+    /// 不再“点了没反应”）。</summary>
+    public bool PreviewThemeVoice(int themeIndex, SoundCue cue)
         => _soundCue.PreviewFile(ResolveThemeVoicePath(themeIndex, cue));
 
     /// <summary>解析主题方案的音频文件路径：自定义（语音目录）优先，否则主题配套（程序目录候选）。</summary>

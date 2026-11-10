@@ -21,6 +21,15 @@
                           Style="{StaticResource RoundedComboStyle}"
                           ToolTip="选择要设置的主题：各主题的语音方案相互独立，随主题切换整套生效"/>
             </StackPanel>
+            <!-- 语音链路警示（默认隐藏）：音量为 0 / 主题配套音频缺失 / 已选的自定义音频文件丢失。
+                 这三类是“按键没声音、连试听都没声音”的全部常见原因，此前只在日志里留痕，
+                 用户端零反馈——点了没反应，也无从判断该怎么修。 -->
+            <Border x:Name="WarnBar" DockPanel.Dock="Top" Visibility="Collapsed"
+                    BorderBrush="{DynamicResource AccentGold}" BorderThickness="1"
+                    CornerRadius="4" Padding="10,8" Margin="0,0,0,10">
+                <TextBlock x:Name="WarnText" TextWrapping="Wrap" FontSize="11" LineHeight="17"
+                           Foreground="{DynamicResource ThemeFg}"/>
+            </Border>
             <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right"
                         Margin="0,16,0,0">
                 <Button Content="关闭" Width="78" Height="28"

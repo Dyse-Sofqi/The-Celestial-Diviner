@@ -1,6 +1,8 @@
 using System.IO;
+using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Threading;
 using TheCelestialDiviner.Helpers;
 using TheCelestialDiviner.Models;
 
@@ -29,6 +31,12 @@ public enum SoundCue
 /// （HasAudio=false、不触发异常、Play 无声），故内嵌资源解包到临时目录以文件 URI 播放；
 /// 主题配套与自定义音频均为磁盘文件，直接以文件 URI 播放。
 /// 音量（0.0~1.0）在每次播放前应用，Play 异步非阻塞。
+/// <para>
+/// 装载策略（1.9.10 修复“成为莫问高手后启动音偶发永久静音”）：每个用途包一个 <see cref="Cue"/>，
+/// 同源且已就绪时**不重装**（切方案会整套 ApplyTheme，无谓的 Stop/Close/Open 会打断正在播放的
+/// 声音，且 MediaPlayer 复用同一实例在播放中被关闭后 WMP 会残留状态、下次 Open 报 0xC00D11B1
+/// 后再无声）；换源时换**全新 MediaPlayer 实例**；MediaFailed 自动重试一次，播放前再自愈一次。
+/// </para>
 /// </summary>
 public sealed class SoundCueService
 {
@@ -38,12 +46,12 @@ public sealed class SoundCueService
     private static readonly Uri MoWenDivinerStartCueUri =
         new("pack://application:,,,/Resources/Sounds/MoWenDivinerStartVoice.wav");
 
-    private readonly MediaPlayer _startPlayer = new();
-    private readonly MediaPlayer _stopPlayer = new();
-    private readonly MediaPlayer _divinerStartPlayer = new();
-    private readonly MediaPlayer _mowenDivinerStartPlayer = new();
-    private readonly MediaPlayer _cyclePlayer = new();
-    private readonly MediaPlayer _previewPlayer = new();   // 试听专用（可播当前主题之外的主题方案音频）
+    private readonly Cue _start = new("启动");
+    private readonly Cue _stop = new("停止");
+    private readonly Cue _divinerStart = new("衍天高手启动");
+    private readonly Cue _mowenDivinerStart = new("莫问糕手启动");
+    private readonly Cue _cycle = new("切换");
+    private readonly Cue _preview = new("试听");   // 试听专用（可播当前主题之外的主题方案音频）
 
     // 主题启动变体（内嵌资源解包到临时目录后的文件 URI；不可自定义，恒为内嵌）。
     private Uri? _defaultDivinerStart;
@@ -108,19 +116,6 @@ public sealed class SoundCueService
 
     public SoundCueService()
     {
-        _startPlayer.MediaFailed += (_, e) =>
-            Logger.Error("启动提示音加载失败。", e.ErrorException);
-        _stopPlayer.MediaFailed += (_, e) =>
-            Logger.Error("停止提示音加载失败。", e.ErrorException);
-        _divinerStartPlayer.MediaFailed += (_, e) =>
-            Logger.Error("衍天高手启动提示音加载失败。", e.ErrorException);
-        _mowenDivinerStartPlayer.MediaFailed += (_, e) =>
-            Logger.Error("莫问糕手启动提示音加载失败。", e.ErrorException);
-        _cyclePlayer.MediaFailed += (_, e) =>
-            Logger.Error("切换提示音加载失败。", e.ErrorException);
-        _previewPlayer.MediaFailed += (_, e) =>
-            Logger.Error("试听音频加载失败。", e.ErrorException);
-
         try
         {
             var dir = Path.Combine(Path.GetTempPath(), Constants.AppFolderName);
@@ -141,6 +136,7 @@ public sealed class SoundCueService
     /// 与主题配套音频（SectThemes.CueFiles：高松灯 / 墨提斯，散装于程序目录）并整套装载。
     /// 切换方案档位 / 方案定制 / 导入配置（ApplyAppearance）与语音设置修改（编辑当前主题时）调用
     /// ——语音方案随主题整套切换。配套文件缺失时该用途静音并留痕（基础提示音已不内嵌）。
+    /// 目标源与当前一致且已就绪的用途不会重装（不打断正在播放的声音）。
     /// </summary>
     public void ApplyTheme(SectTheme theme, CustomSoundConfig? custom)
     {
@@ -185,15 +181,15 @@ public sealed class SoundCueService
         return null;
     }
 
-    /// <summary>按当前优先级重装全部播放器：主题自定义 > 主题配套音频（文件缺失静音）；
+    /// <summary>按当前优先级重装各用途的播放器：主题自定义 > 主题配套音频（文件缺失静音）；
     /// 衍天 / 莫问启动变体不可自定义，恒为内嵌资源。</summary>
     private void ReloadAll()
     {
-        Reload(_startPlayer, _customStart ?? _themeStart);
-        Reload(_stopPlayer, _customStop ?? _themeStop);
-        Reload(_cyclePlayer, _customCycle ?? _themeCycle);
-        Reload(_divinerStartPlayer, _defaultDivinerStart);
-        Reload(_mowenDivinerStartPlayer, _defaultMowenDivinerStart);
+        _start.Load(_customStart ?? _themeStart);
+        _stop.Load(_customStop ?? _themeStop);
+        _cycle.Load(_customCycle ?? _themeCycle);
+        _divinerStart.Load(_defaultDivinerStart);
+        _mowenDivinerStart.Load(_defaultMowenDivinerStart);
     }
 
     /// <summary>自定义文件名 → 文件 URI（空 / 文件缺失返回 null 并留痕）。</summary>
@@ -206,47 +202,25 @@ public sealed class SoundCueService
         return null;
     }
 
-    /// <summary>（重新）装载媒体源：先停播并关闭旧源再打开新源（null = 不打开，保持静音）。</summary>
-    private static void Reload(MediaPlayer player, Uri? uri)
-    {
-        try
-        {
-            player.Stop();
-            player.Close();
-            if (uri is not null) player.Open(uri);
-        }
-        catch (Exception ex)
-        {
-            Logger.Error("提示语音装载失败。", ex);
-        }
-    }
-
     /// <summary>
     /// 释放某个语音的媒体源占用（导入覆盖 / 删除文件前调用；随后 ApplyTheme 会重新装载）。
     /// 不释放时 MediaPlayer 持有文件句柄，覆盖 / 删除自定义音频会失败。
     /// </summary>
-    public void UnloadCue(SoundCue cue)
+    public void UnloadCue(SoundCue cue) => Channel(cue).Close();
+
+    /// <summary>用途 → 对应通道。</summary>
+    private Cue Channel(SoundCue cue) => cue switch
     {
-        try
-        {
-            var player = cue switch
-            {
-                SoundCue.Start => _startPlayer,
-                SoundCue.Stop => _stopPlayer,
-                _ => _cyclePlayer,
-            };
-            player.Stop();
-            player.Close();
-        }
-        catch (Exception ex)
-        {
-            Logger.Error("提示语音释放失败。", ex);
-        }
-    }
+        SoundCue.Start => _start,
+        SoundCue.Stop => _stop,
+        _ => _cycle,
+    };
 
     /// <summary>
-    /// 把内嵌 MP3 解包到临时目录并返回文件 URI。临时文件按内容与内嵌资源比对，
+    /// 把内嵌音频解包到临时目录并返回文件 URI。临时文件按内容与内嵌资源比对，
     /// 一致才复用；音频更换后（同名不同内容）自动重新解包，避免继续播放旧缓存。
+    /// 目标文件被占用（杀软扫描 / 残留句柄）无法覆盖时，改用带内容标记的备用文件名——
+    /// 否则一次写入失败会让两个启动变体（衍天 / 莫问）在本轮运行中整体静音。
     /// </summary>
     private static Uri ExtractToTemp(Uri packUri, string dir, string fileName)
     {
@@ -258,12 +232,49 @@ public sealed class SoundCueService
         src.CopyTo(buffer);
         var data = buffer.ToArray();
 
-        if (!File.Exists(path) || !ContentMatches(path, data))
+        if (File.Exists(path) && ContentMatches(path, data)) return new Uri(path);
+        if (TryWrite(path, data)) return new Uri(path);
+
+        var alt = Path.Combine(dir,
+            $"{Path.GetFileNameWithoutExtension(fileName)}.{ContentTag(data)}{Path.GetExtension(fileName)}");
+        if (TryWrite(alt, data))
         {
-            using var dst = File.Create(path);   // 缓存缺失 / 内容过旧：重写
-            dst.Write(data, 0, data.Length);
+            Logger.Warn($"内嵌提示音原缓存文件被占用，已改用备用文件：{Path.GetFileName(alt)}");
+            return new Uri(alt);
         }
-        return new Uri(path);
+        throw new IOException($"内嵌提示音无法写入临时目录：{path}");
+    }
+
+    /// <summary>写文件（失败返回 false，由调用方决定备用路径）。</summary>
+    private static bool TryWrite(string path, byte[] data)
+    {
+        try
+        {
+            using var dst = File.Create(path);
+            dst.Write(data, 0, data.Length);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Logger.Warn($"内嵌提示音写入失败（{Path.GetFileName(path)}）：{ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>内容标记（SHA256 前 4 字节十六进制）：同名不同内容时用于区分备用文件名。
+    /// net48 无 Convert.ToHexString，手拼（只有 4 字节，开销可忽略）。</summary>
+    private static string ContentTag(byte[] data)
+    {
+        using var sha = SHA256.Create();
+        var hash = sha.ComputeHash(data);
+        var tag = new char[8];
+        for (var i = 0; i < 4; i++)
+        {
+            var b = hash[i];
+            tag[i * 2] = "0123456789abcdef"[b >> 4];
+            tag[i * 2 + 1] = "0123456789abcdef"[b & 0xF];
+        }
+        return new string(tag);
     }
 
     /// <summary>临时文件与内嵌资源内容是否一致（长度 + 逐字节比对；文件被占用等异常按不一致处理）。</summary>
@@ -302,22 +313,23 @@ public sealed class SoundCueService
     /// diviner（成为衍天/莫问高手激活）→ 莫问主题播「莫问糕手启动」、其余播「衍天高手启动」；普通态播「启动」。</summary>
     public void PlayStart(bool diviner = false) =>
         Play(diviner && _customStart is null
-            ? (_moWenActive ? _mowenDivinerStartPlayer : _divinerStartPlayer)
-            : _startPlayer);
+            ? (_moWenActive ? _mowenDivinerStart : _divinerStart)
+            : _start);
 
     /// <summary>播放“停止”提示音（总开关停用时）。</summary>
-    public void PlayStop() => Play(_stopPlayer);
+    public void PlayStop() => Play(_stop);
 
     /// <summary>播放“切换”提示音（切换方案热键触发并实际切换档位时；独立播放器，可与开关语音叠加）。</summary>
-    public void PlayCycle() => Play(_cyclePlayer);
+    public void PlayCycle() => Play(_cycle);
 
     /// <summary>试听指定音频文件（语音设置对话框用；经独立播放器，可试听当前主题之外的主题方案）。
-    /// 路径为空 / 文件缺失时静默忽略。</summary>
-    public void PreviewFile(string? path)
+    /// 返回 false = 没有可播的音频（路径为空 / 文件缺失）——界面据此提示，不再静默无反应。</summary>
+    public bool PreviewFile(string? path)
     {
-        if (path is null || !File.Exists(path)) return;
-        Reload(_previewPlayer, new Uri(path));
-        Play(_previewPlayer);
+        if (path is null || !File.Exists(path)) return false;
+        _preview.Load(new Uri(path));   // 同源已就绪时不重装，播放时从头开始即可
+        Play(_preview);
+        return true;
     }
 
     /// <summary>
@@ -387,17 +399,148 @@ public sealed class SoundCueService
         return Path.GetFileNameWithoutExtension(fileName);
     }
 
-    private void Play(MediaPlayer player)
+    private void Play(Cue cue)
     {
         try
         {
-            player.Position = TimeSpan.Zero; // 连续触发时从头重播
-            player.Volume = _volume;
-            player.Play();
+            cue.EnsureReady();               // 装载失败过（WMP 偶发）→ 就地重装，避免该用途此后永久静音
+            cue.Player.Position = TimeSpan.Zero; // 连续触发时从头重播
+            cue.Player.Volume = _volume;
+            cue.Player.Play();
         }
         catch (Exception ex)
         {
             Logger.Error("提示语音播放失败。", ex);
+        }
+    }
+
+    /// <summary>
+    /// 单个提示音通道：持有播放器与当前装载源。
+    /// 三条约束（均由 0xC00D11B1 静音问题倒推）：
+    /// 1) 同源且已就绪 → 不重装（ApplyTheme 每次切方案都会整套调用，无谓重装会打断正在播的声音）；
+    /// 2) 换源 → 换全新 MediaPlayer 实例（复用实例在播放中被 Stop/Close 后，WMP 内部会话残留，
+    ///    下次 Open 可能报 0xC00D11B1 且此后静默无声，只有重建实例才能恢复）；
+    /// 3) 装载失败 → 250ms 后自动重试一次；播放前若仍处失败态再自愈一次。
+    /// </summary>
+    private sealed class Cue
+    {
+        private readonly string _label;
+        private MediaPlayer _player = new();
+        private int _retries;
+
+        public Cue(string label)
+        {
+            _label = label;
+            Attach();
+        }
+
+        public MediaPlayer Player => _player;
+
+        /// <summary>当前装载源（null = 静音 / 未装载）。</summary>
+        private Uri? Source { get; set; }
+
+        /// <summary>是否已成功装载并可播放（MediaOpened 置真，MediaFailed 置假）。</summary>
+        private bool Ready { get; set; }
+
+        /// <summary>最近一次装载是否失败（供播放前自愈判断）。</summary>
+        private bool Failed { get; set; }
+
+        /// <summary>装载（或保持）目标源：null = 释放并静音。</summary>
+        public void Load(Uri? uri)
+        {
+            if (uri is null)
+            {
+                Close();
+                return;
+            }
+            // 同源：已就绪或正在装载中都不重装，避免打断播放 / 与异步打开竞争。
+            if (Source is not null && Source.Equals(uri) && (Ready || !Failed)) return;
+            Open(uri);
+        }
+
+        /// <summary>播放前自愈：源还在但装载失败过（未静音用途），重新打开一次。</summary>
+        public void EnsureReady()
+        {
+            if (Source is not null && Failed) Open(Source);
+        }
+
+        /// <summary>释放媒体源并回到未装载状态（导入 / 删除自定义音频前调用）。</summary>
+        public void Close()
+        {
+            try
+            {
+                _player.Stop();
+                _player.Close();
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"{_label}提示音释放失败。", ex);
+            }
+            Detach();
+            Source = null;
+            Ready = false;
+            Failed = false;
+            _retries = 0;
+        }
+
+        private void Open(Uri uri)
+        {
+            Close();
+            Source = uri;
+            _player = new MediaPlayer();   // 每次换新实例：避免旧实例的 WMP 会话残留
+            Attach();
+            try
+            {
+                _player.Open(uri);
+            }
+            catch (Exception ex)
+            {
+                Failed = true;
+                Logger.Error($"{_label}提示音装载失败。", ex);
+            }
+        }
+
+        private void Attach()
+        {
+            _player.MediaOpened += OnMediaOpened;
+            _player.MediaFailed += OnMediaFailed;
+        }
+
+        private void Detach()
+        {
+            _player.MediaOpened -= OnMediaOpened;
+            _player.MediaFailed -= OnMediaFailed;
+        }
+
+        private void OnMediaOpened(object? sender, EventArgs e)
+        {
+            Ready = true;
+            Failed = false;
+            _retries = 0;
+        }
+
+        private void OnMediaFailed(object? sender, ExceptionEventArgs e)
+        {
+            Logger.Error($"{_label}提示音加载失败。", e.ErrorException);
+            Ready = false;
+            Failed = true;
+
+            // 偶发失败（WMP 会话冲突等）：250ms 后重试一次，成功即恢复，不必等下次 ApplyTheme。
+            if (Source is null || _retries >= 1) return;
+            _retries++;
+            var uri = Source;
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher is null) return;
+            var timer = new DispatcherTimer(DispatcherPriority.Normal, dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(250),
+            };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                if (!Ready && Failed && Source is not null && Source.Equals(uri)) Open(uri);
+            };
+            timer.Start();
         }
     }
 }

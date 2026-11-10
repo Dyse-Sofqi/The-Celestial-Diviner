@@ -104,7 +104,7 @@ public partial class VoiceSettingsWindow : Window
         var import = MakeButton("导入");
         import.Click += (_, _) => OnImport(cue);
         var preview = MakeButton("试听");
-        preview.Click += (_, _) => _vm.PreviewThemeVoice(_editThemeIndex, cue);
+        preview.Click += (_, _) => OnPreview(cue);
         var reset = MakeButton("重置");
         reset.Click += (_, _) => OnReset(cue);
         buttons.Children.Add(import);
@@ -145,6 +145,32 @@ public partial class VoiceSettingsWindow : Window
             return;
         }
         RefreshRow(cue);
+    }
+
+    /// <summary>试听：音量为 0 或找不到音频文件时明确提示。
+    /// 此前这两种情况都是静默 return（点了毫无反应），用户无从判断“为什么没声音”。</summary>
+    private void OnPreview(SoundCue cue)
+    {
+        if (_vm.SoundVolume <= 0)
+        {
+            MessageBox.Show(this,
+                "提示语音音量为 0%：试听也不会有声音。\n请先点主界面底栏的音量图标把音量调高。",
+                "语音设置", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (_vm.PreviewThemeVoice(_editThemeIndex, cue)) return;
+        MessageBox.Show(this,
+            $"没有找到{MainViewModel.VoiceCueName(cue)}语音的音频文件（{_vm.VoiceDefaultLabel(_editThemeIndex, cue)}）。\n"
+            + "可以把配套音频放回程序目录（与 exe 同级），或点「导入…」选择自己的音频文件。",
+            "语音设置", MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
+    /// <summary>刷新顶部警示条：音量为 0 / 配套音频缺失 / 自定义音频文件丢失（无问题则隐藏）。</summary>
+    private void UpdateWarnings()
+    {
+        var warning = _vm.VoiceSetupWarning(_editThemeIndex);
+        WarnText.Text = warning ?? "";
+        WarnBar.Visibility = string.IsNullOrEmpty(warning) ? Visibility.Collapsed : Visibility.Visible;
     }
 
     /// <summary>重置：删除自定义音频并恢复该主题的配套默认（未设置时按钮禁用）。</summary>
@@ -193,6 +219,7 @@ public partial class VoiceSettingsWindow : Window
             _refreshing = false;
         }
         row.Reset.IsEnabled = _vm.HasThemeVoice(_editThemeIndex, cue);
+        UpdateWarnings();   // 警示条随行状态刷新（音量为 0 / 配套缺失 / 自定义文件丢失）
     }
 
     /// <summary>

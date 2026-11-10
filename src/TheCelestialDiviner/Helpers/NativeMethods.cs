@@ -20,6 +20,11 @@ public static class NativeMethods
     [DllImport("winmm.dll", SetLastError = true)]
     public static extern uint timeEndPeriod(uint msPeriod);
 
+    /// <summary>系统当前可用的 waveOut 输出设备数（0 = 没有任何可用音频输出设备）。
+    /// 语音自检用：设备数为 0 时所有提示音都不会发声（蓝牙耳机断开 / 默认播放设备被禁用）。</summary>
+    [DllImport("winmm.dll")]
+    public static extern int waveOutGetNumDevs();
+
     // ---------- 低级钩子（user32.dll） ----------
 
     /// <summary>WH_KEYBOARD_LL 低级键盘钩子 id。</summary>
