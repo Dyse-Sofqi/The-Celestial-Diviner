@@ -454,8 +454,20 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
         if (_keyboardMode == 3 && !DdDriverService.EnsureReady())
         {
             _keyboardMode = 0;
-            _ddAutoActivate = true;
-            Logger.Warn($"DD 驱动未就绪，先以普通模式运行，待引导获取：{DdDriverService.LastError}");
+            if (DdDriverService.LastFailureNeedsReboot)
+            {
+                // 跨代次驻留 / 身份不一致：驱动文件就在位，下载引导无意义，本次会话无解、重启即愈。
+                // 落「重启后自动切回 DD」待办（与卸载 Interception 后同一机制），用户不必记得手动重选。
+                _config.PendingModeAfterReboot = 3;
+                SaveConfig();
+                Logger.Warn($"DD 驱动被拒（重启可自愈），已登记重启后自动切回 DD：{DdDriverService.LastError}");
+                FinishDdFetchStatus("DD 驱动本次被拒：重启电脑后会自动切回 DD 驱动模式。", 30);
+            }
+            else
+            {
+                _ddAutoActivate = true;
+                Logger.Warn($"DD 驱动未就绪，先以普通模式运行，待引导获取：{DdDriverService.LastError}");
+            }
         }
         else if (_keyboardMode == 4 && !InterceptionDriverService.EnsureReady())
         {
@@ -604,6 +616,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
             {
                 AddLog($"DD 驱动自动获取后初始化失败，可在「选项」→「键盘注入」再点一次 DD 驱动模式重试：{DdDriverService.LastError}");
                 FinishDdFetchStatus($"DD 驱动已安装但初始化失败：{DdDriverService.LastError}", 20);
+                if (DdDriverService.LastFailureNeedsReboot)
+                {
+                    // 典型场景：装好的是新代次，旧代 dd63330 驱动还在内核驻留被跨代次保护拒掉。
+                    // 重启即愈：登记重启后自动切回 DD，用户重启后不必再手动选择。
+                    _config.PendingModeAfterReboot = 3;
+                    SaveConfig();
+                    AddLog("已登记：重启电脑后将自动切回 DD 驱动模式，无需再手动选择。");
+                }
                 return;
             }
             KeyboardMode = 3;
@@ -2079,16 +2099,29 @@ public sealed partial class MainViewModel : INotifyPropertyChanged
                 var reason = DdDriverService.LastError ?? "未知原因";
                 Logger.Warn($"切换到 DD 驱动失败，回退普通模式：{reason}");
                 AddLog($"DD 驱动模式暂不可用（{reason}），已先回退普通模式。");
-                // 同一句原因送到注释区：手动放错文件（如放了 32 位版）时用户必须能看到为什么，
-                // AddLog 走的 Logs 集合界面上没有绑定，等于没提示。
-                FinishDdFetchStatus($"DD 驱动模式不可用：{reason}", 20);
                 value = 0;
                 Set(ref _keyboardMode, 0);
-                _ddAutoActivate = true;
-                if (DdDriverService.IsAutoFetchRunning)
-                    AddLog("DD 驱动正在后台获取（失败自动重试直至成功），完成后将自动启用 DD 模式。");
+                if (DdDriverService.LastFailureNeedsReboot)
+                {
+                    // 跨代次驻留 / 身份不一致：驱动文件就在位，下载引导无意义；本次会话无解、重启即愈。
+                    // 登记重启后自动切回 DD（与卸载 Interception 后同一机制），用户不必记得手动重选。
+                    _config.PendingModeAfterReboot = 3;
+                    SaveConfig();
+                    Logger.Info("已登记重启后自动切到 DD（当前拒绝重启后自愈）。");
+                    AddLog("已登记：重启电脑后将自动切回 DD 驱动模式，无需再手动选择。");
+                    FinishDdFetchStatus("DD 驱动本次被拒（原因见上）：重启电脑后会自动切回 DD 驱动模式。", 30);
+                }
                 else
-                    RequestDdDriverFetch();
+                {
+                    // 同一句原因送到注释区：手动放错文件（如放了 32 位版）时用户必须能看到为什么，
+                    // AddLog 走的 Logs 集合界面上没有绑定，等于没提示。
+                    FinishDdFetchStatus($"DD 驱动模式不可用：{reason}", 20);
+                    _ddAutoActivate = true;
+                    if (DdDriverService.IsAutoFetchRunning)
+                        AddLog("DD 驱动正在后台获取（失败自动重试直至成功），完成后将自动启用 DD 模式。");
+                    else
+                        RequestDdDriverFetch();
+                }
             }
             else if (value == 3 && InterceptionDriverService.IsDriverPresent)
             {

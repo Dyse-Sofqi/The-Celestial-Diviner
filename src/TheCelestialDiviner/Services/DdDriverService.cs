@@ -279,6 +279,15 @@ public static class DdDriverService
     /// <summary>最近一次初始化失败的原因（供 UI 日志展示）。</summary>
     public static string? LastError { get; private set; }
 
+    /// <summary>
+    /// 最近一次 <see cref="EnsureReady"/> 失败是否属于"重启电脑后可自愈"的拒绝
+    /// （跨代次旧驱动驻留 / 驱动身份不一致）。两类拒绝的共性：本次会话无解，但重启后
+    /// 旧服务是按需启动不会被拉起 / 服务项按当前版本重建，DD 即可直接启用。
+    /// 供 VM 落「重启后自动切回 DD」待办（PendingModeAfterReboot），用户不必记得手动重选；
+    /// 其余失败（缺驱动 / 32 位 / 初始化失败）不置位——那些走下载引导或重试。
+    /// </summary>
+    public static bool LastFailureNeedsReboot { get; private set; }
+
     /// <summary>DD 键码缓存：VK → DD code（-1 表示不支持）。DD_todc 查询一次后缓存。</summary>
     private static readonly Dictionary<int, int> VkCodeCache = new();
 
@@ -317,6 +326,7 @@ public static class DdDriverService
             }
 
             LastError = null;
+            LastFailureNeedsReboot = false;
 
             var path = ProbeDll(out var wrongArch);
             if (path is null)
@@ -441,6 +451,7 @@ public static class DdDriverService
                     LastError = $"旧版 {LegacyFlavor.ServiceName} 驱动仍在系统中运行："
                                 + "同一台机器不能同时加载两代 DD 驱动。请重启电脑后再使用"
                                 + $"（重启后旧驱动不会自动加载，程序会改用当前这一代 {flavor.ServiceName}）。";
+                    LastFailureNeedsReboot = true;
                     Logger.Error(LastError);
                     return false;
                 }
@@ -480,6 +491,7 @@ public static class DdDriverService
                             // 重启后服务项按当前版本重建（本进程内不再重试，见 _driverIdentityRejected）。
                             Logger.Error($"DD 驱动身份不一致：服务指向 {registered}，当前版本 {sys.Path}；已放弃本次 DD 初始化。");
                             LastError = IdentityRejectedMessage(flavor);
+                            LastFailureNeedsReboot = true;
                             _driverIdentityRejected = true;
                             DeleteService(service);
                             CloseServiceHandle(service);
