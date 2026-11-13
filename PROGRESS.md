@@ -318,6 +318,59 @@
 - ⚠️ 边界：dll 物理缺失 / 目录只读救不了（照旧完整提示）；即使外部工具每次开机重铺缓存，
   自愈每轮自动跑，用户无感；Toggle 自环"按下被吞"是同源疾病未修（见坑 1 不变量 7）
 
+## 发版 v1.9.11（2026-11-14）
+
+- 🚀 用户反馈「部分用户更新衍天高手后，DD 驱动自动退回到普通模式」（无日志可采，
+  用户侧不便回访，按代码走查定位 + 复用既有机制闭环）
+- 🔍 先排除面：v1.9.9 对已装 dd63330 的老用户在代码层面零变化（该版 MainViewModel
+  仅改文案；1.9.10 未碰任何驱动代码）→ "更新后回退"不是单一新 bug。
+  界面出现"自动退回普通模式"的入口只有两个：**①崩溃熔断**（dd-session.txt 残留 /
+  0x50 关联蓝屏，KeyboardMode=0 落盘——手动覆盖更新时强杀进程可触发；程序内自动更新
+  走 ExitForUpdateRestart 干净退出，不触发）；**②EnsureReady 失败回退**（缺驱动 /
+  32 位 / 初始化失败——与更新无因果，排除），其中**两类"重启即愈"的拒绝**在更新季集中触发：
+  - **身份校验拒绝**（v1.9.1 起）：手动更新解压到新目录并删旧目录，dd63330 服务 ImagePath
+    指向已不存在的旧目录 → 指纹读不到 + 旧驱动驻留内核（程序退出从不卸载内核服务）→
+    判"来路不明"拒绝，提示重启。此前全靠用户记住"重启后再手动选一次 DD"
+  - **跨代次驻留拒绝**（v1.9.9 新增路径）：dd63330.dll 只在旧 exe 目录的用户（≤1.8.4 装的，
+    APPDATA 只有收编的 sys 没有 DLL）换目录后全盘无 DLL → 1.9.9 的自动获取终于能下载、
+    装上**新代次** dd.71000.dll → 旧代 dd63330 驱动还在内核驻留 → 拒绝并要求重启。
+    该路径 ≤1.9.8 走不到（那时下载是 404 死循环），所以是 1.9.9 之后才可能出现的反馈
+- 🔧 `DdDriverService` 新增 `LastFailureNeedsReboot`（public static）：每次 EnsureReady
+  尝试开始清零，仅上述两类拒绝置位；缺驱动 / 32 位 / 初始化失败不置位
+- 🔧 `MainViewModel` 三条被拒路径分流：**冷启动**（原只 `_ddAutoActivate=true` 弹下载框）、
+  **手动切换**（原同样弹下载框——驱动文件明明在位，下载无意义）、**自动获取装好后重试失败**
+  （1.9.9 起新代次的典型路径）——重启即愈类落 `PendingModeAfterReboot=3` + `SaveConfig()`
+  + 注释区明示"重启电脑后会自动切回 DD"，其余失败行为不变仍走下载引导。
+  待办复用卸载 Interception 后的现成机制（启动块 396-431 行消费），崩溃熔断优先级不变
+  （待办在熔断时仍会被取消，不会把刚崩过的用户推回 DD）
+- 🔧 README「更新软件」补硬要求：先完全退出程序再覆盖 / 换目录（强杀残留会话标记触发熔断；
+  带旧驱动驻留换目录被身份校验拒绝），并写明两种翻车后果与恢复方式
+- 📦 csproj `Version` / `FileVersion` → **1.9.11 / 1.9.11.0**；`dotnet publish -c Release`
+  0 警告 0 错误；exe `FileVersion = 1.9.11.0`、`ProductVersion = 1.9.11+d5bbbd2…`（本次提交）；
+  内嵌 CHANGELOG 首标题 `## v1.9.11 — 2026-11-14`、无 `## 未发布` 残留（exe 字节扫描）
+- 📄 `docs/release-notes/v1.9.11-release-notes.md`（使用范围声明 / 反馈来龙去脉与两类保护解释 /
+  更新两条注意事项 / 升级方式 / 沿用已知问题四条）
+- 📦 `dist/TheCelestialDiviner-1.9.11-win64/` 21 项（含 `interception\` 三文件，**不含**闭源
+  DD 驱动；非 exe 项与 1.9.10 逐字节一致含 exe.config，仅 exe 不同 1,299,968 B）
+- 📦 `dist/TheCelestialDiviner-1.9.11-win64.zip`：23 个文件条目（正斜杠、无目录条目，与 1.9.10
+  同构；zip 内 exe 复核 1,299,968 B、无 dd63330 泄入）/ 2,003,660 B，
+  sha256 `19db1b0af29447c980a8fe1d36b0a25762a707c14b50f76bbdbb170bbbc2c618`
+- ✅ commit `d5bbbd2`，标签 `v1.9.11`（**annotated**，按 1.9.10 约定回归注释标签，
+  指向 `d5bbbd2`），双端 git push tag 通道可用
+- ✅ Gitee Release <https://gitee.com/sofqi/The-Celestial-Diviner/releases/tag/v1.9.11>
+  （release id **1306514** / 附件 id **3690867**，2,003,660 B；令牌取自凭据管理器，创建时
+  sed 误取嵌套 id 10322477 报 404，按 tag 反查真实 id 后上传成功）；GitHub Release
+  <https://github.com/Dyse-Sofqi/The-Celestial-Diviner/releases/tag/v1.9.11>
+  （`gh release create`，asset `state=uploaded`，API digest sha256 与本地一致）
+- ✅ 通道验证：Gitee API `releases/latest` → `v1.9.11`（程序内检查更新主通道已可发现）；
+  Gitee 直链 HTTP 200 下载 2,003,660 B、sha256 与本地逐字节一致；raw CHANGELOG（备用通道）
+  双端首个版本标题均已是 `## v1.9.11 — 2026-11-14`
+- ✅ 坑 5 顺序执行：打包 → 双端推 tag → 建双端 Release → 最后 push main（本次双端
+  git push 通道全程可用，未走 GitHub API 复制脚本）
+- ⏳ 未做：被拒→落待办→重启→自动切回 DD 的全链路无实机验证（本环境无法实测内核驱动
+  拒绝场景）；行为靠与"卸载 Interception 后自动切换"同构保证，逻辑走查 + 构建通过。
+  待用户实测回收
+
 ## 发版 v1.9.10（2026-11-10）
 
 - 🚀 用户报「成为莫问高手语音不响，其他语音都正常」→ 日志实证
